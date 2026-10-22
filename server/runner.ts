@@ -1171,7 +1171,7 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
     }
     case 'post_brief': {
       const morning = o.run?.spec.kind === 'brief';
-      const { entries, watching, demoted } = briefCard(args, { morning });
+      const { entries, watching, demoted, unlinked } = briefCard(args, { morning, pageFile: (id) => pages.get(id)?.file_id ?? null });
       const s = settings.get();
       const item = postCard(
         {
@@ -1187,8 +1187,9 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
       );
       if (o.run) o.run.briefs++;
       if (morning) expireBriefRetries();
+      const links = unlinked.length ? ` No standing page has the id ${unlinked.join(', ')}, so those lines don't open a page.` : '';
       // A quiet morning (Watching only) is posted but not pushed: nothing needs the user, so nothing interrupts them.
-      if (!entries.length) return `Brief card ${item.id} posted with nothing to decide. It was not pushed.`;
+      if (!entries.length) return `Brief card ${item.id} posted with nothing to decide. It was not pushed.${links}`;
       pushSafe(
         {
           title: item.card!.title,
@@ -1200,8 +1201,8 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
         { ignoreQuiet: morning },
       );
       return demoted.length
-        ? `Brief card ${item.id} posted with the top ${entries.length} decisions. Moved to Watching (drafts dropped): ${demoted.join('; ')}.`
-        : `Brief card ${item.id} posted.`;
+        ? `Brief card ${item.id} posted with the top ${entries.length} decisions. Moved to Watching (drafts dropped): ${demoted.join('; ')}.${links}`
+        : `Brief card ${item.id} posted.${links}`;
     }
     case 'post_card': {
       const type = str(args.type) as CardData['type'];

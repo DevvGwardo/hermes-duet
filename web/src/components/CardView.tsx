@@ -45,8 +45,8 @@ export function CardView({ item, onOpenFile }: { item: Item; onOpenFile: (id: st
       <h3 className="card-title">{card.title}</h3>
       {card.body && <Markdown text={card.body} className="card-body" />}
 
-      {card.type === 'brief' && card.entries?.length ? <BriefList id={item.id} card={card} /> : null}
-      {card.type === 'brief' && card.watching?.length ? <Watching list={card.watching} /> : null}
+      {card.type === 'brief' && card.entries?.length ? <BriefList id={item.id} card={card} onOpenFile={onOpenFile} /> : null}
+      {card.type === 'brief' && card.watching?.length ? <Watching list={card.watching} onOpenFile={onOpenFile} /> : null}
       {card.type === 'checklist' && card.checklist && <Checklist card={card} />}
       {card.type === 'metrics' && card.metrics && (
         <div className="metrics">
@@ -177,7 +177,7 @@ function useChips(id: string, action: string) {
   return { sent, err, tap };
 }
 
-function BriefList({ id, card }: { id: string; card: CardData }) {
+function BriefList({ id, card, onOpenFile }: { id: string; card: CardData; onOpenFile: (id: string) => void }) {
   // An entry with a draft hands that draft back to the agent, which then asks for approval with it instead of
   // redrafting; an entry without one sends its action_message as the user.
   const { sent, err, tap } = useChips(id, 'send_action');
@@ -190,6 +190,7 @@ function BriefList({ id, card }: { id: string; card: CardData }) {
             <div className="brief-main">
               <div className="brief-title">{e.title}</div>
               {e.detail && <div className="brief-detail">{e.detail}</div>}
+              {e.file_id && <PageLink fileId={e.file_id} onOpen={onOpenFile} />}
               {e.draft && (
                 <details className="brief-draft">
                   <summary>Draft ready</summary>
@@ -214,7 +215,7 @@ function BriefList({ id, card }: { id: string; card: CardData }) {
   );
 }
 
-function Watching({ list }: { list: WatchEntry[] }) {
+function Watching({ list, onOpenFile }: { list: WatchEntry[]; onOpenFile: (id: string) => void }) {
   return (
     <section className="watching" aria-label="Watching">
       <div className="watching-head">Watching</div>
@@ -223,10 +224,22 @@ function Watching({ list }: { list: WatchEntry[] }) {
           <li key={i}>
             <span className="watching-title">{w.title}</span>
             {w.detail && <span className="watching-detail"> · {w.detail}</span>}
+            {w.file_id && <PageLink fileId={w.file_id} onOpen={onOpenFile} />}
           </li>
         ))}
       </ul>
     </section>
+  );
+}
+
+/** A brief line about a standing page opens the version the brief was written about. Nothing if the file is gone. */
+function PageLink({ fileId, onOpen }: { fileId: string; onOpen: (id: string) => void }) {
+  const file = useStore((s) => s.files.find((f) => f.id === fileId));
+  if (!file) return null;
+  return (
+    <button className="link page-link" onClick={() => onOpen(file.id)} aria-label={`Open ${file.title}`}>
+      Open page
+    </button>
   );
 }
 

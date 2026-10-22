@@ -14,11 +14,23 @@ const RANK = { high: 0, medium: 1, low: 2 } as const;
  * has no reason to exist (it would still post a card and push "Heads up"), so that is an error the model sees.
  * The morning brief is the exception: on a quiet day it may post Watching alone, so the user still gets a brief
  * card instead of just a line of free text. It still needs something to show.
+ *
+ * A line about a standing page may name it with `page_id`; `pageFile` resolves that to the page's current version,
+ * stored as the line's `file_id` so tapping it opens what the brief was written about (and still opens after the
+ * page is stopped, since its files stay). Unknown ids are left unlinked and listed in `unlinked` for the tool result.
  */
 export function briefCard(
   raw: { entries?: unknown; watching?: unknown },
-  opts: { morning?: boolean } = {},
-): { entries: BriefEntry[]; watching: WatchEntry[]; demoted: string[] } {
+  opts: { morning?: boolean; pageFile?: (pageId: string) => string | null } = {},
+): { entries: BriefEntry[]; watching: WatchEntry[]; demoted: string[]; unlinked: string[] } {
+  const unlinked: string[] = [];
+  const fileOf = (v: unknown): string | undefined => {
+    const id = text(v, 64);
+    if (!id) return undefined;
+    const file = opts.pageFile?.(id);
+    if (!file) unlinked.push(id);
+    return file || undefined;
+  };
   const ranked = (Array.isArray(raw.entries) ? raw.entries : [])
     .slice(0, 10)
     .map((e: any): BriefEntry & { priority: keyof typeof RANK } => {
@@ -31,12 +43,13 @@ export function briefCard(
         action_label: text(e?.action_label, 40) || undefined,
         action_message: text(e?.action_message, 600) || undefined,
         draft: text(e?.draft, 6000) || undefined,
+        file_id: fileOf(e?.page_id),
       };
     })
     .sort((a, b) => RANK[a.priority] - RANK[b.priority]);
   const watching = (Array.isArray(raw.watching) ? raw.watching : []).slice(0, 10).flatMap((w: any): WatchEntry[] => {
     const title = text(w?.title, 160);
-    return title ? [{ title, detail: text(w?.detail, 400) || undefined }] : [];
+    return title ? [{ title, detail: text(w?.detail, 400) || undefined, file_id: fileOf(w?.page_id) }] : [];
   });
   if (!ranked.length && !opts.morning) throw new Error('post_brief needs at least one entry. If nothing needs the user, do not call post_brief.');
   if (!ranked.length && !watching.length)
@@ -44,8 +57,9 @@ export function briefCard(
   const overflow = ranked.slice(MAX_DECISIONS);
   return {
     entries: ranked.slice(0, MAX_DECISIONS),
-    watching: [...overflow.map((e) => ({ title: e.title, detail: e.detail })), ...watching].slice(0, 12),
+    watching: [...overflow.map((e) => ({ title: e.title, detail: e.detail, file_id: e.file_id })), ...watching].slice(0, 12),
     demoted: overflow.map((e) => e.title),
+    unlinked: [...new Set(unlinked)],
   };
 }
 

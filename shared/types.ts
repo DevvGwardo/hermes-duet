@@ -25,12 +25,16 @@ export interface BriefEntry {
   draft?: string;
   /** The user tapped the entry's chip: `draft` went back to the agent as is, or `action_message` was sent. */
   used?: boolean;
+  /** The entry is about a standing page: its version when the brief was posted, opened by tapping "Open page". */
+  file_id?: string;
 }
 
 /** Something the agent is keeping an eye on that doesn't need a decision; listed muted under a brief, never pushed. */
 export interface WatchEntry {
   title: string;
   detail?: string;
+  /** Same as BriefEntry.file_id: a line about a standing page opens it. */
+  file_id?: string;
 }
 
 /** A one-tap next step; tapping sends `message` to the main thread as the user. */

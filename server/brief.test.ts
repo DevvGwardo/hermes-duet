@@ -81,12 +81,32 @@ describe('post_brief entries', () => {
 
   test('the morning brief may be Watching only; a check-in may not', () => {
     const quiet = { entries: [], watching: [{ title: 'Package arrives Thursday' }] };
-    expect(briefCard(quiet, { morning: true })).toEqual({ entries: [], watching: [{ title: 'Package arrives Thursday', detail: undefined }], demoted: [] });
+    expect(briefCard(quiet, { morning: true })).toEqual({ entries: [], watching: [{ title: 'Package arrives Thursday', detail: undefined }], demoted: [], unlinked: [] });
     expect(() => briefCard(quiet)).toThrow(/at least one entry/);
   });
 
   test('a morning brief with nothing at all is still an error', () => {
     expect(() => briefCard({ entries: [], watching: [{ title: '  ' }] }, { morning: true })).toThrow(/at least one watching item/);
+  });
+
+  test('a line about a standing page opens its current version', () => {
+    const pageFile = (id: string) => (id === 'pg1' ? 'f-today' : null);
+    const { entries, watching, unlinked } = briefCard(
+      {
+        entries: [{ title: 'Rent moved to Friday', page_id: 'pg1' }, { title: 'Reply to Dana' }, ...['a', 'b', 'c', 'd'].map((title) => ({ title, priority: 'high' }))],
+        watching: [{ title: 'Weather page: no change', page_id: 'gone' }, { title: 'Also pg1', page_id: ' pg1 ' }],
+      },
+      { pageFile },
+    );
+    expect(entries.map((e) => e.file_id)).toEqual([undefined, undefined, undefined, undefined, 'f-today']);
+    // The demoted entry keeps its link in Watching; an unknown page id stays unlinked and is reported.
+    expect(watching.map((w) => [w.title, w.file_id])).toEqual([
+      ['Reply to Dana', undefined],
+      ['Weather page: no change', undefined],
+      ['Also pg1', 'f-today'],
+    ]);
+    expect(unlinked).toEqual(['gone']);
+    expect(briefCard({ entries: [{ title: 'x', page_id: 'pg1' }] }).unlinked).toEqual(['pg1']);
   });
 
   test('an untitled entry is an error', () => {

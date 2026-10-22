@@ -1294,6 +1294,15 @@ code {
 .watching-detail {
   color: var(--faint);
 }
+.page-link {
+  display: block;
+  margin-top: 4px;
+  font-weight: 600;
+}
+.watching .page-link {
+  display: inline;
+  margin: 0 0 0 8px;
+}
 
 .checklist ul,
 .task-steps {

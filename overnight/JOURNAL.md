@@ -703,3 +703,25 @@ SessionEnd hook [node "${CLAUDE_PLUGIN_ROOT}/hooks/session-end-cleanup.mjs"] fai
 - Not changed: no push is ever sent only to clear a banner (iOS silent-push rule), so a stale banner lasts until the next real push or until the app opens (iteration 30's path). Not tried on a real phone; `getNotifications()` in an iOS service worker is unverified, and a failure there is caught after the notification is already shown.
 - Why it matters against Claude Duet: "goes quiet until something genuinely needs you". A decision made on the desktop should stop showing as waiting on the phone.
 - Verified: typecheck pass · test 93 pass / 0 fail · build pass
+
+## 2026-10-22T02:05:14Z — loop iteration 31
+- exit=0 gate=green committed=True files=7
+- gate: typecheck: exit 0
+- answer:
+```
+nnectors
+DONE: Clear settled banners without opening the app
+- **What changed:** every push now lists the approvals and questions still waiting, so the phone can take down a stale "Needs your OK" banner even when the app isn't open. A new `askMarks` in `server/approval.ts` adds three things: `sent_at`; `open`, the ids of every pending approval or question (left off above 30, so the push stays small); and `ask: true` when the push itself is about one of them. `notify` in `server/push.ts` adds them at the moment the push is sent, so a push held through quiet hours carries an up-to-date list.
+- **Service worker:** `web/public/sw.js` first shows the push as before. Then it closes earlier ask banners whose card isn't in `open`. It leaves alone banners newer than the push, banners from before this change, and everything when `open` is missing.
+- **Limit:** no push is ever sent just to clear a banner, because iOS revokes subscriptions that push silently. So a stale banner stays until the next real push arrives or the app opens. I haven't tried this on a real phone, and I couldn't confirm that iOS lets the service worker list its notifications. If it fails there, the error is caught after the new notification is already showing.
+- **Also:** 1 new test in `server/approval.test.ts`, a README line, the backlog item ticked, and a journal entry.
+- typecheck: `tsc -p tsconfig.json --noEmit` → exit 0
+- test: `93 pass, 0 fail, 321 expect() calls` → exit 0
+- build: `✓ built in 168ms` → exit 0
+```
+
+## 2026-10-22T06:20Z — The brief's page line doesn't open the page
+- What changed: the backlog had no open, unblocked items, so this iteration audited the standing-page path and added this item. The brief already names each page's one change, but as plain text with no way to reach the page from it. `post_brief` entries and watching lines now take an optional `page_id` (server/tools.ts). The pure `briefCard` (server/brief.ts, +1 test) resolves it through a `pageFile` lookup to the page's current `file_id`, stores that on the line (shared/types.ts), keeps it when an overflow decision moves to Watching, and lists unknown ids in `unlinked`, which server/runner.ts puts in the tool result.
+- CardView renders "Open page" under the line, which opens the viewer. It shows nothing if the file is gone. `briefPrompt` (server/prompts.ts) tells the model to pass the page's id, which `pageBriefLine` already prints. README line updated.
+- Why it matters against Claude Duet: "one page I can check every morning … calls out the one thing that changed". The callout should be one tap from the page itself.
+- Verified: typecheck pass · test 94 pass / 0 fail · build pass

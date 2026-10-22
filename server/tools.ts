@@ -1,6 +1,7 @@
 // Tool contract between the agent and Hermes Duet. The MCP shim lists these; the server executes them.
 
 const taskId = { type: 'string', description: 'The Hermes Duet task id this belongs to, if you are working on a task (it appears in your instructions as "Hermes Duet task <id>").' };
+const PAGE_ID_DESC = 'Optional. When this line is about a standing page (the brief prompt lists them as "page <id>"), its id; tapping the line then opens the page.';
 
 export const TOOLS = [
   {
@@ -77,6 +78,7 @@ export const TOOLS = [
                   'Markdown you already prepared for this decision, e.g. the full reply to Dana. Shown collapsed under the entry. Nothing is sent. ' +
                   'The entry then gets a button (action_label, default "Send as drafted") that hands this exact draft back to you to go ahead with; for anything outward-facing you then call request_approval with it.',
               },
+              page_id: { type: 'string', description: PAGE_ID_DESC },
             },
             required: ['title'],
           },
@@ -86,7 +88,7 @@ export const TOOLS = [
           description: 'Optional. Things you are tracking that need no decision yet, e.g. "Package arrives Thursday". Muted, never notifies.',
           items: {
             type: 'object',
-            properties: { title: { type: 'string' }, detail: { type: 'string' } },
+            properties: { title: { type: 'string' }, detail: { type: 'string' }, page_id: { type: 'string', description: PAGE_ID_DESC } },
             required: ['title'],
           },
         },

@@ -66,7 +66,7 @@ export function briefPrompt(s: Settings, ctx: { pending: Item[]; tasks: Task[]; 
     ? `\n\nStanding pages (rebuilt shortly before this brief; the user checks them every morning):\n${ctx.pages.join('\n')}`
     : '';
   const pageStep = ctx.pages.length
-    ? ` For each standing page, give the one thing that changed (or that its refresh failed) as a watching line, or as a decision if it needs one; don't repeat the whole page.`
+    ? ` For each standing page, give the one thing that changed (or that its refresh failed) as a watching line, or as a decision if it needs one, with that page's id as page_id so tapping the line opens the page; don't repeat the whole page.`
     : '';
   return `[morning brief] Prepare today's morning brief.
 

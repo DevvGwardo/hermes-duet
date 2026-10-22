@@ -233,3 +233,10 @@
 2:01AM INF no leaks found
 [2026-10-22 02:01:33] iter 30 done · exit=0 gate=green committed=True changed=7
 [2026-10-22 02:01:53] iter 31 start → iter-31-20261022-020153.log
+[2026-10-22 02:05:14] iter 31 commit=ok · [overnight/claude-duet-20261022 b82003d] overnight(iter 31): DONE: Clear settled banners without opening the app
+ 8 files changed, 92 insertions(+), 5 deletions(-)
+2:05AM INF 0 commits scanned.
+2:05AM INF scanned ~8850 bytes (8.85 KB) in 21.5ms
+2:05AM INF no leaks found
+[2026-10-22 02:05:14] iter 31 done · exit=0 gate=green committed=True changed=7
+[2026-10-22 02:05:34] iter 32 start → iter-32-20261022-020534.log
