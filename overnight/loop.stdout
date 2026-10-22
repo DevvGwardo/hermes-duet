@@ -323,3 +323,10 @@
 2:40AM INF no leaks found
 [2026-10-22 02:40:16] iter 42 done · exit=1 gate=green committed=True changed=7
 [2026-10-22 02:40:36] iter 43 start → iter-43-20261022-024036.log
+[2026-10-22 02:40:40] iter 43 commit=ok · [overnight/claude-duet-20261022 05dec27] overnight(iter 43): overnight iteration
+ 2 files changed, 18 insertions(+)
+2:40AM INF 0 commits scanned.
+2:40AM INF scanned ~935 bytes (935 bytes) in 23ms
+2:40AM INF no leaks found
+[2026-10-22 02:40:40] iter 43 done · exit=1 gate=green committed=True changed=1
+[2026-10-22 02:41:00] iter 44 start → iter-44-20261022-024100.log
