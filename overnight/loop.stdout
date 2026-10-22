@@ -314,3 +314,12 @@
 2:37AM INF no leaks found
 [2026-10-22 02:37:19] iter 41 done · exit=0 gate=green committed=True changed=6
 [2026-10-22 02:37:39] iter 42 start → iter-42-20261022-023739.log
+[2026-10-22 02:40:16] iter 42 commit=ok · de-duet-20261022 921659f] overnight(iter 42): overnight iteration
+ 8 files changed, 97 insertions(+), 7 deletions(-)
+ create mode 100644 server/shelf.test.ts
+ create mode 100644 shared/shelf.ts
+2:40AM INF 0 commits scanned.
+2:40AM INF scanned ~5934 bytes (5.93 KB) in 18.4ms
+2:40AM INF no leaks found
+[2026-10-22 02:40:16] iter 42 done · exit=1 gate=green committed=True changed=7
+[2026-10-22 02:40:36] iter 43 start → iter-43-20261022-024036.log
