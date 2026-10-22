@@ -1,6 +1,7 @@
 import { copyFileSync, mkdirSync, statSync } from 'node:fs';
 import { basename, extname, isAbsolute, join, resolve } from 'node:path';
 import type { AgentState, CardData, FileEntry, Item, Task, TaskStep, ToolStep } from '../shared/types';
+import { DRAFT_MAX, approvalDecision } from './approval';
 import { briefCard, briefTitle, checkinOutcome } from './brief';
 import { broadcast } from './bus';
 import { localParts } from './clock';
@@ -423,8 +424,8 @@ const FG_AFTER_MS = 12_000;
 function runTitle(spec: RunSpec): string {
   if (spec.kind === 'brief') return 'Morning brief';
   if (spec.kind === 'decision') {
-    const m = spec.input.match(/^\[(approval|answer) [^\]]+\] (APPROVED|NOT NOW)?:?\s*(?:To )?"([^"]+)"/);
-    return m ? `${m[2] === 'APPROVED' ? 'Approved' : m[2] === 'NOT NOW' ? 'Declined' : 'Answered'}: ${m[3]}` : 'Following up on your answer';
+    const m = spec.input.match(/^\[(approval|answer) [^\]]+\] (APPROVED(?: with edits)?|NOT NOW)?:?\s*(?:To )?"([^"]+)"/);
+    return m ? `${m[2]?.startsWith('APPROVED') ? 'Approved' : m[2] === 'NOT NOW' ? 'Declined' : 'Answered'}: ${m[3]}` : 'Following up on your answer';
   }
   return firstLine(spec.input, 80) || 'Working on your message';
 }
@@ -737,9 +738,11 @@ export function actOnCard(id: string, action: string, value?: string): Item {
   if (c.status !== 'pending') throw new Error(`already ${c.status}`);
   let approved: boolean | undefined;
   let answer: string | undefined;
+  let edits: { draft: string; edited: true } | undefined;
   if (c.type === 'approval') {
-    if (action !== 'approve' && action !== 'decline') throw new Error('invalid action');
-    approved = action === 'approve';
+    const d = approvalDecision(c, action, value);
+    approved = d.approved;
+    if (d.draft) edits = { draft: d.draft, edited: true };
   } else if (c.type === 'choice') {
     const opts = c.options?.length ? c.options : ['Yes', 'No'];
     if (action !== 'choose' || !value || !opts.includes(value)) throw new Error('invalid choice');
@@ -750,6 +753,7 @@ export function actOnCard(id: string, action: string, value?: string): Item {
 
   item.card = {
     ...c,
+    ...edits,
     status: c.type === 'approval' ? (approved ? 'approved' : 'declined') : 'answered',
     decision: answer ?? (approved ? 'approve' : 'decline'),
     decided_at: Date.now(),
@@ -924,7 +928,14 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
   switch (name) {
     case 'request_approval': {
       const item = postCard(
-        { type: 'approval', title: req(args.title, 'title', 140), body: str(args.summary, 8000), action_label: str(args.action_label, 30) || undefined, status: 'pending' },
+        {
+          type: 'approval',
+          title: req(args.title, 'title', 140),
+          body: str(args.summary, 8000),
+          draft: str(args.draft, DRAFT_MAX).trim() || undefined,
+          action_label: str(args.action_label, 30) || undefined,
+          status: 'pending',
+        },
         o,
       );
       if (o.taskId) markTaskWaiting(o.taskId);

@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import type { Item, Settings, Task } from '../shared/types';
+import { approvalPrompt } from './approval';
 import { friendlyNow } from './clock';
 import { config } from './config';
 
@@ -32,7 +33,7 @@ How to talk
 - The app renders Markdown. Use the Hermes Duet tools for anything structured: post_card (checklists, metrics, notes), post_brief, deliver_file. Don't paste long documents into chat.
 
 Ask before acting (hard rule)
-- Before anything sensitive or outward-facing, such as sending an email or message as the user, paying or spending money, deleting data, posting publicly, signing or accepting something, or changing shared or production systems, call request_approval with the exact details and full draft text, then STOP and end your turn. Act only after a "[approval …] APPROVED" message. "NOT NOW" means don't do it; offer an alternative in one line.
+- Before anything sensitive or outward-facing, such as sending an email or message as the user, paying or spending money, deleting data, posting publicly, signing or accepting something, or changing shared or production systems, call request_approval with the exact details (put the text to be sent in draft), then STOP and end your turn. Act only after a "[approval …] APPROVED" message. "NOT NOW" means don't do it; offer an alternative in one line.
 - Drafting, researching, reading, and building files for review never need approval.
 - Use ask for quick decisions you can't make yourself. Make sensible defaults yourself.
 
@@ -101,10 +102,6 @@ So when finished, call update_task with status "done" (or "failed"), a one or tw
 
 export function decisionPrompt(card: Item, decision: { approved?: boolean; answer?: string }) {
   const c = card.card!;
-  if (c.type === 'approval') {
-    return decision.approved
-      ? `[approval ${card.id}] APPROVED: "${c.title}". The user tapped ${c.action_label || 'Approve'}. Go ahead and do exactly what the card described, then confirm in one short line.`
-      : `[approval ${card.id}] NOT NOW: "${c.title}". The user declined for now. Don't do it. Acknowledge in one short line, and offer an alternative only if there's an obvious one.`;
-  }
+  if (c.type === 'approval') return approvalPrompt(card, !!decision.approved);
   return `[answer ${card.id}] To "${c.title}" the user chose: "${decision.answer}". Continue accordingly.`;
 }

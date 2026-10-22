@@ -56,6 +56,10 @@ export interface CardData {
   status: CardStatus;
   /** approval: verb shown on the primary button, e.g. "Send", "Pay $640". */
   action_label?: string;
+  /** approval: the exact text the agent will send; editable on the pending card. */
+  draft?: string;
+  /** approval: the user changed `draft` before approving, so `draft` now holds their version. */
+  edited?: boolean;
   options?: string[]; // choice
   entries?: BriefEntry[]; // brief: decisions, ranked high to low
   watching?: WatchEntry[]; // brief

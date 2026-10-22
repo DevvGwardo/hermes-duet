@@ -8,12 +8,17 @@ export const TOOLS = [
     description:
       'Ask the user to approve a sensitive action BEFORE you take it: sending a message or email as them, paying or spending money, deleting things, posting publicly, signing, or anything hard to undo. ' +
       'This posts an Approve / Not now card on their phone and returns immediately; it does NOT wait. After calling it, do not perform the action: tell the user in one short line what you are waiting on and end your turn. ' +
-      'When they decide, you will receive a new message starting with "[approval <card_id>]" saying APPROVED or NOT NOW, and only then do you act.',
+      'When they decide, you will receive a new message starting with "[approval <card_id>]" saying APPROVED, APPROVED with edits (followed by the text to send instead of your draft), or NOT NOW, and only then do you act.',
     inputSchema: {
       type: 'object',
       properties: {
         title: { type: 'string', description: 'Short imperative title, e.g. "Send the reply to Dana" or "Pay the $640 health permit".' },
-        summary: { type: 'string', description: 'Markdown shown on the card: exactly what will happen, including the full draft text for messages.' },
+        summary: { type: 'string', description: 'Markdown shown on the card: exactly what will happen (recipient, channel, amount). When you pass draft, do not repeat the draft text here.' },
+        draft: {
+          type: 'string',
+          description:
+            'For messages, emails and posts: the exact text you will send, as plain text without headers. The user can edit it on the card; if they do, the APPROVED message contains their version and you must send that text exactly.',
+        },
         action_label: { type: 'string', description: 'Primary button verb, e.g. "Send", "Pay $640", "Delete". Default "Approve".' },
         task_id: taskId,
       },

@@ -113,3 +113,26 @@ inished one, styled muted with a "Didn’t finish" label. The card shows the rea
 - `post_brief` schema/description gain `draft` and `watching`; both prompts say decisions go in entries with their draft and everything else goes in watching. `CardView` shows the draft collapsed under the entry ("Draft ready") and a muted Watching section (styles.css). README tool row updated. brief.test.ts: 3 new tests, existing ones moved to `briefCard`.
 - Why it matters against Claude Duet: the brief is a short ranked list of decisions, each with its draft ready, plus a separate Watching set that doesn't interrupt.
 - Verified: typecheck pass · test 28 pass / 0 fail · build pass
+
+## 2026-10-22T00:46:34Z — loop iteration 6
+- exit=0 gate=green committed=True files=11
+- gate: typecheck: exit 0
+- answer:
+```
+ude.ai connectors are disabled because ANTHROPIC_API_KEY or another auth source is set and takes precedence over your claude.ai login · Unset it to load your organization's connectors
+DONE: Brief = ranked decisions with drafts, plus Watching
+- Each brief item can now carry a `draft`, and briefs have a separate `watching` list (`shared/types.ts`). In `server/brief.ts`, `briefCard` sorts items high to low and keeps the top 5. Extras move to the top of Watching and their drafts are dropped; the tool result lists them so the agent knows. `briefTitle` rewrites a count like "7 things need you" to the real number of items, fixing singular and plural.
+- `server/runner.ts`: the push lists items only, plus "+N more" when there are more than 3. Watching is never pushed. `server/tools.ts` (the `post_brief` schema and description) and both prompts in `server/prompts.ts` explain the new fields. The README tool row is updated.
+- On the card (`web/src/components/CardView.tsx`, `web/src/styles.css`), each draft sits collapsed under its item behind "Draft ready", and Watching is a muted section at the bottom.
+- 3 new tests in `server/brief.test.ts`; the existing ones now call `briefCard`.
+- New backlog item, "Morning brief with nothing to decide": a quiet morning with only Watching items can't post a brief, because at least one item is still required.
+- typecheck: `tsc -p tsconfig.json --noEmit` → exit 0
+- test: `28 pass, 0 fail, 113 expect() calls` → exit 0
+- build: `✓ built in 83ms` → exit 0
+```
+
+## 2026-10-22T04:52Z — Approvals carry an editable draft
+- What changed: new pure `server/approval.ts` (`approvalDecision`, `approvalPrompt`) + `server/approval.test.ts` (5 tests). `request_approval` takes an optional `draft` (exact text to send); `CardData` gains `draft`/`edited`. `actOnCard` passes the card's `value` through `approvalDecision`: an approve with changed text stores it as `draft` with `edited: true`; empty/oversized edits are refused; decline, push actions and Hermes-native cards ignore it. `decisionPrompt` delegates to `approvalPrompt`, which says "APPROVED with edits … Send exactly the text below" with the text appended; `runTitle`'s regex accepts the new form.
+- Web: `CardView` renders a pending Duet approval's draft as a textarea (Undo edits, empty guard) and sends it with Approve only when changed; decided cards show the draft read-only and "Sent with your edits". Tool description, persona line and README row updated.
+- Why it matters against Claude Duet: "approvals are one tap, with the full draft in the card": the user can fix a typo without a round trip to the agent.
+- Verified: typecheck pass · test 33 pass / 0 fail · build pass

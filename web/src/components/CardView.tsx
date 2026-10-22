@@ -20,9 +20,12 @@ export function CardView({ item, onOpenFile }: { item: Item; onOpenFile: (id: st
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const pending = card.status === 'pending';
+  const [draft, setDraft] = useState(card.draft ?? '');
+  const draftEdited = !!card.draft && draft.trim() !== card.draft.trim();
 
   async function act(action: string, value?: string) {
-    setBusy(value ?? action);
+    // Busy marks the tapped button; an approval's value is the edited draft, not a button label.
+    setBusy(action === 'choose' ? (value ?? action) : action);
     setErr(null);
     try {
       await api.act(item.id, action, value);
@@ -72,10 +75,15 @@ export function CardView({ item, onOpenFile }: { item: Item; onOpenFile: (id: st
         </>
       )}
 
+      {card.type === 'approval' && card.draft && (pending && !card.hermes ? (
+        <DraftEditor original={card.draft} value={draft} onChange={setDraft} disabled={!!busy} />
+      ) : (
+        <div className="approval-draft is-readonly">{card.draft}</div>
+      ))}
       {card.type === 'approval' &&
         (pending ? (
           <div className="card-actions">
-            <button className="btn btn-primary" disabled={!!busy} onClick={() => act('approve')}>
+            <button className="btn btn-primary" disabled={!!busy || (draftEdited && !draft.trim())} onClick={() => act('approve', draftEdited ? draft : undefined)}>
               {busy === 'approve' ? 'Approving…' : card.action_label || 'Approve'}
             </button>
             <button className="btn btn-ghost" disabled={!!busy} onClick={() => act('decline')}>
@@ -106,9 +114,7 @@ export function CardView({ item, onOpenFile }: { item: Item; onOpenFile: (id: st
 function Decision({ card }: { card: CardData }) {
   const label =
     card.status === 'approved'
-      ? card.action_label && /^send/i.test(card.action_label)
-        ? 'Sent'
-        : 'Approved'
+      ? (card.action_label && /^send/i.test(card.action_label) ? 'Sent' : 'Approved') + (card.edited ? ' with your edits' : '')
       : card.status === 'declined'
         ? 'Not now'
         : card.status === 'expired'
@@ -121,6 +127,31 @@ function Decision({ card }: { card: CardData }) {
         {card.status === 'answered' ? `You chose “${card.decision}”` : label}
         {card.decided_at ? ` · ${timeLabel(card.decided_at)}` : ''}
       </span>
+    </div>
+  );
+}
+
+/** The exact text an approval will send, editable until the user decides. Approving sends their version back. */
+function DraftEditor({ original, value, onChange, disabled }: { original: string; value: string; onChange: (v: string) => void; disabled: boolean }) {
+  const edited = value.trim() !== original.trim();
+  return (
+    <div className="approval-draft">
+      <div className="approval-draft-head">
+        <span>{edited ? 'Edited draft' : 'Draft · tap to edit'}</span>
+        {edited && (
+          <button className="link" disabled={disabled} onClick={() => onChange(original)}>
+            Undo edits
+          </button>
+        )}
+      </div>
+      <textarea
+        aria-label="Draft to send"
+        value={value}
+        disabled={disabled}
+        rows={Math.min(14, Math.max(3, value.split('\n').length + 1))}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      {edited && !value.trim() && <p className="card-error">The draft is empty.</p>}
     </div>
   );
 }

@@ -44,3 +44,10 @@
 12:44AM INF no leaks found
 [2026-10-22 00:44:03] iter 5 done · exit=0 gate=green committed=True changed=11
 [2026-10-22 00:44:23] iter 6 start → iter-06-20261022-004423.log
+[2026-10-22 00:46:34] iter 6 commit=ok · [overnight/claude-duet-20261022 46641e7] overnight(iter 6): DONE: Brief = ranked decisions with drafts, plus Watching
+ 12 files changed, 249 insertions(+), 40 deletions(-)
+12:46AM INF 0 commits scanned.
+12:46AM INF scanned ~15441 bytes (15.44 KB) in 34.9ms
+12:46AM INF no leaks found
+[2026-10-22 00:46:34] iter 6 done · exit=0 gate=green committed=True changed=11
+[2026-10-22 00:46:54] iter 7 start → iter-07-20261022-004654.log

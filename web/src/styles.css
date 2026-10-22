@@ -1171,6 +1171,41 @@ code {
   background: rgba(255, 215, 0, 0.06);
 }
 
+.approval-draft {
+  margin-top: 12px;
+}
+.approval-draft-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 6px;
+  font: 600 12px var(--mono);
+  color: var(--gold);
+}
+.approval-draft textarea,
+.approval-draft.is-readonly {
+  display: block;
+  width: 100%;
+  padding: 10px 12px;
+  font-size: 16px; /* >=16px stops iOS zoom-on-focus */
+  line-height: 1.45;
+  color: var(--paper);
+  background: rgba(0, 0, 0, 0.25);
+  border: 1.5px solid var(--line-2);
+  border-radius: 6px;
+  resize: vertical;
+}
+.approval-draft textarea:focus {
+  outline: 0;
+  border-color: var(--gold);
+}
+.approval-draft.is-readonly {
+  font-size: 14px;
+  color: var(--dim);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .brief {
   list-style: none;
   margin: 12px 0 0;
