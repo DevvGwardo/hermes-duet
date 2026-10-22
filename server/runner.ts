@@ -1,6 +1,7 @@
 import { copyFileSync, mkdirSync, statSync } from 'node:fs';
 import { basename, extname, isAbsolute, join, resolve } from 'node:path';
 import type { AgentState, CardData, FileEntry, Item, Task, TaskStep, ToolStep } from '../shared/types';
+import { briefEntries, checkinOutcome } from './brief';
 import { broadcast } from './bus';
 import { localParts } from './clock';
 import { config } from './config';
@@ -562,11 +563,9 @@ function finish(l: Lane, run: ActiveRun, status: 'done' | 'error' | 'stopped', o
   }
 
   if (spec.kind === 'checkin') {
-    if (status === 'done' && text && !/^NOOP\.?$/i.test(text) && !run.briefs) {
-      const item = put(newItem('assistant', { text, run_id: run.id }));
-      pushSafe({ title: 'Heads up', body: firstLine(text), tag: 'checkin', url: `/?card=${item.id}` });
-    }
-    if (status === 'done' && run.briefs) addContextNote('A check-in posted a "Heads up" brief to the user (see their thread).');
+    const { surfaced, stray } = checkinOutcome(run);
+    if (surfaced) addContextNote('A check-in posted a "Heads up" brief to the user (see their thread).');
+    if (stray) console.log(`[checkin] not posted (no brief): ${firstLine(stray)}`);
   } else if (spec.kind === 'task' || spec.taskId) {
     onTaskRunEnd(spec.taskId!, run, status, error);
   } else if (status === 'error') {
@@ -876,15 +875,7 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
       return `Question card ${item.id} posted. End your turn now; the answer arrives as "[answer ${item.id}] …".`;
     }
     case 'post_brief': {
-      const entries = Array.isArray(args.entries)
-        ? args.entries.slice(0, 10).map((e: any) => ({
-            title: req(e?.title, 'entry title', 160),
-            detail: str(e?.detail, 600) || undefined,
-            priority: ['high', 'medium', 'low'].includes(e?.priority) ? e.priority : 'medium',
-            action_label: str(e?.action_label, 40) || undefined,
-            action_message: str(e?.action_message, 600) || undefined,
-          }))
-        : [];
+      const entries = briefEntries(args.entries);
       const s = settings.get();
       const item = postCard(
         {

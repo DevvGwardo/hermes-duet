@@ -76,8 +76,9 @@ ${taskLines(ctx.tasks)}`;
 export function checkinPrompt(s: Settings, ctx: { since: string; pending: Item[]; tasks: Task[] }) {
   return `[check-in] Quiet check for anything new since ${ctx.since} that needs the user soon: an urgent email or message, a deadline today, a failed task, a meeting starting within the hour. Use the same sources as the morning brief, but look only at what's new.
 
+Your text reply is never shown to the user. The only way to reach them is post_brief.
 If nothing needs them, reply with exactly NOOP and nothing else. Don't call any Hermes Duet tools.
-If something does, call post_brief with just those items (title like "Heads up: 2 things"), then reply with one short line.
+If something does, call post_brief with just those items (at least one; title like "Heads up: 2 things"), then reply with one short line.
 
 Already waiting on the user (don't repeat these):
 ${pendingLines(ctx.pending)}

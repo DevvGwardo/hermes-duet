@@ -39,7 +39,8 @@ export const TOOLS = [
   {
     name: 'post_brief',
     description:
-      'Post a brief: a short prioritized list of what needs the user\'s attention (used for the morning brief and check-ins). Keep it to the 3-7 items that matter; each item is one line plus a short detail.',
+      'Post a brief: a short prioritized list of what needs the user\'s attention (used for the morning brief and check-ins). Keep it to the 3-7 items that matter; each item is one line plus a short detail. ' +
+      'It posts a card and notifies the user, so it needs at least one entry; if nothing needs them, do not call it.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -47,6 +48,7 @@ export const TOOLS = [
         summary: { type: 'string', description: 'Optional one or two sentences of markdown above the list.' },
         entries: {
           type: 'array',
+          minItems: 1,
           items: {
             type: 'object',
             properties: {
