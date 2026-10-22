@@ -2,7 +2,7 @@ import { copyFileSync, mkdirSync, statSync } from 'node:fs';
 import { basename, extname, isAbsolute, join, resolve } from 'node:path';
 import type { AgentState, CardData, FileEntry, Item, Page, Task, TaskStep, ToolStep } from '../shared/types';
 import { DRAFT_MAX, approvalDecision } from './approval';
-import { briefCard, briefTitle, checkinOutcome, useDraft } from './brief';
+import { briefCard, briefTitle, checkinOutcome, morningOutcome, useDraft } from './brief';
 import { broadcast } from './bus';
 import { localParts } from './clock';
 import { config } from './config';
@@ -596,10 +596,12 @@ function finish(l: Lane, run: ActiveRun, status: 'done' | 'error' | 'stopped', o
   } else if (status === 'error') {
     systemNote(`Something went wrong${error ? `: ${error.replace(/[.\s]+$/, '')}` : ''}. Try again, or ask me differently.`);
   } else if (status === 'done' && l.main) {
-    if (spec.kind === 'brief' && !run.briefs && text) {
-      pushSafe({ title: 'Your morning brief', body: firstLine(text), tag: 'brief' });
-    } else if (spec.kind !== 'brief' && !run.cards && text) {
-      // The service worker drops this if the app is open, so it only reaches you when you've walked away.
+    if (spec.kind === 'brief') {
+      const { note, stray } = morningOutcome(run);
+      if (note) systemNote(note);
+      if (stray) console.log(`[brief] no card posted, not pushed: ${firstLine(stray)}`);
+    } else if (!run.cards && text) {
+      // notify() skips devices that have the app on screen, so this only reaches you when you've walked away.
       pushSafe({ title: 'Hermes Duet', body: firstLine(text), tag: 'reply' });
     }
   }

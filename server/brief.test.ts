@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { BriefEntry } from '../shared/types';
-import { USE_DRAFT_LABEL, briefCard, briefTitle, checkinOutcome, useDraft } from './brief';
+import { EMPTY_MORNING_NOTE, USE_DRAFT_LABEL, briefCard, briefTitle, checkinOutcome, morningOutcome, useDraft } from './brief';
 
 describe('check-ins stay silent unless a brief was posted', () => {
   test('free text never surfaces, NOOP or not', () => {
@@ -18,6 +18,20 @@ describe('check-ins stay silent unless a brief was posted', () => {
     expect(checkinOutcome({ briefs: 0, text: 'NOOP — all clear' }).stray).toBeNull();
     expect(checkinOutcome({ briefs: 0, text: '**NOOP**' }).stray).toBeNull();
     expect(checkinOutcome({ briefs: 0, text: '' }).stray).toBeNull();
+  });
+});
+
+describe('a morning brief with no card never pushes its free text', () => {
+  test('a posted brief leaves nothing else to do', () => {
+    expect(morningOutcome({ briefs: 1, text: 'Brief is up.' })).toEqual({ note: null, stray: null });
+  });
+
+  test('a reply with no card stays the quiet line already in the thread, logged only', () => {
+    expect(morningOutcome({ briefs: 0, text: '  Nothing on your plate today.\n' })).toEqual({ note: null, stray: 'Nothing on your plate today.' });
+  });
+
+  test('no card and no reply leaves a system line so the brief is seen to have run', () => {
+    for (const text of ['', '  \n']) expect(morningOutcome({ briefs: 0, text })).toEqual({ note: EMPTY_MORNING_NOTE, stray: null });
   });
 });
 

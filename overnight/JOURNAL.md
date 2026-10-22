@@ -320,3 +320,28 @@ ntext sources, from the bullets in the context file;
 - `recoverOrphans` now seeds `run.steps` from the saved activity item. Before, a run reattached after a Duet restart started with no steps, so when Hermes no longer knew the run, `finish` overwrote the thread's activity with an empty step list and the card had nothing to report. A replay that does arrive matches the seeded steps by tool_call_id.
 - Why it matters against Claude Duet: the user can tell at a glance how far the interrupted work got before tapping "Pick it up".
 - Verified: typecheck pass · test 61 pass / 0 fail · build pass
+
+## 2026-10-22T01:17:32Z — loop iteration 15
+- exit=0 gate=green committed=True files=5
+- gate: typecheck: exit 0
+- answer:
+```
+recedence over your claude.ai login · Unset it to load your organization's connectors
+DONE: Recovery card says what was retried
+
+- **Skipped "Hermes /v1/skills may 500":** the owner has to check the running gateway, so I marked it BLOCKED in the backlog.
+- **Card wording:** new `server/recovery.ts`. When Hermes restarts mid-run, the "Pick it back up?" card now names the last step that finished: the task's last ticked step, or else the last completed tool call. If nothing finished, it says "Nothing had finished yet." If the run had already been unpaused and retried once without telling the user, the card now says so. `server/runner.ts` uses this wording for the card. 4 new tests in `server/recovery.test.ts`.
+- **Bug fix:** when Duet restarts and picks a run back up, it now keeps the steps saved in the thread instead of starting from none (`recoverOrphans` in `server/runner.ts`). Before, if Hermes had also lost the run, Duet wiped those steps from the thread and the card had nothing to show. Steps Hermes sends again are matched by their call id, so they aren't duplicated.
+- The backlog item is ticked and the journal entry is added.
+- typecheck: `tsc -p tsconfig.json --noEmit` → exit 0
+- test: `61 pass, 0 fail, 211 expect() calls` → exit 0
+- build: `✓ built in 100ms` → exit 0
+
+> CORRECTION: the item says the card is at `server/runner.ts:542`; it is now at about line 564. "Last completed step from `run.steps`" was always empty after a Duet restart until the recovery change above.
+```
+
+## 2026-10-22T05:19Z — Morning brief with nothing at all still pushes free text
+- What changed: new pure `morningOutcome` in server/brief.ts (+3 tests in brief.test.ts). `finish()` in server/runner.ts no longer pushes "Your morning brief" when the brief run posted no card. The run's reply has already streamed into the thread as the agent's message, so it stays there unpushed and is logged. A run with no card and no reply leaves a system line (`EMPTY_MORNING_NOTE`) so the user can still see the brief ran.
+- briefPrompt step 4/5 (server/prompts.ts): skip post_brief only when there is nothing to decide and nothing to watch, and make the closing line say there was nothing today. Fixed the stale "service worker drops this" comment on the reply push (presence is checked in notify() since iteration 13).
+- Why it matters against Claude Duet: "goes quiet until something genuinely needs you". A morning with nothing in it no longer sends a push.
+- Verified: typecheck pass · test 64 pass / 0 fail · build pass

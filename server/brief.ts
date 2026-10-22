@@ -12,8 +12,8 @@ const RANK = { high: 0, medium: 1, low: 2 } as const;
  * order holds within a priority) and capped at MAX_DECISIONS. Overflow is demoted to the front of Watching
  * instead of dropped, and `demoted` names it so the tool result can tell the model. A check-in with no decisions
  * has no reason to exist (it would still post a card and push "Heads up"), so that is an error the model sees.
- * The morning brief is the exception: on a quiet day it may post Watching alone, so the user still gets their
- * brief instead of the free-text fallback push. It still needs something to show.
+ * The morning brief is the exception: on a quiet day it may post Watching alone, so the user still gets a brief
+ * card instead of just a line of free text. It still needs something to show.
  */
 export function briefCard(
   raw: { entries?: unknown; watching?: unknown },
@@ -112,4 +112,19 @@ export function checkinOutcome(run: { briefs: number; text: string }): { surface
   const surfaced = run.briefs > 0;
   const t = run.text.trim();
   return { surfaced, stray: !surfaced && t && !/^\W*NOOP\b/i.test(t) ? t : null };
+}
+
+/** The thread line for a morning brief that ended with no card and said nothing either. */
+export const EMPTY_MORNING_NOTE = 'No brief this morning: nothing came up that needs you or is worth watching.';
+
+/**
+ * What a finished morning brief leaves besides its card. The brief runs in the main session, so its free text
+ * has already streamed into the thread as the agent's reply; with no post_brief card there was nothing to decide
+ * or watch, so that reply stays a quiet line and is never pushed. `note` is a system line for a run that posted
+ * no card and said nothing, so the user can still see the brief ran; `stray` is the unposted text, for the log.
+ */
+export function morningOutcome(run: { briefs: number; text: string }): { note: string | null; stray: string | null } {
+  if (run.briefs > 0) return { note: null, stray: null };
+  const t = run.text.trim();
+  return t ? { note: null, stray: t } : { note: EMPTY_MORNING_NOTE, stray: null };
 }

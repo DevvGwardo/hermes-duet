@@ -115,3 +115,12 @@
 1:15AM INF no leaks found
 [2026-10-22 01:15:46] iter 14 done · exit=0 gate=green committed=True changed=13
 [2026-10-22 01:16:06] iter 15 start → iter-15-20261022-011606.log
+[2026-10-22 01:17:32] iter 15 commit=ok · rnight(iter 15): DONE: Recovery card says what was retried
+ 6 files changed, 106 insertions(+), 5 deletions(-)
+ create mode 100644 server/recovery.test.ts
+ create mode 100644 server/recovery.ts
+1:17AM INF 0 commits scanned.
+1:17AM INF scanned ~8243 bytes (8.24 KB) in 23.2ms
+1:17AM INF no leaks found
+[2026-10-22 01:17:32] iter 15 done · exit=0 gate=green committed=True changed=5
+[2026-10-22 01:17:52] iter 16 start → iter-16-20261022-011752.log
