@@ -1,6 +1,6 @@
 // Pure rules for standing pages ("one page I can check every morning"), kept out of runner.ts and scheduler.ts so
 // they can be tested without a database or Hermes.
-import type { Page } from '../shared/types';
+import type { Page, Task } from '../shared/types';
 import { toMinutes } from './clock';
 
 /** Pages refresh this long before the morning brief, so the brief sees today's version. */
@@ -52,6 +52,18 @@ export function holdBrief(refreshing: boolean, heldSince: number | null, now: nu
  */
 export function refreshToCancel(page: Page, refreshing: boolean, callerTask?: string | null): string | null {
   return page.task_id && refreshing && page.task_id !== callerTask ? page.task_id : null;
+}
+
+/**
+ * A refresh lost its run to a Hermes restart. Nobody asked for a scheduled refresh, so it gets no "Pick it back up?"
+ * card or push: the first interruption starts it over on its own, and a second one ends it as a failed refresh
+ * (the muted card with "Try again", and the brief says it failed). The reason is what the failure records; a task
+ * that already ended (the agent marked it done, or the page was stopped) is never restarted, and keeps its outcome.
+ */
+export function afterInterruption(task: Pick<Task, 'status' | 'instructions'>, restarted: boolean): 'restart' | { fail: string } {
+  const open = task.status !== 'done' && task.status !== 'cancelled';
+  if (open && !restarted && task.instructions) return 'restart';
+  return { fail: restarted ? 'Interrupted twice: Hermes restarted during the refresh and again when it started over.' : 'Interrupted: Hermes restarted mid-refresh.' };
 }
 
 /** One line per page for the brief prompt: today's change, or why there isn't one. */

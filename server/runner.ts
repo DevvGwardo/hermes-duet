@@ -9,7 +9,7 @@ import { config } from './config';
 import { files, items, kv, newId, pages, runs, settings, tasks } from './db';
 import { followUps, handoverCard, useFollowUp } from './handover';
 import { HermesError, hermes, type RunEvent } from './hermes';
-import { MAX_PAGES, pageBriefLine, pageInput, refreshTime, refreshToCancel } from './pages';
+import { MAX_PAGES, afterInterruption, pageBriefLine, pageInput, refreshTime, refreshToCancel } from './pages';
 import { briefPrompt, checkinPrompt, decisionPrompt, pageRefreshInstructions, persona, taskPrompt } from './prompts';
 import { notify } from './push';
 import { resumeCardBody } from './recovery';
@@ -31,6 +31,8 @@ interface RunSpec {
   quiet?: boolean;
   /** Already retried once after unpausing a session Hermes froze on restart. */
   retried?: boolean;
+  /** A page refresh Duet already started over once after Hermes restarted mid-run. */
+  restarted?: boolean;
 }
 
 interface ActiveRun {
@@ -561,6 +563,22 @@ function finish(l: Lane, run: ActiveRun, status: 'done' | 'error' | 'stopped', o
     });
     return;
   }
+  const refresh = status === 'error' && error === INTERRUPTED && spec.taskId ? tasks.get(spec.taskId) : null;
+  if (refresh?.page_id) {
+    // A scheduled page refresh: start it over quietly, or end it like any refresh (pageRefreshEnded, no push).
+    // onTaskRunEnd keeps a task that already ended as it was.
+    const next = afterInterruption(refresh, !!spec.restarted);
+    if (next === 'restart') {
+      requeueTask(refresh, INTERRUPTED, true);
+      console.log(`[pages] refresh ${refresh.id} interrupted; starting it over`);
+    } else {
+      onTaskRunEnd(refresh.id, run, 'error', next.fail);
+    }
+    l.active = null;
+    broadcastAgent();
+    pumpAll();
+    return;
+  }
   if (status === 'error' && error === INTERRUPTED && !spec.quiet && (spec.kind === 'chat' || spec.kind === 'task' || spec.kind === 'decision')) {
     const task = spec.taskId ? tasks.get(spec.taskId) : null;
     const what = spec.taskId ? task?.title : runTitle(spec);
@@ -935,8 +953,16 @@ function retryTask(item: Item): Item {
   if (!c.failed || !t) throw new Error('this card takes no action');
   if (c.decision) throw new Error('already tried again');
   if (t.status !== 'failed' || !t.instructions) throw new Error('this task cannot be restarted');
-  const previous = t.result;
-  const now = Date.now();
+  const task = requeueTask(t, t.result);
+  return put({ ...item, card: { ...c, decision: 'Tried again', decided_at: task.retried_at } });
+}
+
+/**
+ * Queue a task again from its stored instructions in a fresh Hermes session. `retried_at` keeps files from earlier
+ * attempts off the new handover card, and a page refresh only counts a version delivered after it.
+ * `auto`: Duet restarted it after Hermes restarted mid-run (marked on the spec, so it happens once).
+ */
+function requeueTask(t: Task, previous?: string, auto = false): Task {
   const task: Task = {
     ...t,
     status: 'queued',
@@ -946,12 +972,12 @@ function retryTask(item: Item): Item {
     changed: undefined,
     handover_id: undefined,
     steps: t.steps.map((s) => ({ ...s, done: false })),
-    retried_at: now,
+    retried_at: Date.now(),
   };
   const sessionId = `duet-task-${t.id}-${newId()}`;
   putTask(task, sessionId);
-  enqueue({ kind: 'task', sessionId, taskId: t.id, input: taskPrompt(task, t.instructions, previous) });
-  return put({ ...item, card: { ...c, decision: 'Tried again', decided_at: now } });
+  enqueue({ kind: 'task', sessionId, taskId: t.id, input: taskPrompt(task, t.instructions!, previous, auto), ...(auto && { restarted: true }) });
+  return task;
 }
 
 export async function stopMain() {

@@ -173,3 +173,12 @@
 1:33AM INF no leaks found
 [2026-10-22 01:33:05] iter 22 done · exit=0 gate=green committed=True changed=7
 [2026-10-22 01:33:25] iter 23 start → iter-23-20261022-013325.log
+[2026-10-22 01:35:44] iter 23 commit=ok · (iter 23): DONE: Quiet hours drop pushes instead of holding them
+ 8 files changed, 169 insertions(+), 4 deletions(-)
+ create mode 100644 server/held.test.ts
+ create mode 100644 server/held.ts
+1:35AM INF 0 commits scanned.
+1:35AM INF scanned ~12532 bytes (12.53 KB) in 25.8ms
+1:35AM INF no leaks found
+[2026-10-22 01:35:44] iter 23 done · exit=0 gate=green committed=True changed=7
+[2026-10-22 01:36:04] iter 24 start → iter-24-20261022-013604.log

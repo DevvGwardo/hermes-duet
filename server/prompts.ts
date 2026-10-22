@@ -104,8 +104,13 @@ Hermes Duet tasks:
 ${taskLines(ctx.tasks)}`;
 }
 
-export function taskPrompt(task: Task, instructions: string, previousFailure?: string) {
-  const retry = previousFailure ? `\nThe user tapped "Try again": an earlier attempt failed with "${previousFailure}". Start over, and avoid that failure if you can.\n` : '';
+/** `auto`: the restart came from Duet itself after Hermes restarted mid-run, not from the user's "Try again". */
+export function taskPrompt(task: Task, instructions: string, previousFailure?: string, auto = false) {
+  const retry = !previousFailure
+    ? ''
+    : auto
+      ? `\nThis is starting over on its own: Hermes restarted partway through the first attempt. Start from scratch and don't assume anything from that attempt was saved.\n`
+      : `\nThe user tapped "Try again": an earlier attempt failed with "${previousFailure}". Start over, and avoid that failure if you can.\n`;
   return `[task ${task.id}] ${task.title}
 
 ${instructions}

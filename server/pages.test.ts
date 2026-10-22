@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { Page } from '../shared/types';
-import { holdBrief, pageBriefLine, pageInput, pagesDue, refreshTime, refreshToCancel } from './pages';
+import { afterInterruption, holdBrief, pageBriefLine, pageInput, pagesDue, refreshTime, refreshToCancel } from './pages';
 
 const page = (id: string, fields: Partial<Page> = {}): Page => ({
   id,
@@ -91,5 +91,19 @@ describe('stopping a standing page', () => {
     expect(refreshToCancel(p, true, 't1')).toBeNull();
     expect(refreshToCancel(p, false)).toBeNull();
     expect(refreshToCancel(page('b'), true)).toBeNull();
+  });
+});
+
+describe('a refresh interrupted by a Hermes restart', () => {
+  const open = { status: 'running' as const, instructions: 'Rebuild it.' };
+  test('starts over once on its own, then fails like any refresh', () => {
+    expect(afterInterruption(open, false)).toBe('restart');
+    expect(afterInterruption(open, true)).toEqual({ fail: expect.stringContaining('Interrupted twice') });
+    expect(afterInterruption({ status: 'running' }, false)).toEqual({ fail: expect.stringContaining('mid-refresh') });
+  });
+
+  test('never restarts a refresh that already ended', () => {
+    expect(afterInterruption({ ...open, status: 'done' }, false)).not.toBe('restart');
+    expect(afterInterruption({ ...open, status: 'cancelled' }, false)).not.toBe('restart');
   });
 });

@@ -511,3 +511,27 @@ cked, unblocked backlog item (only the two that wait on the owner). So I looked 
 - Not changed: approvals, Hermes clarify questions and the brief still push with `ignoreQuiet`. The item said to ask the owner, so I queued that as a blocked owner question.
 - Why it matters against Claude Duet: "goes quiet until something genuinely needs you" now means quiet, without losing anything. What needed the user overnight still reaches them once, when they're awake.
 - Verified: typecheck pass · test 83 pass / 0 fail · build pass
+
+## 2026-10-22T01:35:44Z — loop iteration 23
+- exit=0 gate=green committed=True files=7
+- gate: typecheck: exit 0
+- answer:
+```
+n · Unset it to load your organization's connectors
+DONE: Quiet hours drop pushes instead of holding them
+- **Holding:** when quiet hours block a push, `notify` in `server/push.ts` now saves it instead of dropping it. Only pushes about a card are saved: questions, interrupted work and finished or failed tasks. Each card keeps only its newest push, the list holds at most 20 and survives restarts. The rules are in the new `server/held.ts`.
+- **Sending:** at the first scheduler check after quiet hours end, `releaseHeld` in `server/scheduler.ts` sends one "While you were away" push. It lists up to 3 items plus "+N more", and links straight to the card when there is only one. It skips cards the user already answered overnight, and sends nothing if today's brief hasn't gone out yet and is due within the hour.
+- **Not changed:** approvals, Hermes's own clarifying questions and the brief still push during quiet hours. The item said to ask you first, so I added a blocked backlog item for your decision.
+- **Docs and tests:** README updated; 5 new tests in `server/held.test.ts`. Backlog item ticked and journal entry added.
+- typecheck: `tsc -p tsconfig.json --noEmit` → exit 0
+- test: `83 pass, 0 fail, 279 expect() calls` → exit 0
+- build: `✓ built in 103ms` → exit 0
+
+> CORRECTION: finished or failed task cards are never "pending" (they're info cards), so I kept their saved pushes as well as pending cards. Otherwise the "Done:" and "Task failed" pushes the item lists would still be lost.
+```
+
+## 2026-10-22T05:40Z — Interrupted page refresh asks and pushes like user work
+- What changed: the backlog had no open, unblocked items, so this iteration audited standing pages and added this item. A Hermes restart during a scheduled refresh used to take `finish`'s generic INTERRUPTED branch, which posted "Pick “Refresh: …” back up?" and a "Work was interrupted" push, left `last_ok` unset, and showed nothing in Make.
+- New pure `afterInterruption` (server/pages.ts, +2 tests). The first interruption calls the new `requeueTask` (server/runner.ts, now shared with "Try again"), which starts a fresh session with spec `restarted: true` and an "it's starting over on its own" line from `taskPrompt(…, auto)` (server/prompts.ts). There is no card and no push, and the brief still holds while the refresh is running. A second interruption goes through `onTaskRunEnd` → `pageRefreshEnded`, which shows the muted failed card with Try again and no push, and the brief reports that the refresh failed. README "Survives restarts" mentions it.
+- Why it matters against Claude Duet: the standing page "refreshes on a schedule before the brief". A gateway restart at 6:30 shouldn't buzz the user about a job they never started.
+- Verified: typecheck pass · test 85 pass / 0 fail · build pass
