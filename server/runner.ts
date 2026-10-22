@@ -12,6 +12,7 @@ import { HermesError, hermes, type RunEvent } from './hermes';
 import { MAX_PAGES, pageBriefLine, pageInput, refreshTime, refreshToCancel } from './pages';
 import { briefPrompt, checkinPrompt, decisionPrompt, pageRefreshInstructions, persona, taskPrompt } from './prompts';
 import { notify } from './push';
+import { resumeCardBody } from './recovery';
 
 // ---------------------------------------------------------------------------
 // Lanes: one per agent session. The main lane is the user's thread; each
@@ -561,7 +562,8 @@ function finish(l: Lane, run: ActiveRun, status: 'done' | 'error' | 'stopped', o
     return;
   }
   if (status === 'error' && error === INTERRUPTED && !spec.quiet && (spec.kind === 'chat' || spec.kind === 'task' || spec.kind === 'decision')) {
-    const what = spec.taskId ? tasks.get(spec.taskId)?.title : runTitle(spec);
+    const task = spec.taskId ? tasks.get(spec.taskId) : null;
+    const what = spec.taskId ? task?.title : runTitle(spec);
     if (spec.taskId) failTask(spec.taskId, 'Interrupted: Hermes restarted mid-task.');
     const card = put(
       newItem('card', {
@@ -569,7 +571,7 @@ function finish(l: Lane, run: ActiveRun, status: 'done' | 'error' | 'stopped', o
         card: {
           type: 'choice',
           title: `Pick “${firstLine(what ?? 'that', 70)}” back up?`,
-          body: 'Hermes restarted while I was working on this, so it stopped partway. I can continue from where the conversation left off.',
+          body: resumeCardBody({ retried: spec.retried, steps: run.steps, taskSteps: task?.steps }),
           options: ['Pick it up', 'Leave it'],
           status: 'pending',
           resume: true,
@@ -1277,7 +1279,9 @@ export function recoverOrphans() {
       assistant: null,
       text: '',
       pendingWs: '',
-      steps: [],
+      // Seeded from the saved activity so a run Hermes no longer knows still shows (and reports) its steps;
+      // a replay that does arrive matches them by tool_call_id instead of adding duplicates.
+      steps: (activity?.activity?.steps ?? []).map((s) => ({ ...s })),
       lastSeq: 0,
       cards: 0,
       briefs: 0,

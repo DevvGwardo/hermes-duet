@@ -106,3 +106,12 @@
 1:10AM INF no leaks found
 [2026-10-22 01:10:34] iter 13 done · exit=0 gate=green committed=True changed=9
 [2026-10-22 01:10:55] iter 14 start → iter-14-20261022-011055.log
+[2026-10-22 01:15:46] iter 14 commit=ok · iles changed, 405 insertions(+), 5 deletions(-)
+ create mode 100644 server/capabilities.test.ts
+ create mode 100644 server/capabilities.ts
+ create mode 100644 web/src/components/WhatICanSee.tsx
+1:15AM INF 0 commits scanned.
+1:15AM INF scanned ~19334 bytes (19.33 KB) in 27ms
+1:15AM INF no leaks found
+[2026-10-22 01:15:46] iter 14 done · exit=0 gate=green committed=True changed=13
+[2026-10-22 01:16:06] iter 15 start → iter-15-20261022-011606.log

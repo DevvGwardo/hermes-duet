@@ -294,3 +294,29 @@ t lasts 40 seconds unless renewed. It's reported through a new `POST /api/presen
 - Found: the installed Hermes `_handle_skills` passes `include_editorial=True` to a function that doesn't accept it, so `/v1/skills` probably returns 500 here and the file fallback is used. Added as an owner backlog item.
 - Why it matters against Claude Duet: "memory, skills and apps are there from the first message", and now the user can see that they are.
 - Verified: typecheck pass · test 57 pass / 0 fail · build pass
+
+## 2026-10-22T01:15:46Z — loop iteration 14
+- exit=0 gate=green committed=True files=13
+- gate: typecheck: exit 0
+- answer:
+```
+ntext sources, from the bullets in the context file;
+  - Hermes skills, counted per category, from `GET /v1/skills`, or by reading `~/.hermes/skills` if that call fails;
+  - the enabled tools, from `GET /v1/toolsets`;
+  - the connected apps, meaning MCP server names from `~/.hermes/config.yaml`, leaving out disabled ones and `duet`.
+- **Route:** new `GET /api/capabilities` in `server/index.ts`, which requires pairing. The two Hermes calls are in `server/hermes.ts`, and the `Capabilities` type is in `shared/types.ts`.
+- **App:** the new `web/src/components/WhatICanSee.tsx` adds a "What I can see" section to Settings and an "Already here: …" line on the empty thread. Also touched: `web/src/api.ts`, `web/src/styles.css`, `README.md`, and 5 new tests in `server/capabilities.test.ts`.
+- **Possible Hermes bug:** the installed Hermes code for `/v1/skills` passes an argument (`include_editorial=True`) that the function it calls doesn't accept, so it probably returns an error here and the app falls back to reading the skills folder. I didn't confirm this against the running gateway. It's added to the backlog as an owner check.
+- typecheck: `tsc -p tsconfig.json --noEmit` → exit 0
+- test: `57 pass, 0 fail, 203 expect() calls` → exit 0
+- build: `✓ built in 90ms` → exit 0
+
+> CORRECTION: the backlog item expected that Hermes might not list skills or toolsets at all. It does have `GET /v1/skills` and `GET /v1/toolsets`, so the app uses those and reads `~/.hermes/skills` only as a fallback.
+```
+
+## 2026-10-22T05:25Z — Recovery card says what was retried
+- Skipped "Hermes /v1/skills may 500": it needs the owner to call the running gateway; now marked BLOCKED in the backlog.
+- What changed: new pure `server/recovery.ts` (+4 tests in recovery.test.ts). `resumeCardBody` writes the "Pick it back up?" card body: says when the turn had already been through the silent unpause-and-retry (`spec.retried`), and names the last finished step (the task's last ticked checklist step, else the last completed tool call) or "Nothing had finished yet." Used by the INTERRUPTED branch of `finish` (server/runner.ts).
+- `recoverOrphans` now seeds `run.steps` from the saved activity item. Before, a run reattached after a Duet restart started with no steps, so when Hermes no longer knew the run, `finish` overwrote the thread's activity with an empty step list and the card had nothing to report. A replay that does arrive matches the seeded steps by tool_call_id.
+- Why it matters against Claude Duet: the user can tell at a glance how far the interrupted work got before tapping "Pick it up".
+- Verified: typecheck pass · test 61 pass / 0 fail · build pass
