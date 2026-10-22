@@ -245,3 +245,28 @@ ars the previous day's result when it starts. Files: `server/tools.ts`, `server/
 - Web: `api.stopPage`; each pinned page in Make has "Stop refreshing" under it, with a second-tap confirm ("Stop / Keep", says today's refresh will be cancelled if one is running, files stay) and an inline error. 1 new test in pages.test.ts; README save_page row updated.
 - Why it matters against Claude Duet: the standing artifact is the user's to manage, so stopping it is one tap in the app instead of a message to the agent.
 - Verified: typecheck pass · test 49 pass / 0 fail · build pass
+
+## 2026-10-22T01:08:05Z — loop iteration 12
+- exit=0 gate=green committed=True files=10
+- gate: typecheck: exit 0
+- answer:
+```
+et it to load your organization's connectors
+DONE: Stop a standing page from the app
+- **Server:** new `removePage` in `server/runner.ts`, used both by `save_page` with `remove` and by the app. It deletes the page row and sends `page_removed`. If a refresh is still running, it cancels it so it can't save a new file over the page afterwards. It never cancels the task that asked for the removal; that check is the new pure `refreshToCancel` in `server/pages.ts`. `stopPage` also leaves the agent a note that the user stopped the page.
+- **Route:** new `DELETE /api/pages/:id` in `server/index.ts`. It requires pairing and passes the same-origin check like the other routes that change state. The client call is `api.stopPage` in `web/src/api.ts`.
+- **Make tab:** each pinned page now has a "Stop refreshing" button under it, which needs a second tap to confirm (Stop / Keep). The confirm line says today's refresh will be cancelled if one is running, and that the files stay. Errors show under the row. Files: `web/src/components/MakeView.tsx`, `web/src/styles.css`.
+- 1 new test in `server/pages.test.ts`. The `save_page` row in `README.md` is updated, the backlog item is ticked, and the journal entry is added.
+- typecheck: `tsc -p tsconfig.json --noEmit` → exit 0
+- test: `49 pass, 0 fail, 186 expect() calls` → exit 0
+- build: `✓ built in 107ms` → exit 0
+
+> CORRECTION: the backlog item lists `server/db.ts` as a file to change, but `pages.remove` was already there, so it didn't need touching.
+```
+
+## 2026-10-22T05:20Z — Push that survives iOS
+- What changed: new pure `server/presence.ts` (+3 tests in presence.test.ts): each open window reports visible/hidden with a random client id, and a visible report holds a 40s lease. New authenticated, same-origin `POST /api/presence` (server/index.ts). `notify` (server/push.ts) skips subscriptions whose device has a visible window, unless `always` is set (the test push).
+- web/public/sw.js always calls `showNotification` (the visibility check is gone) and handles `pushsubscriptionchange` by re-subscribing and posting the new subscription. web/src/api.ts reports presence on connect, visibilitychange, pagehide (keepalive) and every 15s while visible, and re-registers the subscription once per launch when permission is granted (shared `subscribeDevice` with `enablePush`). README line updated.
+- WebKit check: web search was not permitted this run. The rule that Safari revokes push permission when a push shows no notification comes from memory of WebKit's "Web Push for Web Apps on iOS and iPadOS" post, not a fresh read. Added a backlog item for checking it on a real device.
+- Why it matters against Claude Duet: "goes quiet until something needs you" depends on the push channel staying alive; iOS no longer sees silent pushes, so it has no reason to cut the subscription.
+- Verified: typecheck pass · test 52 pass / 0 fail · build pass

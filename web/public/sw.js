@@ -32,13 +32,40 @@ self.addEventListener('push', (event) => {
       if (typeof data.badge === 'number' && 'setAppBadge' in self.navigator) {
         await (data.badge ? self.navigator.setAppBadge(data.badge) : self.navigator.clearAppBadge()).catch(() => {});
       }
-      // Skip the banner when the app is open and visible; the thread already shows it.
-      const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-      if (wins.some((w) => w.visibilityState === 'visible') && !data.always) return;
+      // Always show: WebKit counts a push that shows nothing as a silent push and revokes the
+      // subscription after a few. The server already skips devices whose app is visible.
       await self.registration.showNotification(title, options);
     })(),
   );
 });
+
+// The push service rotated or expired the subscription: make a new one and hand it to the server.
+// The old endpoint is dropped server-side the first time a send to it returns 404/410.
+self.addEventListener('pushsubscriptionchange', (event) => {
+  event.waitUntil(
+    (async () => {
+      let sub = event.newSubscription;
+      if (!sub) {
+        const res = await fetch('/api/push/key', { credentials: 'include' });
+        if (!res.ok) return;
+        const { key } = await res.json();
+        sub = await self.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(key) });
+      }
+      await fetch('/api/push/subscribe', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(sub.toJSON()),
+      });
+    })().catch(() => {}),
+  );
+});
+
+function b64ToBytes(base64) {
+  const padding = '='.repeat((4 - (base64.length % 4)) % 4);
+  const raw = atob((base64 + padding).replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+}
 
 self.addEventListener('notificationclick', (event) => {
   const { url, card_id } = event.notification.data || {};

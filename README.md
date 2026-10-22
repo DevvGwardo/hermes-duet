@@ -19,7 +19,7 @@
 ## What it does
 
 - **One thread.** Chat, tool activity and cards live in one conversation. **Tasks** tracks running and finished work, and **Make** collects every file it hands you.
-- **Comes to you.** It sends a morning brief at the time you pick, plus optional check-ins (3× a day or hourly) that stay quiet unless something needs you. Notifications arrive by web push, and quiet hours are respected.
+- **Comes to you.** It sends a morning brief at the time you pick, plus optional check-ins (3× a day or hourly) that stay quiet unless something needs you. Notifications arrive by web push, and quiet hours are respected. A device that has the app on screen gets no push (the app reports when it is visible), and the service worker shows every push it receives, because iOS revokes subscriptions that push silently. The app re-registers its subscription each time it opens.
 - **Asks before it acts.** Sending messages as you, paying, deleting, posting and signing all go through an **Approve / Not now** card first. Quick decisions become tappable questions.
 - **Works in the background.** Bigger jobs (decks, dashboards, research) run as tasks in their own Hermes session, while you keep chatting.
 - **Steer or stop.** A message sent mid-run steers the live turn, and Stop interrupts it.

@@ -6,6 +6,7 @@ import { sseResponse } from './bus';
 import { config } from './config';
 import { files, items, kv, pages, settings, tasks } from './db';
 import { hermes } from './hermes';
+import { presence } from './presence';
 import { hasSubscriptions, notify, publicKey, saveSubscription } from './push';
 import { actOnCard, agentState, cancelTask, executeTool, recoverOrphans, runBrief, runCheckin, startHermesWatch, stopMain, stopPage, submitUser } from './runner';
 import { startScheduler } from './scheduler';
@@ -130,6 +131,13 @@ async function handleApp(req: Request): Promise<Response> {
     if (path === '/api/push/key' && req.method === 'GET') return json({ key: publicKey });
     if (path === '/api/push/subscribe' && req.method === 'POST') {
       saveSubscription(await body(req), device);
+      return json({ ok: true });
+    }
+    if (path === '/api/presence' && req.method === 'POST') {
+      const { client, visible } = await body<{ client?: string; visible?: boolean }>(req);
+      const id = String(client ?? '');
+      if (!/^[\w-]{8,64}$/.test(id)) return err(400, 'bad client');
+      presence.report(device, id, visible === true);
       return json({ ok: true });
     }
     if (path === '/api/push/test' && req.method === 'POST') {

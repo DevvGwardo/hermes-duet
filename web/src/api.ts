@@ -52,6 +52,8 @@ let retry = 0;
 export async function connect() {
   try {
     applySnapshot(await api.snapshot());
+    reportPresence();
+    resyncPush();
   } catch (e) {
     if (e instanceof HttpError && e.status === 401) return;
     setState({ connected: false, ready: getState().ready });
@@ -95,11 +97,33 @@ export async function loadUntil(id: string, maxPages = 20) {
 }
 
 document.addEventListener('visibilitychange', () => {
+  reportPresence();
   // iOS suspends EventSource in the background; reconnect on return.
   if (document.visibilityState === 'visible' && getState().authed && (!es || es.readyState === EventSource.CLOSED)) {
     connect();
   }
 });
+window.addEventListener('pagehide', () => reportPresence(false));
+
+// Tell the server while this window is on screen, so it skips pushing this device instead of the
+// service worker swallowing the push. The server's lease (40s) outlives two missed beats.
+const clientId = crypto.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+const PRESENCE_BEAT_MS = 15_000;
+
+function reportPresence(visible = document.visibilityState === 'visible') {
+  if (!getState().authed) return;
+  // keepalive lets the "hidden" report leave even as the page is being frozen or closed.
+  fetch('/api/presence', {
+    method: 'POST',
+    credentials: 'include',
+    keepalive: true,
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ client: clientId, visible }),
+  }).catch(() => {});
+}
+setInterval(() => {
+  if (document.visibilityState === 'visible') reportPresence(true);
+}, PRESENCE_BEAT_MS);
 
 function urlB64ToUint8Array(base64: string) {
   const padding = '='.repeat((4 - (base64.length % 4)) % 4);
@@ -119,11 +143,26 @@ export async function enablePush(): Promise<'ok' | 'denied' | 'unsupported'> {
   if (!pushSupported()) return 'unsupported';
   const perm = await Notification.requestPermission();
   if (perm !== 'granted') return 'denied';
+  await subscribeDevice();
+  return 'ok';
+}
+
+async function subscribeDevice() {
   const reg = await navigator.serviceWorker.ready;
-  const { key } = await api.pushKey();
   const existing = await reg.pushManager.getSubscription();
-  const sub = existing ?? (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToUint8Array(key) }));
+  const sub = existing ?? (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToUint8Array((await api.pushKey()).key) }));
   await api.subscribe(sub.toJSON());
   setState({ pushEnabled: true });
-  return 'ok';
+}
+
+let pushSynced = false;
+
+/** Once per launch: if notifications are allowed, re-register this device's subscription. Covers a
+ *  subscription the browser dropped (iOS can revoke one) and one the server pruned after a 404/410. */
+function resyncPush() {
+  if (pushSynced || !pushSupported() || Notification.permission !== 'granted') return;
+  pushSynced = true;
+  subscribeDevice().catch(() => {
+    pushSynced = false;
+  });
 }

@@ -90,3 +90,10 @@
 1:05AM INF no leaks found
 [2026-10-22 01:05:15] iter 11 done · exit=0 gate=green committed=True changed=14
 [2026-10-22 01:05:35] iter 12 start → iter-12-20261022-010535.log
+[2026-10-22 01:08:05] iter 12 commit=ok · [overnight/claude-duet-20261022 a9da2bd] overnight(iter 12): DONE: Stop a standing page from the app
+ 11 files changed, 145 insertions(+), 21 deletions(-)
+1:08AM INF 0 commits scanned.
+1:08AM INF scanned ~9133 bytes (9.13 KB) in 25.8ms
+1:08AM INF no leaks found
+[2026-10-22 01:08:05] iter 12 done · exit=0 gate=green committed=True changed=10
+[2026-10-22 01:08:26] iter 13 start → iter-13-20261022-010826.log

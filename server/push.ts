@@ -2,6 +2,7 @@ import webpush from 'web-push';
 import { db, items, kv, settings } from './db';
 import { config } from './config';
 import { inQuietHours } from './clock';
+import { presence } from './presence';
 
 interface Vapid {
   publicKey: string;
@@ -48,7 +49,7 @@ export interface PushPayload {
   card_id?: string;
   approval?: boolean;
   action_label?: string;
-  /** Show even while the app is open and visible. */
+  /** Send even to a device whose app is open and visible. */
   always?: boolean;
   /** Home-screen badge count; filled in from pending cards when omitted. */
   badge?: number;
@@ -56,7 +57,12 @@ export interface PushPayload {
 
 export async function notify(p: PushPayload, opts: { ignoreQuiet?: boolean } = {}): Promise<number> {
   if (!opts.ignoreQuiet && inQuietHours(settings.get())) return 0;
-  const subs = db.query<{ endpoint: string; json: string }, []>('SELECT endpoint, json FROM push_subs').all();
+  // A device looking at the thread already sees this, so it gets no push at all. The service worker
+  // must show every push it receives (iOS revokes subscriptions that push silently).
+  const subs = db
+    .query<{ endpoint: string; json: string; device_id: string | null }, []>('SELECT endpoint, json, device_id FROM push_subs')
+    .all()
+    .filter((s) => p.always || !s.device_id || !presence.visible(s.device_id));
   p = { ...p, badge: p.badge ?? items.pendingCards().length };
   let sent = 0;
   await Promise.all(
