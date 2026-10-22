@@ -28,11 +28,14 @@ describe('held pushes', () => {
     ]);
   });
 
-  test('stillWorth: pending cards and handovers only', () => {
+  test('stillWorth: pending cards, handovers and agent notifies only', () => {
     expect(stillWorth(card('pending'))).toBe(true);
     expect(stillWorth(card('answered'))).toBe(false);
     expect(stillWorth(card('info', 'handover'))).toBe(true);
     expect(stillWorth(card('info', 'brief'))).toBe(false);
+    expect(stillWorth(card('info', 'note'))).toBe(false);
+    // An agent notify's note card: the agent judged it needs the user soon.
+    expect(stillWorth({ id: 'n', card: { type: 'note', title: 't', status: 'info', alert: true } } as Item)).toBe(true);
     expect(stillWorth(null)).toBe(false);
   });
 

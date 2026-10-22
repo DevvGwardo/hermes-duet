@@ -130,6 +130,17 @@ export function checkinOutcome(run: { briefs: number; text: string }): { surface
   return { surfaced, stray: !surfaced && t && !/^\W*NOOP\b/i.test(t) ? t : null };
 }
 
+/**
+ * Why `notify` is refused in a run of this kind, or null when it may push. A check-in reaches the user only
+ * through a brief with a decision (that rule is its whole judgment), and the morning brief pushes itself, so a
+ * `notify` from either would be a second, unranked way to buzz the phone.
+ */
+export function notifyRefusal(kind: string | undefined): string | null {
+  if (kind === 'checkin') return 'Not sent: a check-in reaches the user only through post_brief with at least one decision. Use that, or end with NOOP.';
+  if (kind === 'brief') return 'Not sent: the morning brief notifies the user itself when you call post_brief. Put this in the brief instead.';
+  return null;
+}
+
 /** How many already-raised lines of each kind a check-in prompt carries. */
 const RAISED_MAX = 15;
 

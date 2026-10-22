@@ -2,9 +2,9 @@ import { copyFileSync, mkdirSync, statSync } from 'node:fs';
 import { basename, extname, isAbsolute, join, resolve } from 'node:path';
 import type { AgentState, CardData, FileEntry, Item, Page, Task, TaskStep, ToolStep } from '../shared/types';
 import { DRAFT_MAX, PROMPT_ENDED, approvalDecision, approvalPush, deadPrompts } from './approval';
-import { BRIEF_RETRY, briefCard, briefFailure, briefTitle, checkinOutcome, morningOutcome, raisedToday, useAction, useDraft } from './brief';
+import { BRIEF_RETRY, briefCard, briefFailure, briefTitle, checkinOutcome, morningOutcome, notifyRefusal, raisedToday, useAction, useDraft } from './brief';
 import { broadcast } from './bus';
-import { localParts } from './clock';
+import { inQuietHours, localParts } from './clock';
 import { config } from './config';
 import { files, items, kv, newId, pages, runs, settings, tasks } from './db';
 import { followUps, handoverCard, useFollowUp } from './handover';
@@ -1234,8 +1234,16 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
       return `Task ${id} updated.`;
     }
     case 'notify': {
-      const sent = await notify({ title: req(args.title, 'title', 80), body: str(args.body, 300), tag: 'agent' });
-      return sent ? 'Notification sent.' : 'No notification sent (quiet hours, or no device has notifications on). The item is in the thread.';
+      const refused = notifyRefusal(o.run?.spec.kind);
+      if (refused) return refused;
+      // The push names a card, so tapping it lands on something, a dismissed banner isn't the only record, and
+      // quiet hours hold it for "While you were away" instead of dropping it.
+      const item = postCard({ type: 'note', title: req(args.title, 'title', 80), body: str(args.body, 300) || undefined, status: 'info', alert: true }, o);
+      const sent = await notify({ title: item.card!.title, body: item.card!.body ?? '', card_id: item.id, tag: item.id, url: `/?card=${item.id}` });
+      if (sent) return `Notification sent. It is also card ${item.id} in the thread.`;
+      return inQuietHours(settings.get())
+        ? `Card ${item.id} is in the thread. Quiet hours are on, so the push is held until they end.`
+        : `Card ${item.id} is in the thread. No push went out (the app is open on their device, or no device has notifications on).`;
     }
     default:
       throw new Error(`unknown tool ${name}`);

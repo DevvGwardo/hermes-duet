@@ -16,8 +16,8 @@ const MAX_HELD = 20;
 const MAX_LINES = 3;
 
 /**
- * Add a suppressed push to the held list. Only pushes about a card are held: a bare agent `notify` already tells
- * the agent it was not sent. A newer push about the same card replaces the older one.
+ * Add a suppressed push to the held list. Only pushes about a card are held (an agent `notify` posts one), so a
+ * bare chat-reply push is dropped. A newer push about the same card replaces the older one.
  */
 export function holdPush(held: HeldPush[], p: PushPayload, now: number): HeldPush[] {
   const card_id = cardOf(p);
@@ -27,11 +27,12 @@ export function holdPush(held: HeldPush[], p: PushPayload, now: number): HeldPus
 }
 
 /**
- * Whether a held push still deserves to reach the user: its card is still waiting on them, or it is a finished
- * task's handover (shared when done, so it is news even though it never waits on anyone).
+ * Whether a held push still deserves to reach the user: its card is still waiting on them, it is a finished
+ * task's handover (shared when done, so it is news even though it never waits on anyone), or it is an agent
+ * `notify` (the agent judged it needs them soon).
  */
 export function stillWorth(item: Item | null): boolean {
-  return !!item?.card && (item.card.status === 'pending' || item.card.type === 'handover');
+  return !!item?.card && (item.card.status === 'pending' || item.card.type === 'handover' || !!item.card.alert);
 }
 
 /** The one push that replaces everything held, or null when nothing held is still worth it. */

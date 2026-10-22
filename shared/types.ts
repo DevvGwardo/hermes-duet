@@ -84,6 +84,8 @@ export interface CardData {
   resume?: boolean;
   /** "Run it now?" card left by a morning brief that failed; answering it needs no agent turn. */
   rerun?: 'brief';
+  /** note: posted by the agent's `notify`, so the push has a card to open and a quiet-hours hold has one to keep. */
+  alert?: boolean;
   /** Agent session that receives the decision (Duet-tool cards). */
   session_id?: string;
   /** Set when the card mirrors a Hermes-native approval/clarify prompt on a live run. */

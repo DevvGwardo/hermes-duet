@@ -1,12 +1,18 @@
 import { describe, expect, test } from 'bun:test';
 import type { BriefEntry, Item } from '../shared/types';
-import { BRIEF_RETRY, EMPTY_MORNING_NOTE, USE_DRAFT_LABEL, briefCard, briefFailure, briefTitle, checkinOutcome, morningOutcome, raisedToday, useAction, useDraft } from './brief';
+import { BRIEF_RETRY, EMPTY_MORNING_NOTE, USE_DRAFT_LABEL, briefCard, briefFailure, briefTitle, checkinOutcome, morningOutcome, notifyRefusal, raisedToday, useAction, useDraft } from './brief';
 
 describe('check-ins stay silent unless a brief was posted', () => {
   test('free text never surfaces, NOOP or not', () => {
     for (const text of ['NOOP', 'noop.', 'NOOP — all clear', 'Nothing new.', 'All quiet since 9 AM.', '']) {
       expect(checkinOutcome({ briefs: 0, text }).surfaced).toBe(false);
     }
+  });
+
+  test('notify cannot route around the brief', () => {
+    expect(notifyRefusal('checkin')).toContain('post_brief');
+    expect(notifyRefusal('brief')).toContain('post_brief');
+    for (const kind of ['chat', 'task', 'decision', undefined]) expect(notifyRefusal(kind)).toBeNull();
   });
 
   test('a posted brief is what surfaces', () => {

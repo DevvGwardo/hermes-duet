@@ -39,7 +39,7 @@ export function CardView({ item, onOpenFile }: { item: Item; onOpenFile: (id: st
   return (
     <article className={`card card-${card.type} ${pending ? 'is-pending' : ''} ${card.failed ? 'is-failed' : ''}`} id={`item-${item.id}`}>
       <header className="card-head">
-        <span className="card-kind">{card.failed ? 'Didn’t finish' : KIND_LABEL[card.type]}</span>
+        <span className="card-kind">{card.failed ? 'Didn’t finish' : card.alert ? 'Heads up' : KIND_LABEL[card.type]}</span>
         <span className="card-meta">{card.updated_label ?? timeLabel(item.updated_at)}</span>
       </header>
       <h3 className="card-title">{card.title}</h3>

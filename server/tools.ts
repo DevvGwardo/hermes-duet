@@ -212,7 +212,7 @@ export const TOOLS = [
   {
     name: 'notify',
     description:
-      'Send a push notification to the user\'s phone. Only for things that genuinely need them soon; cards from request_approval / ask already notify, and briefs notify on their own.',
+      'Send a push notification to the user\'s phone. It also posts as a note card in the thread, which the notification opens. Only for things that genuinely need them soon; cards from request_approval / ask already notify, and briefs notify on their own. Not available in check-ins or the morning brief: use post_brief there.',
     inputSchema: {
       type: 'object',
       properties: { title: { type: 'string' }, body: { type: 'string' } },

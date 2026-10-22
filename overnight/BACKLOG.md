@@ -49,6 +49,8 @@ File:line references are to commit 83f3417.
 
 - [x] **Notification taps on briefs and handovers don't open the card** — the morning brief, check-in brief and "Done:/Task failed" pushes name their card only in `url` (`/?card=…`), and the app's tap handler reads only `card_id`, so tapping one while the app is open in the background lands on Chat without scrolling to the card (a second tap on the same card did nothing either). A cold start also kept `?card=` in the URL, so every reload jumped back. Fix: move `cardOf` to `shared/links.ts` and use it in `App.tsx` for both paths; clear the query after reading it. Found by iteration 27 after the backlog ran out. (files: shared/links.ts, server/held.ts, server/held.test.ts, web/src/App.tsx)
 
+- [x] **Agent notify leaves nothing in the thread** — the `notify` tool pushed a bare banner and told the agent "The item is in the thread", but nothing was posted: tapping it opened Chat with nothing to see, a dismissed banner was the only record, quiet hours dropped it for good, and a check-in could call it to buzz the phone around its post_brief-only rule. Fix: `notify` posts a "Heads up" note card (`alert`) the push opens and quiet hours hold; a pure `notifyRefusal` refuses it in check-in and morning-brief runs. Found by iteration 28 after the backlog ran out. (files: server/runner.ts, server/brief.ts, server/held.ts, server/tools.ts, shared/types.ts, web/src/components/CardView.tsx, README.md)
+
 Dropped as already done (verified in code):
 - Readable agent activity — `Activity` in `web/src/components/Thread.tsx` is collapsed by default to a one-line label and expands on tap.
 - Never push when the thread is open — handled in `web/public/sw.js` (but see "Push that survives iOS" for the cost of how).
