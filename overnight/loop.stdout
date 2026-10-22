@@ -19,3 +19,12 @@
 12:35AM INF no leaks found
 [2026-10-22 00:35:17] iter 2 done · exit=0 gate=green committed=True changed=7
 [2026-10-22 00:35:37] iter 3 start → iter-03-20261022-003537.log
+[2026-10-22 00:37:14] iter 3 commit=ok ·  you" sees every pending card, not just the loaded page
+ 13 files changed, 124 insertions(+), 13 deletions(-)
+ create mode 100644 server/pending.test.ts
+ create mode 100644 shared/pending.ts
+12:37AM INF 0 commits scanned.
+12:37AM INF scanned ~7390 bytes (7.39 KB) in 25.8ms
+12:37AM INF no leaks found
+[2026-10-22 00:37:14] iter 3 done · exit=0 gate=green committed=True changed=12
+[2026-10-22 00:37:34] iter 4 start → iter-04-20261022-003734.log

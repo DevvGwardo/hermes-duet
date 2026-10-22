@@ -6,6 +6,7 @@ import { broadcast } from './bus';
 import { localParts } from './clock';
 import { config } from './config';
 import { files, items, kv, newId, runs, settings, tasks } from './db';
+import { followUps, handoverCard } from './handover';
 import { HermesError, hermes, type RunEvent } from './hermes';
 import { briefPrompt, checkinPrompt, decisionPrompt, persona, taskPrompt } from './prompts';
 import { notify } from './push';
@@ -450,7 +451,8 @@ function saveActivity(run: ActiveRun) {
 
 function appendText(run: ActiveRun, delta: string) {
   run.text += delta;
-  if (run.spec.quiet) return;
+  // Background task runs keep their text out of the thread: the handover card carries the result.
+  if (run.spec.quiet || run.spec.kind === 'task') return;
   if (!run.assistant) {
     // Hold leading whitespace so empty segments never become empty bubbles.
     if (!(run.pendingWs + delta).trim()) {
@@ -474,19 +476,23 @@ function appendText(run: ActiveRun, delta: string) {
 }
 
 const MEDIA_RE = /MEDIA:\s*(\/[^\s`'")\]>]+)/g;
+const stripMedia = (text: string) => text.replace(MEDIA_RE, '').replace(/\n{3,}/g, '\n\n').trim();
 
 function closeSegment(run: ActiveRun) {
   run.pendingWs = '';
   const a = run.assistant;
   if (!a) return;
   run.assistant = null;
-  let text = a.text ?? '';
-  const paths = [...text.matchAll(MEDIA_RE)].map((m) => m[1]);
-  if (paths.length) text = text.replace(MEDIA_RE, '').replace(/\n{3,}/g, '\n\n').trim();
-  a.text = text;
+  const text = a.text ?? '';
+  a.text = stripMedia(text);
   a.streaming = false;
   put(a);
-  for (const p of paths) {
+  deliverMedia(run, text);
+}
+
+/** Hermes marks files it produced with `MEDIA:/abs/path`; hand each one over like deliver_file. */
+function deliverMedia(run: ActiveRun, text: string) {
+  for (const [, p] of text.matchAll(MEDIA_RE)) {
     try {
       deliverFile({ path: p, title: basename(p) }, { sessionId: run.spec.sessionId, taskId: run.spec.taskId ?? null });
     } catch (e: any) {
@@ -502,6 +508,8 @@ function finish(l: Lane, run: ActiveRun, status: 'done' | 'error' | 'stopped', o
 
   if (!run.text.trim() && output && output.trim()) appendText(run, output);
   closeSegment(run);
+  // Task text never became a segment, so its MEDIA markers are picked up here instead.
+  if (run.spec.kind === 'task') deliverMedia(run, run.text);
   for (const s of run.steps) {
     if (s.status === 'running') {
       s.status = status === 'done' ? 'done' : 'error';
@@ -588,22 +596,43 @@ function onTaskRunEnd(taskId: string, run: ActiveRun, status: 'done' | 'error' |
   const t = tasks.get(taskId);
   if (!t || t.status === 'cancelled') return;
   const waiting = items.pendingCards().some((c) => c.card?.task_id === taskId);
-  if (status === 'error' || status === 'stopped') {
+  // A run that dies after the agent already marked the task done still hands its result over.
+  if ((status === 'error' || status === 'stopped') && t.status !== 'done') {
     failTask(taskId, error ?? 'Stopped');
+    systemNote(`Task “${t.title}” stopped: ${firstLine(error ?? 'Stopped', 200)}`, taskId);
     return;
   }
   if (waiting) {
     putTask({ ...t, status: 'waiting', progress: 'Waiting on you' });
     return;
   }
-  const result = t.result || firstLine(run.text, 300) || 'Finished.';
+  const result = t.result || firstLine(stripMedia(run.text), 300) || 'Finished.';
   if (t.status === 'running' || t.status === 'queued' || t.status === 'waiting') {
     putTask({ ...t, status: 'done', result, progress: t.progress?.startsWith('· ') ? '' : t.progress, steps: t.steps.map((s) => ({ ...s, done: true })) });
   }
   const final = tasks.get(taskId)!;
-  addContextNote(`Background task "${final.title}" (${taskId}) ${final.status}: ${final.result ?? ''}`);
-  if (final.status === 'done') pushSafe({ title: `Done: ${final.title}`, body: firstLine(final.result ?? 'Finished.'), tag: `task-${taskId}` });
-  else if (final.status === 'failed') pushSafe({ title: `Task failed: ${final.title}`, body: firstLine(final.result ?? ''), tag: `task-${taskId}` });
+  if (final.status === 'done') {
+    const card = handOver(final);
+    const delivered = (card.card!.file_ids ?? []).map((id) => files.get(id)?.entry.title).filter(Boolean);
+    addContextNote(
+      `Background task "${final.title}" (${taskId}) finished: ${final.result ?? ''}${delivered.length ? ` Files: ${delivered.join('; ')}.` : ''} The user has its handover card in the thread.`,
+    );
+    pushSafe({ title: `Done: ${final.title}`, body: firstLine(final.result ?? 'Finished.'), tag: `task-${taskId}`, url: `/?card=${card.id}` });
+  } else if (final.status === 'failed') {
+    addContextNote(`Background task "${final.title}" (${taskId}) failed: ${final.result ?? ''}`);
+    systemNote(`Task “${final.title}” failed: ${firstLine(final.result ?? 'no reason given', 200)}`, taskId);
+    pushSafe({ title: `Task failed: ${final.title}`, body: firstLine(final.result ?? ''), tag: `task-${taskId}` });
+  }
+}
+
+/** Post the task's handover card, or refresh it in place if this task already handed over once. */
+function handOver(t: Task): Item {
+  const card = handoverCard(t, files.all());
+  const existing = t.handover_id ? items.get(t.handover_id) : null;
+  if (existing) return put({ ...existing, card });
+  const item = put(newItem('card', { card, task_id: t.id }));
+  putTask({ ...t, handover_id: item.id });
+  return item;
 }
 
 function failTask(taskId: string, reason: string) {
@@ -920,11 +949,13 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
     }
     case 'deliver_file': {
       const entry = deliverFile({ path: req(args.path, 'path', 2000), title: req(args.title, 'title', 140), summary: str(args.summary, 1000) }, o);
-      return `Delivered "${entry.title}" (file ${entry.id}). The user sees it in the thread and the Make tab.`;
+      return backgroundTask(o.taskId)
+        ? `Delivered "${entry.title}" (file ${entry.id}). It is in the Make tab now and goes on this task's handover card when you finish.`
+        : `Delivered "${entry.title}" (file ${entry.id}). The user sees it in the thread and the Make tab.`;
     }
     case 'start_task': {
       const t = startTask(req(args.title, 'title', 120), req(args.instructions, 'instructions', 20_000), Array.isArray(args.steps) ? args.steps.map((s) => str(s, 200)) : []);
-      return `Started background task ${t.id} ("${t.title}"). It's in the user's Tasks tab. Tell them in one line, then end your turn. You'll be told when it finishes.`;
+      return `Started background task ${t.id} ("${t.title}"). It's in the user's Tasks tab. Tell them in one line, then end your turn. When it finishes, the user gets a handover card in the thread, and a note with its result reaches you with their next message.`;
     }
     case 'update_task': {
       const id = req(args.task_id, 'task_id', 64);
@@ -935,6 +966,7 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
       if (args.progress !== undefined) next.progress = str(args.progress, 300);
       if (Array.isArray(args.steps)) next.steps = args.steps.slice(0, 60).map((s: any): TaskStep => ({ text: str(s?.text ?? s, 200), done: !!s?.done }));
       if (args.result !== undefined) next.result = str(args.result, 2000);
+      if (args.follow_ups !== undefined) next.follow_ups = followUps(args.follow_ups);
       if (typeof args.status === 'string' && ['running', 'waiting', 'done', 'failed'].includes(args.status)) next.status = args.status as Task['status'];
       putTask(next);
       return `Task ${id} updated.`;
@@ -997,9 +1029,12 @@ function deliverFile(a: { path: string; title: string; summary?: string }, o: Or
   };
   files.add(entry, dest);
   broadcast({ type: 'file', file: entry });
-  postCard({ type: 'file', title: a.title, body: a.summary || undefined, file_id: id, status: 'info' }, o);
+  // A background task's files arrive together on its handover card instead of one card each mid-run.
+  if (!backgroundTask(o.taskId)) postCard({ type: 'file', title: a.title, body: a.summary || undefined, file_id: id, status: 'info' }, o);
   return entry;
 }
+
+const backgroundTask = (taskId: string | null) => !!taskId && !!tasks.get(taskId)?.background;
 
 function startTask(title: string, instructions: string, steps: string[]): Task {
   const now = Date.now();

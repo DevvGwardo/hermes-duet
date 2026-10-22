@@ -116,7 +116,7 @@ export const TOOLS = [
     name: 'start_task',
     description:
       'Start a larger piece of work in the background (research, building a deck/model/dashboard, multi-step errands) so the conversation stays free. ' +
-      'It runs in its own session with its own context, so the instructions must be complete and self-contained. Returns a task id; the user sees it in their Tasks tab and you will get a "[task <id> finished]" message with the result.',
+      'It runs in its own session with its own context, so the instructions must be complete and self-contained. Returns a task id; the user sees it in their Tasks tab. When it finishes, the user gets a handover card in the thread (result, delivered files, follow-ups), and you get a note with the result alongside their next message.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -137,7 +137,23 @@ export const TOOLS = [
         progress: { type: 'string', description: 'One line: what you are doing now.' },
         steps: { type: 'array', items: { type: 'object', properties: { text: { type: 'string' }, done: { type: 'boolean' } }, required: ['text'] } },
         status: { type: 'string', enum: ['running', 'waiting', 'done', 'failed'] },
-        result: { type: 'string', description: 'Final outcome, when done or failed.' },
+        result: { type: 'string', description: 'Final outcome, when done or failed. One or two lines; it is the body of the handover card.' },
+        follow_ups: {
+          type: 'array',
+          maxItems: 3,
+          description: 'Up to three one-tap next steps shown on the handover card when the task is done.',
+          items: {
+            type: 'object',
+            properties: {
+              label: { type: 'string', description: 'Button text, e.g. "Draft the email".' },
+              message: {
+                type: 'string',
+                description: 'What tapping sends to the main conversation as the user. That conversation only knows the task title and result, so make it self-contained.',
+              },
+            },
+            required: ['label', 'message'],
+          },
+        },
       },
       required: ['task_id'],
     },

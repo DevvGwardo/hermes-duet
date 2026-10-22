@@ -193,7 +193,7 @@ function Shell() {
 
         <main className="content">
           {tab === 'chat' && <Thread onOpenFile={setFileId} scrollToId={jump} onSuggest={startPrompt} />}
-          {tab === 'tasks' && <TasksView onJump={jumpTo} />}
+          {tab === 'tasks' && <TasksView onJump={jumpTo} onOpenFile={setFileId} />}
           {tab === 'make' && <MakeView onOpenFile={setFileId} onStart={startPrompt} />}
         </main>
 

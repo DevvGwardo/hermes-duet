@@ -93,7 +93,8 @@ export function taskPrompt(task: Task, instructions: string) {
 ${instructions}
 
 Work through this end to end in the background. Keep the user's Tasks tab current with update_task (task_id="${task.id}"): set a progress line as you go, and mark steps done. Deliver files with deliver_file. If you hit something that needs approval or a decision, use request_approval / ask with task_id="${task.id}" and end your turn; you'll be resumed with the answer.
-When finished, call update_task with status "done" (or "failed") and a one or two line result, then reply with a short summary for the user.`;
+Your text replies are not shown to the user. When you finish, they get one handover card built from update_task: the result, the files you delivered, and your follow-ups.
+So when finished, call update_task with status "done" (or "failed"), a one or two line result, and, where there are obvious next steps, up to three follow_ups (e.g. label "Draft the email", message "Draft an email to the board sharing the Q3 deck"). Then end your turn with one short line.`;
 }
 
 export function decisionPrompt(card: Item, decision: { approved?: boolean; answer?: string }) {

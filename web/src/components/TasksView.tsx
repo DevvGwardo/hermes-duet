@@ -3,6 +3,7 @@ import type { Task } from '../../../shared/types';
 import { api } from '../api';
 import { useStore } from '../store';
 import { Icon, relLabel } from '../ui';
+import { FileRow } from './CardView';
 
 const STATUS_LABEL: Record<Task['status'], string> = {
   queued: 'Queued',
@@ -13,7 +14,7 @@ const STATUS_LABEL: Record<Task['status'], string> = {
   cancelled: 'Cancelled',
 };
 
-export function TasksView({ onJump }: { onJump: (itemId: string) => void }) {
+export function TasksView({ onJump, onOpenFile }: { onJump: (itemId: string) => void; onOpenFile: (id: string) => void }) {
   const tasks = useStore((s) => s.tasks);
   const pendingCards = useStore((s) => s.pending);
 
@@ -43,13 +44,13 @@ export function TasksView({ onJump }: { onJump: (itemId: string) => void }) {
         </section>
       )}
 
-      <TaskSection title="In progress" tasks={[...waiting, ...active]} empty="Nothing running. Ask for something big and I'll track it here." />
-      {finished.length > 0 && <TaskSection title="Recently finished" tasks={finished} />}
+      <TaskSection title="In progress" tasks={[...waiting, ...active]} onOpenFile={onOpenFile} empty="Nothing running. Ask for something big and I'll track it here." />
+      {finished.length > 0 && <TaskSection title="Recently finished" tasks={finished} onOpenFile={onOpenFile} />}
     </div>
   );
 }
 
-function TaskSection({ title, tasks, empty }: { title: string; tasks: Task[]; empty?: string }) {
+function TaskSection({ title, tasks, empty, onOpenFile }: { title: string; tasks: Task[]; empty?: string; onOpenFile: (id: string) => void }) {
   return (
     <section>
       <h2 className="section-title">{title}</h2>
@@ -58,7 +59,7 @@ function TaskSection({ title, tasks, empty }: { title: string; tasks: Task[]; em
       ) : (
         <ul className="list">
           {tasks.map((t) => (
-            <TaskRow key={t.id} task={t} />
+            <TaskRow key={t.id} task={t} onOpenFile={onOpenFile} />
           ))}
         </ul>
       )}
@@ -66,8 +67,10 @@ function TaskSection({ title, tasks, empty }: { title: string; tasks: Task[]; em
   );
 }
 
-function TaskRow({ task }: { task: Task }) {
+function TaskRow({ task, onOpenFile }: { task: Task; onOpenFile: (id: string) => void }) {
   const [open, setOpen] = useState(task.status === 'running' || task.status === 'waiting');
+  const files = useStore((s) => s.files);
+  const own = files.filter((f) => f.task_id === task.id);
   const done = task.steps.filter((s) => s.done).length;
   const live = task.status === 'running' || task.status === 'queued' || task.status === 'waiting';
   return (
@@ -98,6 +101,9 @@ function TaskRow({ task }: { task: Task }) {
             </ul>
           )}
           {task.result && <p className="task-result">{task.result}</p>}
+          {own.map((f) => (
+            <FileRow key={f.id} fileId={f.id} onOpen={onOpenFile} />
+          ))}
           {live && (
             <button className="btn btn-ghost small" onClick={() => api.cancelTask(task.id)}>
               {task.background ? 'Cancel task' : 'Stop'}

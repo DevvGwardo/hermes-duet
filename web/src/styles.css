@@ -1130,6 +1130,18 @@ code {
   color: #111;
 }
 
+.follow-ups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+.card-handover .card-kind {
+  color: #111;
+  background: var(--gold);
+  border-color: #000;
+}
+
 .decision {
   display: inline-flex;
   align-items: center;

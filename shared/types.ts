@@ -9,7 +9,8 @@ export type CardType =
   | 'checklist'
   | 'metrics'
   | 'file'
-  | 'note';
+  | 'note'
+  | 'handover'; // a background task finished: result, files, follow-ups
 
 export type CardStatus = 'pending' | 'approved' | 'declined' | 'answered' | 'expired' | 'info';
 
@@ -20,6 +21,12 @@ export interface BriefEntry {
   /** Optional one-tap follow-up; tapping sends this text as a user message. */
   action_label?: string;
   action_message?: string;
+}
+
+/** A one-tap next step; tapping sends `message` to the main thread as the user. */
+export interface FollowUp {
+  label: string;
+  message: string;
 }
 
 export interface ChecklistEntry {
@@ -46,6 +53,8 @@ export interface CardData {
   checklist?: ChecklistEntry[]; // checklist
   metrics?: MetricEntry[]; // metrics
   file_id?: string; // file
+  file_ids?: string[]; // handover
+  follow_ups?: FollowUp[]; // handover
   decision?: string; // what the user picked
   decided_at?: number;
   task_id?: string;
@@ -102,6 +111,10 @@ export interface Task {
   progress?: string;
   steps: TaskStep[];
   result?: string;
+  /** Up to three next steps the task suggests; shown on its handover card. */
+  follow_ups?: FollowUp[];
+  /** The thread card that handed this task's result over, once it finished. */
+  handover_id?: string;
   created_at: number;
   updated_at: number;
   background: boolean;

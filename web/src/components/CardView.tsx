@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { CardData, Item } from '../../../shared/types';
+import type { CardData, FollowUp, Item } from '../../../shared/types';
 import { api } from '../api';
 import { useStore } from '../store';
 import { Icon, Markdown, bytesLabel, fileIcon, timeLabel } from '../ui';
@@ -12,6 +12,7 @@ const KIND_LABEL: Record<CardData['type'], string> = {
   metrics: 'Dashboard',
   file: 'Ready for review',
   note: 'Note',
+  handover: 'Finished',
 };
 
 export function CardView({ item, onOpenFile }: { item: Item; onOpenFile: (id: string) => void }) {
@@ -55,6 +56,12 @@ export function CardView({ item, onOpenFile }: { item: Item; onOpenFile: (id: st
         </div>
       )}
       {card.type === 'file' && card.file_id && <FileRow fileId={card.file_id} onOpen={onOpenFile} />}
+      {card.type === 'handover' && (
+        <>
+          {card.file_ids?.map((id) => <FileRow key={id} fileId={id} onOpen={onOpenFile} />)}
+          {card.follow_ups?.length ? <FollowUps list={card.follow_ups} /> : null}
+        </>
+      )}
 
       {card.type === 'approval' &&
         (pending ? (
@@ -138,6 +145,27 @@ function BriefList({ card }: { card: CardData }) {
   );
 }
 
+function FollowUps({ list }: { list: FollowUp[] }) {
+  const [sent, setSent] = useState<Record<number, boolean>>({});
+  return (
+    <div className="follow-ups">
+      {list.map((f, i) => (
+        <button
+          key={i}
+          className="chip"
+          disabled={sent[i]}
+          onClick={async () => {
+            setSent((s) => ({ ...s, [i]: true }));
+            await api.send(f.message);
+          }}
+        >
+          {sent[i] ? 'On it' : f.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function Checklist({ card }: { card: CardData }) {
   const list = card.checklist!;
   const done = list.filter((c) => c.done).length;
@@ -168,7 +196,7 @@ function Checklist({ card }: { card: CardData }) {
   );
 }
 
-function FileRow({ fileId, onOpen }: { fileId: string; onOpen: (id: string) => void }) {
+export function FileRow({ fileId, onOpen }: { fileId: string; onOpen: (id: string) => void }) {
   const file = useStore((s) => s.files.find((f) => f.id === fileId));
   if (!file) return <div className="file-row muted">File unavailable</div>;
   const FIcon = fileIcon(file.mime, file.name);

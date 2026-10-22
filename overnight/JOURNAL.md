@@ -50,3 +50,25 @@ DONE: Check-ins stay silent unless a brief has entries
 - Rail, Tasks "Needs you" and the Chat tab badge/app badge (App.tsx) now read `store.pending`. Tapping a card older than the loaded thread used to do nothing; `loadUntil` (web/src/api.ts) now pages back (max 20 pages) and Thread.tsx scrolls to the card once it renders. New server/pending.test.ts (5 tests).
 - Why it matters against Claude Duet: "waits for your ok when it matters": an old approval can't drop out of view while it's still waiting on the user.
 - Verified: typecheck pass · test 18 pass / 0 fail · build pass
+
+## 2026-10-22T00:37:14Z — loop iteration 3
+- exit=0 gate=green committed=True files=12
+- gate: typecheck: exit 0
+- answer:
+```
+⚠ claude.ai connectors are disabled because ANTHROPIC_API_KEY or another auth source is set and takes precedence over your claude.ai login · Unset it to load your organization's connectors
+DONE: "Needs you" sees every pending card, not just the loaded page
+- `/api/state` now returns a `pending` list of every card still waiting, taken from `items.pendingCards()` (`server/index.ts`, `shared/types.ts`). New `shared/pending.ts` updates `store.pending` from each `item` event (`web/src/store.ts`), so a card that gets decided drops off the list even if it's older than the loaded page.
+- The Rail, the Tasks "Needs you" section and the Chat tab badge / app icon badge all read `store.pending` now (`Rail.tsx`, `TasksView.tsx`, `App.tsx`).
+- I also fixed something the item didn't list: tapping a card older than the loaded thread did nothing. `loadUntil` in `web/src/api.ts` now loads earlier messages (up to 20 pages) until the card is there, and `Thread.tsx` scrolls to it.
+- New `server/pending.test.ts` (5 tests). Ticked the item in `overnight/BACKLOG.md` and added an entry to `overnight/JOURNAL.md`.
+- typecheck: `tsc -p tsconfig.json --noEmit` → exit 0
+- test: `18 pass, 0 fail, 92 expect() calls` → exit 0
+- build: `✓ built in 106ms` → exit 0
+```
+
+## 2026-10-22T04:40Z — Finished tasks hand over cleanly
+- What changed: new pure `server/handover.ts` (`followUps` normalizer, `handoverCard` builder) with `server/handover.test.ts` (4 tests). `server/runner.ts`: background task runs no longer stream text into the thread, and their `deliver_file` calls post no card of their own. When a task ends done, `handOver` posts one `handover` card (title, result, the task's files, up to 3 follow-ups), or refreshes it in place via `task.handover_id`. The push now opens it, and the main session's context note lists the files. A task that fails or stops leaves a one-line system note, since its text no longer shows. MEDIA markers in task text are still delivered, at finish.
+- Tool surface: `update_task` takes `follow_ups`; the `start_task` description and return text no longer promise a "[task <id> finished]" message; `taskPrompt` tells the worker its text is never shown. Web: `CardView` renders the handover card (files + follow-up chips), and `TasksView` rows list the task's files (`FileRow` exported). README tool row updated.
+- Why it matters against Claude Duet: "large tasks run in the background and come back as a finished artifact, shared when done". The user now gets one card with the result, not a stream of a worker's chatter.
+- Verified: typecheck pass · test 22 pass / 0 fail · build pass
