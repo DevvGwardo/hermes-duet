@@ -1,6 +1,6 @@
 import type { Settings } from '../shared/types';
 import { items, kv, pages, settings } from './db';
-import { hourlySlots, inQuietHours, localParts, toMinutes } from './clock';
+import { briefSlot, hourlySlots, inQuietHours, localParts, toMinutes } from './clock';
 import { awayPush, briefCoversHeld, stillWorth, type HeldPush } from './held';
 import { notify } from './push';
 import { holdBrief, pagesDue } from './pages';
@@ -33,28 +33,25 @@ export function startScheduler() {
       // Standing pages rebuild 30 minutes before the brief (whether or not the brief is on), each once a day.
       for (const p of pagesDue(pages.all(), now, s.brief_time, pageRefreshing)) refreshPage(p, now.date);
 
-      if (s.brief_enabled && kv.get('brief_last_date', '') !== now.date) {
-        const due = toMinutes(s.brief_time);
-        const held = briefHeld?.date === now.date ? briefHeld.since : null;
-        // Catch up if the Mac woke late, but not after midday: a 3 PM "morning brief" is noise. A brief already
-        // waiting on a refresh still goes out when the wait ends.
-        if (now.minutes >= due && (now.minutes < Math.max(due + 1, 12 * 60) || held !== null)) {
-          // A page refresh still running (it ran long, or a late wake started it this same tick) holds the brief for
-          // up to BRIEF_HOLD_MIN, so the brief reports what changed instead of "still refreshing".
-          if (holdBrief(pages.all().some(pageRefreshing), held, Date.now())) {
-            if (held === null) briefHeld = { date: now.date, since: Date.now() };
-            return;
-          }
-          briefHeld = null;
-          kv.set('brief_last_date', now.date);
-          runBrief('scheduled');
+      const held = briefHeld?.date === now.date ? briefHeld.since : null;
+      const brief = briefSlot(s, now, kv.get('brief_last_date', ''), held !== null);
+      if (brief === 'due') {
+        // A page refresh still running (it ran long, or a late wake started it this same tick) holds the brief for
+        // up to BRIEF_HOLD_MIN, so the brief reports what changed instead of "still refreshing".
+        if (holdBrief(pages.all().some(pageRefreshing), held, Date.now())) {
+          if (held === null) briefHeld = { date: now.date, since: Date.now() };
           return;
         }
+        briefHeld = null;
+        kv.set('brief_last_date', now.date);
+        runBrief('scheduled');
+        return;
       }
 
       if (s.checkins === 'off' || inQuietHours(s)) return;
-      // Don't check in before today's brief has gone out.
-      if (s.brief_enabled && kv.get('brief_last_date', '') !== now.date) return;
+      // Don't check in before today's brief has gone out. A brief missed for the day (the Mac slept past midday)
+      // doesn't hold them back, or a late wake would silence the whole day.
+      if (brief === 'early') return;
       const slots = s.checkins === '3x' ? CHECKIN_3X : hourlySlots(s.quiet_end, s.quiet_start);
       const last = kv.get('checkin_last_slot', '');
       const slot = [...slots].reverse().find((t) => toMinutes(t) <= now.minutes && now.minutes - toMinutes(t) < 50);

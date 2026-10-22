@@ -34,6 +34,22 @@ export function inQuietHours(s: Settings, at = new Date()) {
   return start < end ? now >= start && now < end : now >= start || now < end;
 }
 
+/** off: briefs disabled · sent: today's already ran · early: not due yet · due: run it now · missed: too late today. */
+export type BriefSlot = 'off' | 'sent' | 'early' | 'due' | 'missed';
+
+/**
+ * Where today's scheduled morning brief stands. A late wake (Mac asleep) still catches it up, but not after midday,
+ * because a 3 PM "morning brief" is noise; a brief already held for a page refresh stays due until the hold ends.
+ * Past that the day's brief is missed, which must not block the rest of the day the way a pending one does.
+ */
+export function briefSlot(s: Settings, now: { date: string; minutes: number }, lastDate: string, held = false): BriefSlot {
+  if (!s.brief_enabled) return 'off';
+  if (lastDate === now.date) return 'sent';
+  const due = toMinutes(s.brief_time);
+  if (now.minutes < due) return 'early';
+  return now.minutes < Math.max(due + 1, 12 * 60) || held ? 'due' : 'missed';
+}
+
 export function friendlyNow(tz: string) {
   return new Date().toLocaleString('en-US', {
     timeZone: tz,

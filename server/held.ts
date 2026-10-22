@@ -2,7 +2,7 @@
 // lost. Pure rules, kept out of push.ts and scheduler.ts so they can be tested without web-push or a database.
 import type { Item, Settings } from '../shared/types';
 import type { PushPayload } from './push';
-import { toMinutes } from './clock';
+import { briefSlot, toMinutes } from './clock';
 
 export interface HeldPush {
   card_id: string;
@@ -53,8 +53,7 @@ export function awayPush(held: HeldPush[], worth: (cardId: string) => boolean): 
  * brief prompt already lists every pending card, and a second push minutes before it is noise.
  */
 export function briefCoversHeld(s: Settings, now: { date: string; minutes: number }, briefLastDate: string): boolean {
-  if (!s.brief_enabled || briefLastDate === now.date) return false;
-  const due = toMinutes(s.brief_time);
-  // Same window the scheduler uses to catch up a late brief: not after midday.
-  return now.minutes >= due - 60 && now.minutes < Math.max(due + 1, 12 * 60);
+  // Same rule the scheduler uses, so a brief missed for the day (too late to catch up) covers nothing.
+  const slot = briefSlot(s, now, briefLastDate);
+  return slot === 'due' || (slot === 'early' && now.minutes >= toMinutes(s.brief_time) - 60);
 }

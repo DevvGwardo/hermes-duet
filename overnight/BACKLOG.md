@@ -45,6 +45,8 @@ File:line references are to commit 83f3417.
 
 - [x] **Hermes prompts outlive their run** — a Hermes-native approval or clarify card can only be answered while its run is live, but when the run ends without settling it (Stop, timeout, Hermes restart) the card stays pending forever: it sits in "Needs you", the brief and check-ins list it as waiting, and tapping "Allow once" marks it approved while only a "had already expired" note admits nothing happened. Fix: a pure `deadPrompts` expires them when a run finishes, after restart recovery reattaches live runs, and on a stale tap. Found by iteration 25 after the backlog ran out. (files: server/approval.ts, server/approval.test.ts, server/runner.ts, web/src/components/CardView.tsx)
 
+- [x] **A missed morning brief silences the whole day** — the scheduler blocks check-ins until `brief_last_date` is today, but a brief past its catch-up window (the Mac slept past midday, or an afternoon brief time missed by a minute) never sets it, so on that day no brief and no check-ins run at all. Fix: a pure `briefSlot` (off/sent/early/due/missed) shared by the scheduler and `briefCoversHeld`; check-ins wait only while the brief is still `early`. Found by iteration 26 after the backlog ran out. (files: server/clock.ts, server/clock.test.ts, server/scheduler.ts, server/held.ts)
+
 Dropped as already done (verified in code):
 - Readable agent activity — `Activity` in `web/src/components/Thread.tsx` is collapsed by default to a one-line label and expands on tap.
 - Never push when the thread is open — handled in `web/public/sw.js` (but see "Push that survives iOS" for the cost of how).

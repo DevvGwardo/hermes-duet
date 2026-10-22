@@ -558,3 +558,27 @@ DONE: Interrupted page refresh asks and pushes like user work
 - `expireDeadPrompts` (server/runner.ts) marks them `expired` with decision "Its run ended". It runs in `finish` (before the fg-task and task "waiting" checks count pending cards), at the end of `recoverOrphans` once live runs are reattached (which also clears cards left over from before this change), and in `actOnCard`, so a stale tap gets an error and the card isn't recorded as approved. CardView shows "Expired · Its run ended".
 - Why it matters against Claude Duet: "Needs you" and the brief should list only what the user can actually act on. A dead "Allow once" card is noise that looks like a decision.
 - Verified: typecheck pass · test 86 pass / 0 fail · build pass
+
+## 2026-10-22T01:42:20Z — loop iteration 25
+- exit=0 gate=green committed=True files=6
+- gate: typecheck: exit 0
+- answer:
+```
+use ANTHROPIC_API_KEY or another auth source is set and takes precedence over your claude.ai login · Unset it to load your organization's connectors
+DONE: Hermes prompts outlive their run
+- **Gap I found:** the backlog had no open, unblocked items, so I picked this one myself. When Hermes asks for approval or asks a question, the card can only be answered while that run is still going. If the run ended first (Stop, a timeout, or Hermes restarting), the card stayed pending forever. It sat in "Needs you", the brief and check-ins listed it as waiting, and tapping "Allow once" marked it approved even though nothing happened.
+- **Fix:** a new `deadPrompts` in `server/approval.ts` finds those cards. Duet's own approval cards are left alone, because answering one restarts the conversation as a new turn. `expireDeadPrompts` in `server/runner.ts` marks the dead cards expired in three places: when a run finishes, after restart recovery (this also clears cards left over from before this change), and when the user taps one, which now shows an error. `CardView.tsx` shows "Expired · Its run ended".
+- **Tests:** 1 new in `server/approval.test.ts`. Backlog item added already ticked, plus a journal entry.
+- typecheck: `tsc -p tsconfig.json --noEmit` → exit 0
+- test: `86 pass, 0 fail, 286 expect() calls` → exit 0
+- build: `✓ built in 72ms` → exit 0
+
+> CORRECTION: there was no unchecked, unblocked item for this iteration, so I found and added this one myself instead of taking one from the list.
+```
+
+## 2026-10-22T05:50Z — A missed morning brief silences the whole day
+- What changed: the backlog had no open, unblocked items, so this iteration audited the scheduler and added this item. Check-ins waited for `brief_last_date === today`, but a brief past its catch-up window (after midday, or an afternoon brief time missed by its one minute) never sets it, so a late wake meant no check-ins all day.
+- New pure `briefSlot` (server/clock.ts, +1 test) returns off/sent/early/due/missed. `startScheduler` (server/scheduler.ts) runs or holds the brief on `due`, and check-ins now wait only on `early`. `briefCoversHeld` (server/held.ts) uses the same rule, so its catch-up window can't drift from the scheduler's.
+- Not changed: a missed brief still isn't sent late. A 3 PM "morning brief" is still noise.
+- Why it matters against Claude Duet: "goes quiet until something genuinely needs you". Being quiet because the Mac slept through breakfast is a different thing, and it shouldn't last all day.
+- Verified: typecheck pass · test 87 pass / 0 fail · build pass

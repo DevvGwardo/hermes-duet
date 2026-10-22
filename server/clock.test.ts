@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { Settings } from '../shared/types';
-import { hourlySlots, inQuietHours, localParts, toMinutes } from './clock';
+import { briefSlot, hourlySlots, inQuietHours, localParts, toMinutes } from './clock';
 
 const base: Settings = { brief_enabled: true, brief_time: '07:30', checkins: 'off', quiet_start: '21:30', quiet_end: '07:00', timezone: 'America/New_York' };
 // 2026-10-21 is EDT (UTC-4).
@@ -42,5 +42,20 @@ describe('clock', () => {
     expect(slots.at(-1)).toBe('21:00');
     expect(slots).toHaveLength(15);
     expect(hourlySlots('07:15', '09:00')).toEqual(['08:00']);
+  });
+  test('briefSlot: a brief too late to catch up is missed, not pending', () => {
+    const d = '2026-10-22';
+    const y = '2026-10-21';
+    expect(briefSlot(base, { date: d, minutes: 7 * 60 }, y)).toBe('early');
+    expect(briefSlot(base, { date: d, minutes: 7 * 60 + 30 }, y)).toBe('due');
+    expect(briefSlot(base, { date: d, minutes: 11 * 60 + 59 }, y)).toBe('due'); // late wake catches up
+    expect(briefSlot(base, { date: d, minutes: 13 * 60 }, y)).toBe('missed'); // slept past midday: check-ins go on
+    expect(briefSlot(base, { date: d, minutes: 13 * 60 }, y, true)).toBe('due'); // held for a page refresh
+    expect(briefSlot(base, { date: d, minutes: 13 * 60 }, d)).toBe('sent');
+    expect(briefSlot({ ...base, brief_enabled: false }, { date: d, minutes: 7 * 60 }, y)).toBe('off');
+    // An afternoon brief time is due only in its own minute.
+    const pm = { ...base, brief_time: '14:00' };
+    expect(briefSlot(pm, { date: d, minutes: 14 * 60 }, y)).toBe('due');
+    expect(briefSlot(pm, { date: d, minutes: 14 * 60 + 1 }, y)).toBe('missed');
   });
 });
