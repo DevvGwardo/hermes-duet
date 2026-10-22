@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import type { CardData, Item } from '../shared/types';
-import { approvalDecision, approvalPrompt, approvalPush, deadPrompts, replaceRefusal } from './approval';
+import { OPEN_ASKS_MAX, approvalDecision, approvalPrompt, approvalPush, askMarks, deadPrompts, replaceRefusal } from './approval';
 
 const card = (extra: Partial<CardData> = {}): CardData => ({ type: 'approval', title: 'Send the reply to Dana', status: 'pending', ...extra });
 const item = (c: CardData): Item => ({ id: 'c1', kind: 'card', created_at: 0, updated_at: 0, card: c });
@@ -89,4 +89,21 @@ test('a redraft withdraws only its own pending card of the same kind', () => {
   // Once decided, the old version stands, and the agent is told why nothing was replaced.
   expect(replaceRefusal(at({ status: 'approved' }), 'approval', 'main')).toBe('the user already approved it');
   expect(replaceRefusal(at({ status: 'expired' }), 'approval', 'main')).toBe('it already expired');
+});
+
+test('every push lists the open asks, and marks itself an ask only for a pending approval or question', () => {
+  const at = (id: string, c: CardData): Item => ({ ...item(c), id });
+  const pending = [
+    at('a1', card()),
+    at('q1', card({ type: 'choice' })),
+    // A note never waits on anyone, so it is neither listed nor marked.
+    at('n1', card({ type: 'note', status: 'info' })),
+  ];
+  expect(askMarks({ card_id: 'a1' }, pending, 5)).toEqual({ ask: true, open: ['a1', 'q1'], sent_at: 5 });
+  // A brief, handover or "While you were away" push still carries the list, so it can clear stale asks.
+  expect(askMarks({}, pending, 5)).toEqual({ open: ['a1', 'q1'], sent_at: 5 });
+  expect(askMarks({ card_id: 'n1' }, pending, 5)).toEqual({ open: ['a1', 'q1'], sent_at: 5 });
+  // Too many to fit in a push: no list, so the service worker closes nothing.
+  const many = Array.from({ length: OPEN_ASKS_MAX + 1 }, (_, i) => at(`a${i}`, card()));
+  expect(askMarks({ card_id: 'a0' }, many, 5)).toEqual({ ask: true, sent_at: 5 });
 });

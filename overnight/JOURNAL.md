@@ -679,3 +679,27 @@ SessionEnd hook [node "${CLAUDE_PLUGIN_ROOT}/hooks/session-end-cleanup.mjs"] fai
 - Not changed: server and sw.js. Clearing without the app open is a new low-priority backlog item; it can't be a push of its own, because iOS revokes subscriptions that push silently.
 - Why it matters against Claude Duet: "goes quiet until something genuinely needs you". A banner for a decision already made is a false "needs you".
 - Verified: typecheck pass · test 92 pass / 0 fail · build pass
+
+## 2026-10-22T02:01:33Z — loop iteration 30
+- exit=0 gate=green committed=True files=7
+- gate: typecheck: exit 0
+- answer:
+```
+unblocked, so I picked this gap myself. A "Needs your OK" or "Quick question" notification stayed on the lock screen after the card was dealt with: approved, declined, answered, replaced by a redraft, or expired with its run. On Android and desktop, its Approve button then failed without telling the user.
+- **Fix:** a new `settledNotifications` in `shared/links.ts` finds the notifications whose approval or question is no longer waiting. `clearSettledNotifications` in `web/src/api.ts` closes them through `getNotifications()`. `web/src/App.tsx` runs it when the app opens and each time another question or approval is settled, but not on every streamed word. Notifications for briefs, finished tasks and "Heads up" notes are left alone.
+- **Limit:** the cleanup only runs when the app is open on that device, so a card approved on the desktop keeps its phone notification until the phone app opens. That is a new low-priority backlog item. I haven't tried it on a real phone.
+- **Also:** 3 new tests in `server/links.test.ts`, one README line, the backlog item added already ticked, and a journal entry.
+- typecheck: `tsc -p tsconfig.json --noEmit` → exit 0
+- test: `92 pass, 0 fail, 317 expect() calls` → exit 0
+- build: `✓ built in 94ms` → exit 0
+
+> CORRECTION: there was no unchecked, unblocked item for this iteration, so I found and added this one myself instead of taking one from the list.
+SessionEnd hook [node "${CLAUDE_PLUGIN_ROOT}/hooks/session-end-cleanup.mjs"] failed: Hook cancelled
+```
+
+## 2026-10-22T06:15Z — Clear settled banners without opening the app
+- What changed: new pure `askMarks` (server/approval.ts, +1 test) gives every push `sent_at`, `open` (ids of all pending approval/choice cards, omitted above `OPEN_ASKS_MAX` = 30 so the payload stays small) and `ask: true` when the push is about one of them. `notify` (server/push.ts) applies it after the quiet-hours hold, so a held push released later carries the list as of sending.
+- web/public/sw.js stores `ask`/`sent_at` on the notification, and after showing each push closes earlier ask banners whose card is not in `open`. Banners newer than the push (out-of-order delivery) and banners from before this change (no `ask`) are left alone. README line updated.
+- Not changed: no push is ever sent only to clear a banner (iOS silent-push rule), so a stale banner lasts until the next real push or until the app opens (iteration 30's path). Not tried on a real phone; `getNotifications()` in an iOS service worker is unverified, and a failure there is caught after the notification is already shown.
+- Why it matters against Claude Duet: "goes quiet until something genuinely needs you". A decision made on the desktop should stop showing as waiting on the phone.
+- Verified: typecheck pass · test 93 pass / 0 fail · build pass

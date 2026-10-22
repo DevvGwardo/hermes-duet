@@ -49,6 +49,25 @@ export function approvalPush(card: Item): PushPayload {
   };
 }
 
+/** Above this many open asks the id list is left off a push (web push payloads top out around 4 KB). */
+export const OPEN_ASKS_MAX = 30;
+
+/**
+ * What every push carries so the service worker can take settled asks off the lock screen without the app open:
+ * `ask` marks a push about a pending approval or question, and `open` lists every ask still pending when it was sent.
+ * On arrival the worker closes earlier ask banners whose card is not in `open` (decided on another device, replaced,
+ * expired). It rides on pushes that are sent anyway; a push only to clear one would be a silent push on iOS. With too
+ * many open asks to fit, `open` is omitted and the worker leaves every banner alone.
+ */
+export function askMarks(p: Pick<PushPayload, 'card_id'>, pending: Item[], now: number): Pick<PushPayload, 'ask' | 'open' | 'sent_at'> {
+  const open = pending.filter((i) => i.card?.status === 'pending' && (i.card.type === 'approval' || i.card.type === 'choice')).map((i) => i.id);
+  return {
+    ...(p.card_id && open.includes(p.card_id) && { ask: true }),
+    ...(open.length <= OPEN_ASKS_MAX && { open }),
+    sent_at: now,
+  };
+}
+
 export const PROMPT_ENDED = 'Its run ended';
 
 /**

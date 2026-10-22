@@ -4,6 +4,7 @@ import { config } from './config';
 import { inQuietHours } from './clock';
 import { presence } from './presence';
 import { holdPush, type HeldPush } from './held';
+import { askMarks } from './approval';
 
 interface Vapid {
   publicKey: string;
@@ -56,6 +57,11 @@ export interface PushPayload {
   always?: boolean;
   /** Home-screen badge count; filled in from pending cards when omitted. */
   badge?: number;
+  /** Set at send time by `askMarks`: this push is about a pending approval or question. */
+  ask?: boolean;
+  /** Set at send time by `askMarks`: every approval and question still pending, when few enough to fit. */
+  open?: string[];
+  sent_at?: number;
 }
 
 export async function notify(p: PushPayload, opts: { ignoreQuiet?: boolean } = {}): Promise<number> {
@@ -71,7 +77,9 @@ export async function notify(p: PushPayload, opts: { ignoreQuiet?: boolean } = {
     .query<{ endpoint: string; json: string; device_id: string | null }, []>('SELECT endpoint, json, device_id FROM push_subs')
     .all()
     .filter((s) => p.always || !s.device_id || !presence.visible(s.device_id));
-  p = { ...p, badge: p.badge ?? items.pendingCards().length };
+  // Computed here, after the quiet-hours hold, so a held push released later carries the list as of its sending.
+  const pending = items.pendingCards();
+  p = { ...p, badge: p.badge ?? pending.length, ...askMarks(p, pending, Date.now()) };
   let sent = 0;
   await Promise.all(
     subs.map(async (s) => {

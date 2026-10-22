@@ -18,7 +18,7 @@ self.addEventListener('push', (event) => {
     badge: '/badge-96.png',
     tag: data.tag || undefined,
     renotify: Boolean(data.tag),
-    data: { url: data.url || '/', card_id: data.card_id || null },
+    data: { url: data.url || '/', card_id: data.card_id || null, ask: Boolean(data.ask), sent_at: data.sent_at || 0 },
     // Action buttons show on Android/desktop; iOS ignores them and just opens the app. An approval whose draft
     // or command is only in the card never gets Approve here: its first button opens the card instead.
     // `has_draft` is the older name of `must_read`, accepted for pushes queued before the rename.
@@ -39,6 +39,17 @@ self.addEventListener('push', (event) => {
       // Always show: WebKit counts a push that shows nothing as a silent push and revokes the
       // subscription after a few. The server already skips devices whose app is visible.
       await self.registration.showNotification(title, options);
+      // `open` lists every approval and question still pending when this push was sent. An earlier ask banner whose
+      // card isn't in it was settled elsewhere (another device, a redraft, its run ended), so take it down. Banners
+      // sent after this push (out-of-order delivery) are left alone; pushes without `open` clear nothing.
+      if (Array.isArray(data.open)) {
+        const open = new Set(data.open);
+        const shown = await self.registration.getNotifications().catch(() => []);
+        for (const n of shown) {
+          const d = n.data || {};
+          if (d.ask && d.card_id && !open.has(d.card_id) && (d.sent_at || 0) <= (data.sent_at || 0)) n.close();
+        }
+      }
     })(),
   );
 });

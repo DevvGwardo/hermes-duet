@@ -225,3 +225,11 @@
 1:54AM INF no leaks found
 [2026-10-22 01:54:59] iter 29 done · exit=0 gate=green committed=True changed=8
 [2026-10-22 01:55:19] iter 30 start → iter-30-20261022-015519.log
+[2026-10-22 02:01:33] iter 30 commit=ok · /claude-duet-20261022 21c0aee] overnight(iter 30): DONE: Decided approvals stay on the lock screen
+ 8 files changed, 124 insertions(+), 3 deletions(-)
+ create mode 100644 server/links.test.ts
+2:01AM INF 0 commits scanned.
+2:01AM INF scanned ~10047 bytes (10.05 KB) in 33.9ms
+2:01AM INF no leaks found
+[2026-10-22 02:01:33] iter 30 done · exit=0 gate=green committed=True changed=7
+[2026-10-22 02:01:53] iter 31 start → iter-31-20261022-020153.log
