@@ -138,3 +138,10 @@
 1:21AM INF no leaks found
 [2026-10-22 01:21:21] iter 17 done · exit=0 gate=green committed=True changed=7
 [2026-10-22 01:21:41] iter 18 start → iter-18-20261022-012141.log
+[2026-10-22 01:23:32] iter 18 commit=ok · [overnight/claude-duet-20261022 2ffef49] overnight(iter 18): DONE: Push "Allow once" runs a command unseen
+ 8 files changed, 68 insertions(+), 15 deletions(-)
+1:23AM INF 0 commits scanned.
+1:23AM INF scanned ~6092 bytes (6.09 KB) in 19ms
+1:23AM INF no leaks found
+[2026-10-22 01:23:32] iter 18 done · exit=0 gate=green committed=True changed=7
+[2026-10-22 01:23:52] iter 19 start → iter-19-20261022-012352.log

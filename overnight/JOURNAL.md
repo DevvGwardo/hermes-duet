@@ -395,3 +395,27 @@ DONE: Push approve skips the draft
 - Not changed: the server still accepts a bare approve for Hermes cards, so a notification already on screen from the old SW keeps its Allow once until dismissed.
 - Why it matters against Claude Duet: "waits for your ok when it matters". An ok to run a flagged command has to mean the user saw the command.
 - Verified: typecheck pass · test 66 pass / 0 fail · build pass
+
+## 2026-10-22T01:23:32Z — loop iteration 18
+- exit=0 gate=green committed=True files=7
+- gate: typecheck: exit 0
+- answer:
+```
+nother auth source is set and takes precedence over your claude.ai login · Unset it to load your organization's connectors
+DONE: Push "Allow once" runs a command unseen
+- **Server:** `approvalPush` in `server/approval.ts` now also builds the push for Hermes's own approvals, and `hermesPrompt` in `server/runner.ts` uses it. Pushes for questions are unchanged. Every Hermes approval push now carries `must_read`, and its text reads "<description>. Check the command first." The command itself is never put in the push.
+- **Rename:** the push flag `has_draft` is now `must_read` on `PushPayload` (`server/push.ts`). Duet cards with a draft still set it, as before.
+- **Service worker:** in `web/public/sw.js`, a push with `must_read` (or the old `has_draft`) shows a "Read it first" button that opens the card, instead of Approve or "Allow once".
+- **Tests:** 1 new test in `server/approval.test.ts`. Backlog item ticked, journal entry added.
+- **Not covered:** the server still accepts an approve that comes with nothing else, so a notification already on screen from the old service worker keeps its "Allow once" button until it's dismissed.
+- typecheck: `tsc -p tsconfig.json --noEmit` → exit 0
+- test: `66 pass, 0 fail, 223 expect() calls` → exit 0
+- build: `✓ built in 103ms` → exit 0
+
+> CORRECTION: the item offered putting a shortened command in the push text. I left it out on purpose, as with drafts, because a command can contain private details and the push text appears on the lock screen.
+```
+
+## 2026-10-22T05:24Z — Interrupted tasks push twice
+- What changed: `failTask` (server/runner.ts) takes `{ push = true }`. The INTERRUPTED branch of `finish` calls it with `push: false`, so the task is still marked failed and the agent still gets its context note, but the "Pick it back up?" card's "Work was interrupted" push is the only notification. The other caller (a run that couldn't start) still pushes.
+- Why it matters against Claude Duet: "goes quiet until something genuinely needs you". One event now sends one push.
+- Verified: typecheck pass · test 66 pass / 0 fail · build pass (no new test: the change is one flag at an impure call site in runner.ts, which has no harness)

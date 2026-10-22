@@ -564,7 +564,8 @@ function finish(l: Lane, run: ActiveRun, status: 'done' | 'error' | 'stopped', o
   if (status === 'error' && error === INTERRUPTED && !spec.quiet && (spec.kind === 'chat' || spec.kind === 'task' || spec.kind === 'decision')) {
     const task = spec.taskId ? tasks.get(spec.taskId) : null;
     const what = spec.taskId ? task?.title : runTitle(spec);
-    if (spec.taskId) failTask(spec.taskId, 'Interrupted: Hermes restarted mid-task.');
+    // The "Pick it back up?" card below pushes for this interruption; a second "Task failed" push would be noise.
+    if (spec.taskId) failTask(spec.taskId, 'Interrupted: Hermes restarted mid-task.', { push: false });
     const card = put(
       newItem('card', {
         task_id: spec.taskId ?? null,
@@ -740,12 +741,13 @@ function handOver(t: Task): Item {
   return item;
 }
 
-function failTask(taskId: string, reason: string) {
+/** `push: false` when the caller pushes its own card for the same event, so the user gets one notification. */
+function failTask(taskId: string, reason: string, { push = true } = {}) {
   const t = tasks.get(taskId);
   if (!t || t.status === 'cancelled' || t.status === 'done') return;
   putTask({ ...t, status: 'failed', result: reason, progress: '' });
   addContextNote(`Background task "${t.title}" (${taskId}) failed: ${reason}`);
-  pushSafe({ title: `Task failed: ${t.title}`, body: firstLine(reason), tag: `task-${taskId}` });
+  if (push) pushSafe({ title: `Task failed: ${t.title}`, body: firstLine(reason), tag: `task-${taskId}` });
 }
 
 // ---------------------------------------------------------------------------
