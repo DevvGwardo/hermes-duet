@@ -1,13 +1,11 @@
-import { useMemo } from 'react';
 import { useStore } from '../store';
 import { Icon, fileIcon, relLabel } from '../ui';
 
 /** Desktop-only context rail: what needs you, what's running, what just landed. */
 export function Rail({ onJump, onOpenFile, onShowTasks }: { onJump: (id: string) => void; onOpenFile: (id: string) => void; onShowTasks: () => void }) {
-  const allItems = useStore((s) => s.items);
+  const pending = useStore((s) => s.pending);
   const tasks = useStore((s) => s.tasks);
   const files = useStore((s) => s.files);
-  const pending = useMemo(() => allItems.filter((i) => i.kind === 'card' && i.card?.status === 'pending'), [allItems]);
   const active = tasks.filter((t) => ['running', 'queued', 'waiting'].includes(t.status));
 
   return (

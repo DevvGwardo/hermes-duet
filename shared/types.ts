@@ -137,6 +137,8 @@ export interface AgentState {
 export interface Snapshot {
   items: Item[];
   has_more: boolean;
+  /** Every pending card, including ones older than the `items` page. */
+  pending: Item[];
   tasks: Task[];
   files: FileEntry[];
   settings: Settings;

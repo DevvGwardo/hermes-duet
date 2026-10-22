@@ -84,6 +84,15 @@ export async function loadOlder() {
   prependItems(r.items, r.has_more);
 }
 
+/** Page back until `id` is in the loaded thread, so a jump to an old pending card lands. */
+export async function loadUntil(id: string, maxPages = 20) {
+  for (let i = 0; i < maxPages; i++) {
+    const s = getState();
+    if (s.items.some((x) => x.id === id) || !s.hasMore) return;
+    await loadOlder();
+  }
+}
+
 document.addEventListener('visibilitychange', () => {
   // iOS suspends EventSource in the background; reconnect on return.
   if (document.visibilityState === 'visible' && getState().authed && (!es || es.readyState === EventSource.CLOSED)) {

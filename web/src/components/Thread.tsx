@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { Item } from '../../../shared/types';
-import { loadOlder } from '../api';
+import { loadOlder, loadUntil } from '../api';
 import { useStore } from '../store';
 import { Icon, Markdown, dayLabel, timeLabel } from '../ui';
 import { CardView } from './CardView';
@@ -31,12 +31,24 @@ export function Thread({ onOpenFile, scrollToId, onSuggest }: { onOpenFile: (id:
 
   useEffect(() => {
     if (!scrollToId) return;
-    const el = document.getElementById(`item-${scrollToId}`);
-    if (el) {
+    let cancelled = false;
+    const show = () => {
+      const el = document.getElementById(`item-${scrollToId}`);
+      if (!el) return false;
+      stick.current = false;
       el.scrollIntoView({ block: 'center', behavior: 'smooth' });
       el.classList.add('flash');
       setTimeout(() => el.classList.remove('flash'), 1600);
-    }
+      return true;
+    };
+    // A pending card can be older than the loaded page: fetch back to it, then scroll once rendered.
+    if (!show())
+      loadUntil(scrollToId)
+        .catch(() => {})
+        .then(() => requestAnimationFrame(() => !cancelled && show()));
+    return () => {
+      cancelled = true;
+    };
   }, [scrollToId]);
 
   function onScroll() {

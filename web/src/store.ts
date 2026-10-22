@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react';
+import { trackPending } from '../../shared/pending';
 import type { AgentState, FileEntry, Item, ServerEvent, Settings, Snapshot, Task } from '../../shared/types';
 
 export interface State {
@@ -7,6 +8,8 @@ export interface State {
   connected: boolean;
   items: Item[];
   hasMore: boolean;
+  /** Cards waiting on the user, from the server, not filtered from the loaded `items` page. */
+  pending: Item[];
   tasks: Task[];
   files: FileEntry[];
   settings: Settings | null;
@@ -22,6 +25,7 @@ let state: State = {
   connected: false,
   items: [],
   hasMore: false,
+  pending: [],
   tasks: [],
   files: [],
   settings: null,
@@ -66,6 +70,7 @@ export function applySnapshot(s: Snapshot) {
     authed: true,
     items: s.items,
     hasMore: s.has_more,
+    pending: s.pending,
     tasks: s.tasks.sort(byUpdatedDesc),
     files: s.files,
     settings: s.settings,
@@ -81,7 +86,7 @@ export function prependItems(older: Item[], hasMore: boolean) {
 export function applyEvent(ev: ServerEvent) {
   switch (ev.type) {
     case 'item':
-      setState((s) => ({ items: upsert(s.items, ev.item, byCreated) }));
+      setState((s) => ({ items: upsert(s.items, ev.item, byCreated), pending: trackPending(s.pending, ev.item) }));
       break;
     case 'delta':
       setState((s) => ({

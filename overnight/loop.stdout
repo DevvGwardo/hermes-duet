@@ -10,3 +10,12 @@
 12:32AM INF no leaks found
 [2026-10-22 00:32:52] iter 1 done · exit=0 gate=green committed=True changed=3
 [2026-10-22 00:33:12] iter 2 start → iter-02-20261022-003312.log
+[2026-10-22 00:35:17] iter 2 commit=ok · r 2): DONE: Check-ins stay silent unless a brief has entries
+ 8 files changed, 116 insertions(+), 17 deletions(-)
+ create mode 100644 server/brief.test.ts
+ create mode 100644 server/brief.ts
+12:35AM INF 0 commits scanned.
+12:35AM INF scanned ~8236 bytes (8.24 KB) in 19.4ms
+12:35AM INF no leaks found
+[2026-10-22 00:35:17] iter 2 done · exit=0 gate=green committed=True changed=7
+[2026-10-22 00:35:37] iter 3 start → iter-03-20261022-003537.log

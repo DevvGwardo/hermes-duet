@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import type { Task } from '../../../shared/types';
 import { api } from '../api';
 import { useStore } from '../store';
@@ -15,8 +15,7 @@ const STATUS_LABEL: Record<Task['status'], string> = {
 
 export function TasksView({ onJump }: { onJump: (itemId: string) => void }) {
   const tasks = useStore((s) => s.tasks);
-  const allItems = useStore((s) => s.items);
-  const pendingCards = useMemo(() => allItems.filter((i) => i.kind === 'card' && i.card?.status === 'pending'), [allItems]);
+  const pendingCards = useStore((s) => s.pending);
 
   const active = tasks.filter((t) => t.status === 'running' || t.status === 'queued');
   const waiting = tasks.filter((t) => t.status === 'waiting');

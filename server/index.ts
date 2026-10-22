@@ -69,6 +69,7 @@ async function handleApp(req: Request): Promise<Response> {
       const snap: Snapshot = {
         items: page.items,
         has_more: page.has_more,
+        pending: items.pendingCards(),
         tasks: tasks.recent(),
         files: files.all(),
         settings: settings.get(),

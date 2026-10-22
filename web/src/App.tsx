@@ -57,7 +57,7 @@ function Shell() {
   const composer = useRef<ComposerHandle>(null);
   const agent = useStore((s) => s.agent);
   const pushEnabled = useStore((s) => s.pushEnabled);
-  const pending = useStore((s) => s.items.filter((i) => i.kind === 'card' && i.card?.status === 'pending').length);
+  const pending = useStore((s) => s.pending.length);
   const working = useStore((s) => s.tasks.filter((t) => t.status === 'running' || t.status === 'waiting').length);
   const [hideInstall, setHideInstall] = useState(() => localStorageGet('duet.hideInstall') === '1');
   const status = useStatus();
