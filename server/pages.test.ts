@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { Page } from '../shared/types';
-import { afterInterruption, holdBrief, pageBriefLine, pageInput, pagesDue, refreshTime, refreshToCancel } from './pages';
+import { afterInterruption, briefWait, holdBrief, pageBriefLine, pageInput, pagesDue, refreshTime, refreshToCancel } from './pages';
 
 const page = (id: string, fields: Partial<Page> = {}): Page => ({
   id,
@@ -67,6 +67,16 @@ describe('brief and standing pages', () => {
     expect(holdBrief(true, null, t0)).toBe(true);
     expect(holdBrief(true, t0, t0 + 29 * 60_000)).toBe(true);
     expect(holdBrief(true, t0, t0 + 30 * 60_000)).toBe(false);
+  });
+
+  test('after an outage a queued brief waits for refreshes, at most 30 minutes from Hermes coming back', () => {
+    const back = 1_000_000;
+    expect(briefWait(false, back, back)).toBe(0);
+    expect(briefWait(true, null, back)).toBe(0); // Hermes never went down: the scheduler already held it
+    expect(briefWait(true, back, back)).toBe(30 * 60_000);
+    expect(briefWait(true, back, back + 20 * 60_000)).toBe(10 * 60_000);
+    expect(briefWait(true, back, back + 30 * 60_000)).toBe(0);
+    expect(briefWait(true, back, back + 90 * 60_000)).toBe(0);
   });
 
   test('each page tells the brief what changed, or why it cannot', () => {

@@ -300,3 +300,10 @@
 2:32AM INF no leaks found
 [2026-10-22 02:32:26] iter 39 done · exit=0 gate=green committed=True changed=7
 [2026-10-22 02:32:46] iter 40 start → iter-40-20261022-023246.log
+[2026-10-22 02:34:52] iter 40 commit=ok · [overnight/claude-duet-20261022 085f1ca] overnight(iter 40): DONE: A queued brief reports a stale world
+ 4 files changed, 70 insertions(+), 28 deletions(-)
+2:34AM INF 0 commits scanned.
+2:34AM INF scanned ~6831 bytes (6.83 KB) in 21.9ms
+2:34AM INF no leaks found
+[2026-10-22 02:34:52] iter 40 done · exit=0 gate=green committed=True changed=3
+[2026-10-22 02:35:12] iter 41 start → iter-41-20261022-023512.log

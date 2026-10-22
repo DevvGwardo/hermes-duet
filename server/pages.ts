@@ -47,6 +47,17 @@ export function holdBrief(refreshing: boolean, heldSince: number | null, now: nu
 }
 
 /**
+ * How many ms a scheduled brief already in the queue should still wait for page refreshes; 0 means launch it.
+ * The scheduler's hold only works before it queues the brief. A brief queued during a Hermes outage would start in
+ * the same pass as the refreshes queued before it, so for BRIEF_HOLD_MIN after Hermes comes back (`backAt`) it waits
+ * while any refresh is queued or running. Outside that window the scheduler has already held it, so no second wait.
+ */
+export function briefWait(refreshing: boolean, backAt: number | null, now: number): number {
+  if (!refreshing || backAt === null) return 0;
+  return Math.max(0, backAt + BRIEF_HOLD_MIN * 60_000 - now);
+}
+
+/**
  * Which refresh to cancel when a page is stopped: one still in flight, so it can't deliver over the file afterwards,
  * unless that refresh is the caller itself (a refresh run calling save_page remove would cancel its own tool call).
  */

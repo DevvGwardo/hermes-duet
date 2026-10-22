@@ -10,7 +10,7 @@ import { config } from './config';
 import { files, items, kv, newId, pages, runs, settings, tasks } from './db';
 import { followUps, handoverCard, useFollowUp } from './handover';
 import { HermesError, hermes, type RunEvent } from './hermes';
-import { MAX_PAGES, afterInterruption, pageBriefLine, pageInput, refreshTime, refreshToCancel } from './pages';
+import { MAX_PAGES, afterInterruption, briefWait, pageBriefLine, pageInput, refreshTime, refreshToCancel } from './pages';
 import { briefPrompt, checkinPrompt, decisionPrompt, pageRefreshInstructions, persona, taskPrompt } from './prompts';
 import { notify } from './push';
 import { MOVED_ON, RESUME_OPTIONS, RETRY_OPTIONS, TIMED_OUT, failedTurnBody, movedOn, resumeCardBody, retryTitle, runHung } from './recovery';
@@ -31,6 +31,8 @@ interface RunSpec {
   input: string;
   /** Check-ins: when the previous one ran, for "anything new since …". */
   since?: string;
+  /** Briefs: the scheduler queued it (not "Run it now"), so it may wait for page refreshes after an outage. */
+  scheduled?: boolean;
   taskId?: string | null;
   /** Buffer output and post nothing unless it has something to say (check-ins). */
   quiet?: boolean;
@@ -114,16 +116,38 @@ function enqueue(spec: RunSpec) {
   broadcastAgent();
 }
 
+// When Hermes last came back from 'down', for the post-outage brief hold.
+let hermesBackAt: number | null = null;
+let briefTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Whether a scheduled brief should stay queued for now; arms one timer to pump again when its wait runs out. */
+function briefHeld(): boolean {
+  const wait = briefWait(pages.all().some(pageRefreshing), hermesBackAt, Date.now());
+  if (wait && !briefTimer) {
+    briefTimer = setTimeout(() => {
+      briefTimer = null;
+      pumpAll();
+    }, wait);
+  }
+  return wait > 0;
+}
+
 function pumpAll() {
   // While Hermes is unreachable, keep everything queued; the health watch pumps again when it's back.
   if (hermesStatus === 'down') return;
-  // Main lane first so the user's thread never waits behind background work.
+  // Main lane first so the user's thread never waits behind background work. That order would start a brief queued
+  // during an outage before the page refreshes queued ahead of it, so a held brief keeps its place while chat behind
+  // it goes first; a finished refresh pumps again through finish().
+  let held: boolean | undefined;
+  const waits = (s: RunSpec) => s.kind === 'brief' && !!s.scheduled && (held ??= briefHeld());
   const order = [...lanes.values()].sort((a, b) => Number(b.main) - Number(a.main));
   for (const l of order) {
     if (l.active || !l.queue.length) continue;
-    const next = l.queue[0];
+    const i = l.queue.findIndex((s) => !waits(s));
+    if (i < 0) continue;
+    const next = l.queue[i];
     if (next.kind === 'task' && backgroundActive() >= config.maxBackground) continue;
-    l.queue.shift();
+    l.queue.splice(i, 1);
     persistQueues();
     launch(l, next);
   }
@@ -1140,8 +1164,15 @@ function checkinInput(since?: string): string {
 
 export function runBrief(source: 'scheduled' | 'manual') {
   const m = mainLane();
-  if (m.queue.some((q) => q.kind === 'brief') || m.active?.spec.kind === 'brief') return;
-  enqueue({ kind: 'brief', sessionId: m.sessionId, input: '' });
+  const queued = m.queue.find((q) => q.kind === 'brief');
+  if (queued && source === 'manual' && queued.scheduled) {
+    // "Run it now" means now: a brief waiting on page refreshes stops waiting.
+    queued.scheduled = false;
+    persistQueues();
+    pumpAll();
+  }
+  if (queued || m.active?.spec.kind === 'brief') return;
+  enqueue({ kind: 'brief', sessionId: m.sessionId, input: '', scheduled: source === 'scheduled' });
   console.log(`[brief] queued (${source})`);
 }
 
@@ -1461,6 +1492,7 @@ let offlineNoted = false;
 
 function setHermesStatus(next: AgentState['hermes']) {
   if (next === hermesStatus) return;
+  if (next === 'ok' && hermesStatus === 'down') hermesBackAt = Date.now();
   hermesStatus = next;
   if (next === 'ok') offlineNoted = false;
   broadcastAgent();

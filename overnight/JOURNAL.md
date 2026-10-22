@@ -921,3 +921,29 @@ DONE: A failed reply is silent
 - Discovered: after an outage the brief still launches in the same pass as the page refreshes queued before it (new backlog item).
 - Why it matters against Claude Duet: "judgment about what needs you". The brief has to rank what's true when you read it, not what was true before your last chat.
 - Verified: typecheck pass · test 117 pass / 0 fail · build pass
+
+## 2026-10-22T02:34:52Z — loop iteration 40
+- exit=0 gate=green committed=True files=3
+- gate: typecheck: exit 0
+- answer:
+```
+load your organization's connectors
+DONE: A queued brief reports a stale world
+
+> CORRECTION: the backlog had no open, unblocked items, so I found this gap myself and added it to the backlog already ticked.
+
+- **Problem:** the morning brief's prompt was built when the brief was queued, but the brief waits behind any chat turn already running, or behind a Hermes outage. A card you approved while it waited was still listed as waiting and could be raised again, and a standing page could still read "refresh is still running" after it had finished. A check-in queued during an outage had the same problem.
+- **Fix:** briefs and check-ins now queue with no prompt. `launch` builds it when the run actually starts, using the new `briefInput()` and `checkinInput(since)`. A new `RunSpec.since` field keeps the check-in's "anything new since …" time. A brief or check-in that gets re-queued after a failed start is rebuilt the next time it starts. The only file changed is `server/runner.ts`, plus the backlog and journal.
+- **No new test:** this is wiring inside `runner.ts`, which has no test harness, and the prompt builders it calls are unchanged. I haven't tried it against a live Hermes.
+- **New backlog item:** after a Hermes outage, the brief still starts at the same moment as the page refreshes queued before it, so it says they're still running.
+- typecheck: `tsc -p tsconfig.json --noEmit` → exit 0
+- test: `117 pass, 0 fail, 401 expect() calls` → exit 0
+- build: `✓ built in 102ms` → exit 0
+```
+
+## 2026-10-22T06:37Z — After a Hermes outage the brief starts before the page refreshes
+- What changed: new pure `briefWait(refreshing, backAt, now)` (server/pages.ts, +1 test) gives the ms a queued scheduled brief should still wait: only while a page refresh is queued or running, and only until `BRIEF_HOLD_MIN` after Hermes came back from `down` (outside that window the scheduler already held it, so no second wait). `setHermesStatus` stamps `hermesBackAt` on down→ok; `pumpAll` (server/runner.ts) skips a held brief in the main lane while chat queued behind it still launches, and one timer pumps again when the wait runs out; a finished refresh pumps through `finish()` as before.
+- `RunSpec.scheduled` marks briefs the scheduler queued; "Run it now" never waits, and tapping it while a scheduled brief is held clears that flag so it goes at once. README line updated.
+- Limit: a Duet restart forgets `hermesBackAt` (the startup unknown→ok doesn't count as coming back), and specs persisted before this change have no `scheduled` flag, so they never wait. Not tried against a live Hermes.
+- Why it matters against Claude Duet: the standing page "refreshes on a schedule before the brief", so the brief should report its change, not "still running".
+- Verified: typecheck pass · test 118 pass / 0 fail · build pass
