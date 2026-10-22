@@ -370,3 +370,28 @@ DONE: Morning brief with nothing at all still pushes free text
 - Found: Hermes-native "Allow once" pushes have the same problem with the command text. Added to the backlog.
 - Why it matters against Claude Duet: "waits for your ok when it matters, with the full draft in the card". An ok has to mean the user saw the draft.
 - Verified: typecheck pass · test 65 pass / 0 fail · build pass
+
+## 2026-10-22T01:21:21Z — loop iteration 17
+- exit=0 gate=green committed=True files=7
+- gate: typecheck: exit 0
+- answer:
+```
+ce over your claude.ai login · Unset it to load your organization's connectors
+DONE: Push approve skips the draft
+- **Server:** the approval push is now built by a new `approvalPush` in `server/approval.ts`, used in `server/runner.ts` (`request_approval`). If the card has a draft, the push is flagged `has_draft` (new field on `PushPayload` in `server/push.ts`) and the banner reads "<title>. Draft ready to read." The draft text itself is not put in the push. 1 new test in `server/approval.test.ts`.
+- **Service worker:** in `web/public/sw.js`, a push with `has_draft` shows "Read the draft" instead of Approve, and that button opens the card. "Not now" is still there, and cards without a draft keep one-tap Approve.
+- **Not covered:** notifications already on screen from the old service worker still show Approve until they're dismissed. The server still accepts an approve with no draft text attached, because the app only sends the text when the user has edited it.
+- **Same problem found elsewhere:** when Hermes itself asks to run a flagged command, the push's "Allow once" approves it without the user seeing the command. I added this to the backlog as the next item.
+- typecheck: `tsc -p tsconfig.json --noEmit` → exit 0
+- test: `65 pass, 0 fail, 220 expect() calls` → exit 0
+- build: `✓ built in 74ms` → exit 0
+
+> CORRECTION: the push payload is built in the new `approvalPush` in `server/approval.ts`, not written inline in `server/runner.ts` as the item says, so that it can be tested.
+```
+
+## 2026-10-22T05:23Z — Push "Allow once" runs a command unseen
+- What changed: `approvalPush` (server/approval.ts) now builds the push for Hermes-native approvals too. Every one gets `must_read` and the body "<description>. Check the command first."; the command never goes into the payload. `hermesPrompt` in server/runner.ts uses it (clarify pushes are unchanged). `has_draft` is renamed `must_read` on `PushPayload` (server/push.ts). +1 test in approval.test.ts.
+- web/public/sw.js: `must_read` (or the old `has_draft`, for pushes queued before the rename) gives "Read it first", which opens the card, in place of Approve / Allow once.
+- Not changed: the server still accepts a bare approve for Hermes cards, so a notification already on screen from the old SW keeps its Allow once until dismissed.
+- Why it matters against Claude Duet: "waits for your ok when it matters". An ok to run a flagged command has to mean the user saw the command.
+- Verified: typecheck pass · test 66 pass / 0 fail · build pass

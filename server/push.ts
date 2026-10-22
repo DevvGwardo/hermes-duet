@@ -48,8 +48,8 @@ export interface PushPayload {
   url?: string;
   card_id?: string;
   approval?: boolean;
-  /** The approval carries a draft the notification can't show, so it gets no one-tap Approve. */
-  has_draft?: boolean;
+  /** The approval's draft or command is only in the card, so the notification gets no one-tap Approve. */
+  must_read?: boolean;
   action_label?: string;
   /** Send even to a device whose app is open and visible. */
   always?: boolean;

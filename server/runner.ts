@@ -782,7 +782,12 @@ function hermesPrompt(run: ActiveRun, ev: RunEvent, kind: 'approval' | 'clarify'
   const item = put(newItem('card', { card, run_id: run.id, task_id: run.spec.taskId ?? null }));
   run.cards++;
   if (run.spec.taskId) markTaskWaiting(run.spec.taskId);
-  pushSafe({ title: kind === 'approval' ? 'Needs your OK' : 'Quick question', body: card.title, card_id: item.id, approval: kind === 'approval', action_label: card.action_label, tag: item.id, url: `/?card=${item.id}` }, { ignoreQuiet: true });
+  pushSafe(
+    kind === 'approval'
+      ? approvalPush(item)
+      : { title: 'Quick question', body: card.title, card_id: item.id, approval: false, tag: item.id, url: `/?card=${item.id}` },
+    { ignoreQuiet: true },
+  );
 }
 
 function expireHermesPrompt(requestId: string) {

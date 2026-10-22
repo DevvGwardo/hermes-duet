@@ -26,19 +26,23 @@ export function approvalDecision(card: CardData, action: string, value: unknown)
 }
 
 /**
- * The push for a Duet approval card. The notification shows only the title, so a card with a draft gets
- * `has_draft`: the service worker then offers "Read the draft" (opens the card) instead of a one-tap Approve
- * that would send text the user never saw.
+ * The push for an approval card, Duet or Hermes-native. The notification shows only the title, so a card whose
+ * substance is in the card itself gets `must_read`: the service worker then offers "Read it first" (opens the
+ * card) instead of a one-tap Approve. That covers a Duet draft (text the user never saw would be sent) and every
+ * Hermes-native approval (a flagged command would run unseen; the command is only in the card body). Neither
+ * the draft nor the command goes into the payload.
  */
 export function approvalPush(card: Item): PushPayload {
   const c = card.card!;
-  const hasDraft = Boolean(c.draft);
+  const hermesCommand = c.hermes?.kind === 'approval';
+  const mustRead = hermesCommand || Boolean(c.draft);
+  const hint = hermesCommand ? 'Check the command first.' : 'Draft ready to read.';
   return {
     title: 'Needs your OK',
-    body: hasDraft ? `${c.title}. Draft ready to read.` : c.title,
+    body: mustRead ? `${c.title}. ${hint}` : c.title,
     card_id: card.id,
     approval: true,
-    has_draft: hasDraft || undefined,
+    must_read: mustRead || undefined,
     action_label: c.action_label,
     tag: card.id,
     url: `/?card=${card.id}`,

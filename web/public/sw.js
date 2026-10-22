@@ -19,11 +19,14 @@ self.addEventListener('push', (event) => {
     tag: data.tag || undefined,
     renotify: Boolean(data.tag),
     data: { url: data.url || '/', card_id: data.card_id || null },
-    // Action buttons show on Android/desktop; iOS ignores them and just opens the app. An approval with a
-    // draft never gets Approve here: the banner can't show the draft, so its first button opens the card.
+    // Action buttons show on Android/desktop; iOS ignores them and just opens the app. An approval whose draft
+    // or command is only in the card never gets Approve here: its first button opens the card instead.
+    // `has_draft` is the older name of `must_read`, accepted for pushes queued before the rename.
     actions: data.card_id && data.approval
       ? [
-          data.has_draft ? { action: 'open', title: 'Read the draft' } : { action: 'approve', title: data.action_label || 'Approve' },
+          data.must_read || data.has_draft
+            ? { action: 'open', title: 'Read it first' }
+            : { action: 'approve', title: data.action_label || 'Approve' },
           { action: 'decline', title: 'Not now' },
         ]
       : [],

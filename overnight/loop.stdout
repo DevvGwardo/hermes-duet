@@ -131,3 +131,10 @@
 1:19AM INF no leaks found
 [2026-10-22 01:19:35] iter 16 done · exit=0 gate=green committed=True changed=6
 [2026-10-22 01:19:55] iter 17 start → iter-17-20261022-011955.log
+[2026-10-22 01:21:21] iter 17 commit=ok · [overnight/claude-duet-20261022 e78f387] overnight(iter 17): DONE: Push approve skips the draft
+ 8 files changed, 75 insertions(+), 9 deletions(-)
+1:21AM INF 0 commits scanned.
+1:21AM INF scanned ~6269 bytes (6.27 KB) in 77.3ms
+1:21AM INF no leaks found
+[2026-10-22 01:21:21] iter 17 done · exit=0 gate=green committed=True changed=7
+[2026-10-22 01:21:41] iter 18 start → iter-18-20261022-012141.log
