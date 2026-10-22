@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
+import { cardOf } from '../shared/links';
 import type { Item, Settings } from '../shared/types';
-import { awayPush, briefCoversHeld, cardOf, holdPush, stillWorth } from './held';
+import { awayPush, briefCoversHeld, holdPush, stillWorth } from './held';
 
 const s: Settings = { brief_enabled: true, brief_time: '07:30', checkins: 'off', quiet_start: '21:30', quiet_end: '07:00', timezone: 'America/New_York' };
 const card = (status: string, type = 'question') => ({ id: 'c', card: { type, title: 't', status } }) as unknown as Item;
@@ -10,6 +11,10 @@ describe('held pushes', () => {
     expect(cardOf({ card_id: 'a' })).toBe('a');
     expect(cardOf({ url: '/?card=b' })).toBe('b');
     expect(cardOf({ url: '/' })).toBeNull();
+    // A notification tap hands the app the absolute URL with a null card_id (brief and handover pushes).
+    expect(cardOf({ card_id: null, url: 'https://duet.example/?card=h1' })).toBe('h1');
+    // Cold start reads location.search.
+    expect(cardOf({ url: '?card=b2&x=1' })).toBe('b2');
   });
 
   test('holdPush keeps card pushes only, one per card, newest wins', () => {

@@ -1,5 +1,6 @@
 // Pushes that quiet hours suppressed, held so they come back as one "While you were away" push instead of being
 // lost. Pure rules, kept out of push.ts and scheduler.ts so they can be tested without web-push or a database.
+import { cardOf } from '../shared/links';
 import type { Item, Settings } from '../shared/types';
 import type { PushPayload } from './push';
 import { briefSlot, toMinutes } from './clock';
@@ -13,11 +14,6 @@ export interface HeldPush {
 
 const MAX_HELD = 20;
 const MAX_LINES = 3;
-
-/** The card a push is about: its `card_id`, or the `?card=` in its URL (task handovers only set the URL). */
-export function cardOf(p: Pick<PushPayload, 'card_id' | 'url'>): string | null {
-  return p.card_id || p.url?.match(/[?&]card=([^&]+)/)?.[1] || null;
-}
 
 /**
  * Add a suppressed push to the held list. Only pushes about a card are held: a bare agent `notify` already tells

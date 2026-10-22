@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { cardOf } from '../../shared/links';
 import { api, connect, isStandalone, pushSupported } from './api';
 import { Composer, type ComposerHandle } from './components/Composer';
 import { MakeView } from './components/MakeView';
@@ -70,16 +71,25 @@ function Shell() {
   }, [pending]);
 
   useEffect(() => {
-    // Notification taps arrive here when the app is already open.
+    // Notification taps arrive here when the app is already open. Brief and handover pushes name their card only
+    // in the URL, so read both. Clearing first lets a second tap on the same card scroll to it again.
     const onMsg = (e: MessageEvent) => {
       if (e.data?.type === 'open') {
         setTab('chat');
-        if (e.data.card_id) setJump(e.data.card_id);
+        const card = cardOf(e.data);
+        if (card) {
+          setJump(null);
+          requestAnimationFrame(() => setJump(card));
+        }
       }
     };
     navigator.serviceWorker?.addEventListener('message', onMsg);
-    const card = new URLSearchParams(location.search).get('card');
-    if (card) setJump(card);
+    const card = cardOf({ url: location.search });
+    if (card) {
+      setJump(card);
+      // A reload shouldn't jump back to the card the notification opened.
+      history.replaceState(null, '', location.pathname);
+    }
     return () => navigator.serviceWorker?.removeEventListener('message', onMsg);
   }, []);
 

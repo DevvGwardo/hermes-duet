@@ -47,6 +47,8 @@ File:line references are to commit 83f3417.
 
 - [x] **A missed morning brief silences the whole day** — the scheduler blocks check-ins until `brief_last_date` is today, but a brief past its catch-up window (the Mac slept past midday, or an afternoon brief time missed by a minute) never sets it, so on that day no brief and no check-ins run at all. Fix: a pure `briefSlot` (off/sent/early/due/missed) shared by the scheduler and `briefCoversHeld`; check-ins wait only while the brief is still `early`. Found by iteration 26 after the backlog ran out. (files: server/clock.ts, server/clock.test.ts, server/scheduler.ts, server/held.ts)
 
+- [x] **Notification taps on briefs and handovers don't open the card** — the morning brief, check-in brief and "Done:/Task failed" pushes name their card only in `url` (`/?card=…`), and the app's tap handler reads only `card_id`, so tapping one while the app is open in the background lands on Chat without scrolling to the card (a second tap on the same card did nothing either). A cold start also kept `?card=` in the URL, so every reload jumped back. Fix: move `cardOf` to `shared/links.ts` and use it in `App.tsx` for both paths; clear the query after reading it. Found by iteration 27 after the backlog ran out. (files: shared/links.ts, server/held.ts, server/held.test.ts, web/src/App.tsx)
+
 Dropped as already done (verified in code):
 - Readable agent activity — `Activity` in `web/src/components/Thread.tsx` is collapsed by default to a one-line label and expands on tap.
 - Never push when the thread is open — handled in `web/public/sw.js` (but see "Push that survives iOS" for the cost of how).
