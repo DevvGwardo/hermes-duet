@@ -35,6 +35,12 @@ case "${1:-help}" in
     shift; [ $# -gt 0 ] || { echo "usage: hermes-duet say <message>" >&2; exit 1; }
     payload="$(TEXT="$*" bun -e 'console.log(JSON.stringify({text: process.env.TEXT}))')"
     internal POST /internal/message "$payload" >/dev/null && echo "Sent." ;;
+  doctor)
+    if launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1; then echo "  ✓ background service ($LABEL)"; else echo "  ✗ background service: run hermes-duet install"; fi
+    out="$(internal GET /internal/doctor)" || exit 1
+    printf '%s' "$out" | bun -e 'const d = JSON.parse(await Bun.stdin.text()); for (const c of d.checks) console.log(`  ${c.ok ? "✓" : c.info ? "·" : "✗"} ${c.name}: ${c.detail}`)'
+    if command -v tailscale >/dev/null && tailscale serve status 2>/dev/null | grep -q "127.0.0.1:${DUET_PORT:-7456}"; then echo "  ✓ tailscale serve forwards to :${DUET_PORT:-7456}"; else echo "  · tailscale serve not pointing at :${DUET_PORT:-7456} (only needed for phone access)"; fi
+    ;;
   install)
     BUN="$(command -v bun)" || { echo "bun not found on PATH" >&2; exit 1; }
     AGENT_PATH="$HOME/.local/bin:$(dirname "$BUN"):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
@@ -58,6 +64,7 @@ case "${1:-help}" in
     cat <<USAGE
 hermes-duet pair                  one-time code to pair a phone or browser
 hermes-duet status                agent + settings
+hermes-duet doctor                check the setup (Hermes, key, tools, push, service)
 hermes-duet brief                 run the morning brief now
 hermes-duet checkin               run a check-in now
 hermes-duet say <msg>             send a message into the thread as you

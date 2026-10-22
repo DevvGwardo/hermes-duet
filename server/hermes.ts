@@ -66,6 +66,16 @@ export const hermes = {
     }
   },
 
+  /** True if the gateway accepts our key (an authenticated, side-effect-free GET). */
+  async checkAuth(): Promise<boolean> {
+    try {
+      await req('GET', '/v1/models');
+      return true;
+    } catch {
+      return false;
+    }
+  },
+
   startRun(p: { input: string; session_id: string; instructions: string; idempotencyKey: string }) {
     return req<{ run_id: string; status: string }>(
       'POST',

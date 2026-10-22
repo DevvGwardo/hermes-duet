@@ -16,6 +16,7 @@ export const Composer = forwardRef<ComposerHandle>(function Composer(_, ref) {
   const [err, setErr] = useState<string | null>(null);
   const busy = useStore((s) => s.agent.busy);
   const queued = useStore((s) => s.agent.queued);
+  const hermesDown = useStore((s) => s.agent.hermes === 'down');
   const ta = useRef<HTMLTextAreaElement>(null);
   const rec = useRef<any>(null);
   const base = useRef('');
@@ -78,7 +79,11 @@ export const Composer = forwardRef<ComposerHandle>(function Composer(_, ref) {
   const showStop = busy && !text.trim();
   return (
     <div className="composer-wrap">
-      {queued > 0 && <div className="composer-hint">Queued {queued} message{queued > 1 ? 's' : ''}. I'll pick it up when this step finishes.</div>}
+      {queued > 0 && (
+        <div className="composer-hint">
+          Queued {queued} message{queued > 1 ? 's' : ''}. {hermesDown ? "Hermes is offline; they go out as soon as it's back." : "I'll pick it up when this step finishes."}
+        </div>
+      )}
       {err && <div className="composer-hint error">{err}</div>}
       <div className={`composer ${listening ? 'listening' : ''}`}>
         <textarea

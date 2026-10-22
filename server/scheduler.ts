@@ -1,5 +1,5 @@
 import { kv, settings } from './db';
-import { inQuietHours, localParts, toMinutes } from './clock';
+import { hourlySlots, inQuietHours, localParts, toMinutes } from './clock';
 import { runBrief, runCheckin } from './runner';
 
 const CHECKIN_3X = ['11:00', '14:00', '17:00'];
@@ -38,12 +38,4 @@ export function startScheduler() {
   };
   setInterval(tick, 30_000);
   setTimeout(tick, 5_000);
-}
-
-function hourlySlots(from: string, to: string) {
-  const start = Math.ceil(toMinutes(from) / 60);
-  const end = Math.floor(toMinutes(to) / 60);
-  const out: string[] = [];
-  for (let h = start; h < (end <= start ? end + 24 : end); h++) out.push(`${String(h % 24).padStart(2, '0')}:00`);
-  return out.sort();
 }

@@ -64,6 +64,12 @@ function Shell() {
   const stirred = agent.busy || agent.background_running > 0;
 
   useEffect(() => {
+    // Home-screen icon badge = things waiting on you (installed PWAs on iOS 16.4+, Chrome, Edge).
+    const nav = navigator as any;
+    (pending ? nav.setAppBadge?.(pending) : nav.clearAppBadge?.())?.catch?.(() => {});
+  }, [pending]);
+
+  useEffect(() => {
     // Notification taps arrive here when the app is already open.
     const onMsg = (e: MessageEvent) => {
       if (e.data?.type === 'open') {

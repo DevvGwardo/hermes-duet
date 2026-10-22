@@ -45,3 +45,13 @@ export function friendlyNow(tz: string) {
     minute: '2-digit',
   });
 }
+
+/** On-the-hour check-in slots from the end of quiet hours to the start of the next quiet period. */
+export function hourlySlots(from: string, to: string) {
+  const start = Math.ceil(toMinutes(from) / 60);
+  // Include every hour that starts before quiet time (quiet at 21:30 still allows 21:00).
+  const end = Math.ceil(toMinutes(to) / 60);
+  const out: string[] = [];
+  for (let h = start; h < (end <= start ? end + 24 : end); h++) out.push(`${String(h % 24).padStart(2, '0')}:00`);
+  return out.sort();
+}

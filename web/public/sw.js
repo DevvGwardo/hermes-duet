@@ -29,6 +29,9 @@ self.addEventListener('push', (event) => {
   };
   event.waitUntil(
     (async () => {
+      if (typeof data.badge === 'number' && 'setAppBadge' in self.navigator) {
+        await (data.badge ? self.navigator.setAppBadge(data.badge) : self.navigator.clearAppBadge()).catch(() => {});
+      }
       // Skip the banner when the app is open and visible; the thread already shows it.
       const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
       if (wins.some((w) => w.visibilityState === 'visible') && !data.always) return;

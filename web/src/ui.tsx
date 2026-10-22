@@ -4,6 +4,14 @@ import { useMemo } from 'react';
 
 marked.setOptions({ gfm: true, breaks: true });
 
+// Links in agent replies open outside the app; following one in place would navigate the PWA away.
+DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+  if (node.tagName === 'A' && node.getAttribute('href')) {
+    node.setAttribute('target', '_blank');
+    node.setAttribute('rel', 'noopener noreferrer');
+  }
+});
+
 export function Markdown({ text, className }: { text: string; className?: string }) {
   const html = useMemo(() => {
     const raw = marked.parse(text ?? '', { async: false }) as string;

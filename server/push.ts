@@ -1,5 +1,5 @@
 import webpush from 'web-push';
-import { db, kv, settings } from './db';
+import { db, items, kv, settings } from './db';
 import { config } from './config';
 import { inQuietHours } from './clock';
 
@@ -50,11 +50,14 @@ export interface PushPayload {
   action_label?: string;
   /** Show even while the app is open and visible. */
   always?: boolean;
+  /** Home-screen badge count; filled in from pending cards when omitted. */
+  badge?: number;
 }
 
 export async function notify(p: PushPayload, opts: { ignoreQuiet?: boolean } = {}): Promise<number> {
   if (!opts.ignoreQuiet && inQuietHours(settings.get())) return 0;
   const subs = db.query<{ endpoint: string; json: string }, []>('SELECT endpoint, json FROM push_subs').all();
+  p = { ...p, badge: p.badge ?? items.pendingCards().length };
   let sent = 0;
   await Promise.all(
     subs.map(async (s) => {

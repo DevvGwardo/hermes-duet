@@ -1,10 +1,11 @@
-import { chmodSync, existsSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, normalize } from 'node:path';
 import type { Snapshot } from '../shared/types';
 import { createPairCode, deviceCookie, deviceFor, internalToken, isHttps, redeemPairCode, sameOrigin } from './auth';
 import { sseResponse } from './bus';
 import { config } from './config';
-import { files, items, settings, tasks } from './db';
+import { files, items, kv, settings, tasks } from './db';
+import { hermes } from './hermes';
 import { hasSubscriptions, notify, publicKey, saveSubscription } from './push';
 import { actOnCard, agentState, cancelTask, executeTool, recoverOrphans, runBrief, runCheckin, startHermesWatch, stopMain, submitUser } from './runner';
 import { startScheduler } from './scheduler';
@@ -26,6 +27,23 @@ const SECURITY_HEADERS = {
   'referrer-policy': 'same-origin',
   'x-frame-options': 'SAMEORIGIN',
 };
+
+// The app shell only loads its own bundle. Agent text is sanitized before rendering, and this is the second lock.
+const APP_CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob: https:",
+  "font-src 'self' data:",
+  "connect-src 'self'",
+  "frame-src 'self'",
+  "worker-src 'self'",
+  "manifest-src 'self'",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join('; ');
 
 // ---------- public app server (the tunnel points here) ----------
 async function handleApp(req: Request): Promise<Response> {
@@ -144,6 +162,7 @@ async function serveStatic(path: string): Promise<Response> {
       return new Response(file, {
         headers: {
           ...SECURITY_HEADERS,
+          ...(rel.endsWith('.html') ? { 'content-security-policy': APP_CSP } : {}),
           'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache',
           ...(rel === '/sw.js' ? { 'service-worker-allowed': '/' } : {}),
         },
@@ -152,7 +171,37 @@ async function serveStatic(path: string): Promise<Response> {
   }
   const index = Bun.file(join(config.webDir, 'index.html'));
   if (!(await index.exists())) return new Response('Web app not built. Run: bun run build', { status: 503 });
-  return new Response(index, { headers: { ...SECURITY_HEADERS, 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' } });
+  return new Response(index, {
+    headers: { ...SECURITY_HEADERS, 'content-security-policy': APP_CSP, 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' },
+  });
+}
+
+/** Setup checks for `hermes-duet doctor`. Never returns secret values. */
+async function doctor() {
+  const checks: { name: string; ok: boolean; detail: string; info?: boolean }[] = [];
+  const add = (name: string, ok: boolean, detail: string, info = false) => checks.push({ name, ok, detail, info });
+  add('web app built', existsSync(join(config.webDir, 'index.html')), existsSync(join(config.webDir, 'index.html')) ? config.webDir : 'run: bun run build');
+  const up = await hermes.health();
+  add('Hermes gateway reachable', up, up ? config.hermesUrl : `nothing answering at ${config.hermesUrl}`);
+  if (!hermes.hasKey()) add('Hermes API key', false, 'set API_SERVER_KEY in ~/.hermes/.env or DUET_HERMES_KEY');
+  else if (up) {
+    const auth = await hermes.checkAuth();
+    add('Hermes API key accepted', auth, auth ? 'ok' : 'Hermes rejected the key (401)');
+  }
+  const shim = join(config.root, 'server', 'mcp-shim.ts');
+  let cfg = '';
+  try {
+    cfg = readFileSync(join(config.hermesHome, 'config.yaml'), 'utf8');
+  } catch {}
+  add('Duet tools in Hermes config', cfg.includes(shim), cfg.includes(shim) ? 'mcp_servers entry points at this checkout' : `add an mcp_servers entry running ${shim}`);
+  const lastTool = kv.get<number>('last_tool_call_at', 0);
+  add('Hermes has called a Duet tool', lastTool > 0, lastTool ? `last call ${new Date(lastTool).toLocaleString()}` : 'not yet (normal on a fresh install)', true);
+  add('public URL (needed for iOS push)', !!config.publicUrl, config.publicUrl || 'set DUET_PUBLIC_URL in .env');
+  add('a device has notifications on', hasSubscriptions(), hasSubscriptions() ? 'yes' : 'open Settings → Notifications on your phone');
+  add('context sources', existsSync(config.contextFile), existsSync(config.contextFile) ? config.contextFile : 'optional: copy context.example.md to context.local.md', true);
+  const s = settings.get();
+  add('morning brief', s.brief_enabled, s.brief_enabled ? `daily at ${s.brief_time} (${s.timezone}); the Mac must be awake` : 'off', true);
+  return { ok: checks.every((c) => c.ok || c.info), checks };
 }
 
 // ---------- internal server (loopback only: MCP shim + CLI) ----------
@@ -174,6 +223,7 @@ async function handleInternal(req: Request): Promise<Response> {
     }
     if (url.pathname === '/internal/pair' && req.method === 'POST') return json(createPairCode());
     if (url.pathname === '/internal/status' && req.method === 'GET') return json({ agent: agentState(), settings: settings.get() });
+    if (url.pathname === '/internal/doctor' && req.method === 'GET') return json(await doctor());
     if (url.pathname === '/internal/brief' && req.method === 'POST') {
       runBrief('manual');
       return json({ ok: true });

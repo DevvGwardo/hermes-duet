@@ -74,7 +74,8 @@ mcp_servers:
     tools: {}        # use {} here; `tools: all` breaks Hermes's MCP loader
 ```
 
-Open http://127.0.0.1:7456, run `hermes-duet pair`, and enter the code.
+Open http://127.0.0.1:7456, run `hermes-duet pair`, and enter the code. `hermes-duet doctor` checks the whole setup:
+service, Hermes reachability and key, the MCP entry, push and the public URL.
 
 ### On your phone
 
@@ -135,6 +136,7 @@ Hermes Duet controls an agent that can run commands on your computer. Treat the 
 bun run dev:server     # API with --watch on :7456
 bun run dev:web        # Vite on :5476, proxied to the API
 bun run typecheck
+bun test               # unit tests (no Hermes needed)
 bun run demo           # demo instance on :7466
 bun run brand          # regenerate docs/brand/*.png from the demo (needs Playwright browsers)
 bun run smoke          # live end-to-end checks against real Hermes (approval|task|steer|stop)

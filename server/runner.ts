@@ -97,6 +97,8 @@ function enqueue(spec: RunSpec) {
 }
 
 function pumpAll() {
+  // While Hermes is unreachable, keep everything queued; the health watch pumps again when it's back.
+  if (hermesStatus === 'down') return;
   // Main lane first so the user's thread never waits behind background work.
   const order = [...lanes.values()].sort((a, b) => Number(b.main) - Number(a.main));
   for (const l of order) {
@@ -180,10 +182,9 @@ function addContextNote(note: string) {
   notes.push(note);
   kv.set('context_notes', notes.slice(-20));
 }
-function takeContextNotes(): string {
+function peekContextNotes(): string {
   const notes = kv.get<string[]>('context_notes', []);
   if (!notes.length) return '';
-  kv.set('context_notes', []);
   return `(Context since your last turn. Don't repeat these back unless asked:\n${notes.map((n) => `- ${n}`).join('\n')})\n\n`;
 }
 
@@ -213,8 +214,9 @@ async function launch(l: Lane, spec: RunSpec) {
   l.active = run;
   broadcastAgent();
 
-  let input = spec.input;
-  if (l.main && spec.kind === 'chat') input = takeContextNotes() + input;
+  // Notes are cleared only once Hermes accepts the run, so a failed start doesn't lose them.
+  const notes = l.main && spec.kind === 'chat' ? peekContextNotes() : '';
+  const input = notes + spec.input;
 
   if (spec.taskId) {
     const t = tasks.get(spec.taskId);
@@ -230,10 +232,29 @@ async function launch(l: Lane, spec: RunSpec) {
       idempotencyKey: `duet-${newId()}`,
     });
     run.id = r.run_id;
+    if (notes) kv.set('context_notes', []);
     if (l.main && spec.kind !== 'checkin') setTimeout(() => trackForeground(l, run), FG_AFTER_MS);
   } catch (e: any) {
     l.active = null;
-    const msg = e instanceof HermesError && e.status === 429 ? 'Hermes is at its concurrent-run limit. Try again shortly.' : `Couldn't start: ${e?.message ?? e}`;
+    const busy = e instanceof HermesError && e.status === 429;
+    const unreachable = !(e instanceof HermesError) && !String(e?.message).startsWith('no Hermes API key');
+    const restarting = e instanceof HermesError && [502, 503, 504].includes(e.status);
+    if (busy || unreachable || restarting) {
+      // Transient: keep the work at the front of its lane instead of dropping it.
+      l.queue.unshift(spec);
+      persistQueues();
+      if (busy) setTimeout(pumpAll, 5000);
+      else {
+        setHermesStatus('down');
+        if (!offlineNoted && !spec.quiet) {
+          offlineNoted = true;
+          systemNote("Hermes isn't reachable right now. Your message is queued and goes out as soon as it's back.", spec.taskId);
+        }
+      }
+      broadcastAgent();
+      return;
+    }
+    const msg = `Couldn't start: ${e?.message ?? e}`;
     if (!spec.quiet) systemNote(msg, spec.taskId);
     if (spec.taskId) failTask(spec.taskId, msg);
     broadcastAgent();
@@ -831,6 +852,7 @@ function postCard(card: CardData, o: Origin): Item {
 }
 
 export async function executeTool(name: string, args: Record<string, unknown>): Promise<string> {
+  kv.set('last_tool_call_at', Date.now());
   const o = await originOf(name, args.task_id);
   switch (name) {
     case 'request_approval': {
@@ -1010,16 +1032,18 @@ function startTask(title: string, instructions: string, steps: string[]): Task {
 // Startup: Hermes health, restart recovery
 // ---------------------------------------------------------------------------
 
+let offlineNoted = false;
+
+function setHermesStatus(next: AgentState['hermes']) {
+  if (next === hermesStatus) return;
+  hermesStatus = next;
+  if (next === 'ok') offlineNoted = false;
+  broadcastAgent();
+  if (next === 'ok') pumpAll();
+}
+
 export function startHermesWatch() {
-  const check = async () => {
-    const ok = await hermes.health();
-    const next = ok ? 'ok' : 'down';
-    if (next !== hermesStatus) {
-      hermesStatus = next;
-      broadcastAgent();
-      if (next === 'ok') pumpAll();
-    }
-  };
+  const check = async () => setHermesStatus((await hermes.health()) ? 'ok' : 'down');
   check();
   setInterval(check, 20_000);
 }
