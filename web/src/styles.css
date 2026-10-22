@@ -1141,6 +1141,14 @@ code {
   background: var(--gold);
   border-color: #000;
 }
+.card-handover.is-failed .card-kind {
+  color: var(--faint);
+  background: transparent;
+  border-color: var(--faint);
+}
+.card-handover.is-failed .card-body {
+  color: var(--dim);
+}
 
 .decision {
   display: inline-flex;

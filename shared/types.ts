@@ -55,6 +55,10 @@ export interface CardData {
   file_id?: string; // file
   file_ids?: string[]; // handover
   follow_ups?: FollowUp[]; // handover
+  /** handover: the task failed or stopped; `body` is the reason. */
+  failed?: boolean;
+  /** failed handover: the task's instructions were kept, so "Try again" can restart it. */
+  retry?: boolean;
   decision?: string; // what the user picked
   decided_at?: number;
   task_id?: string;
@@ -115,6 +119,10 @@ export interface Task {
   follow_ups?: FollowUp[];
   /** The thread card that handed this task's result over, once it finished. */
   handover_id?: string;
+  /** What the task was started with, kept so a failed task can be tried again as-is. */
+  instructions?: string;
+  /** Set when "Try again" restarted it; files from earlier attempts stay off the new handover card. */
+  retried_at?: number;
   created_at: number;
   updated_at: number;
   background: boolean;

@@ -72,3 +72,25 @@ DONE: "Needs you" sees every pending card, not just the loaded page
 - Tool surface: `update_task` takes `follow_ups`; the `start_task` description and return text no longer promise a "[task <id> finished]" message; `taskPrompt` tells the worker its text is never shown. Web: `CardView` renders the handover card (files + follow-up chips), and `TasksView` rows list the task's files (`FileRow` exported). README tool row updated.
 - Why it matters against Claude Duet: "large tasks run in the background and come back as a finished artifact, shared when done". The user now gets one card with the result, not a stream of a worker's chatter.
 - Verified: typecheck pass · test 22 pass / 0 fail · build pass
+
+## 2026-10-22T00:40:53Z — loop iteration 4
+- exit=0 gate=green committed=True files=13
+- gate: typecheck: exit 0
+- answer:
+```
+ne" push now opens that card.
+- The thread no longer shows the task's running commentary, and files a task delivers no longer get a card each mid-run (they still go to the Make tab right away). A task that fails or stops now leaves a one-line note in the thread, because its own text is no longer shown there.
+- `update_task` now takes `follow_ups`. The `start_task` description no longer promises a `[task <id> finished]` message; it describes the card and the note the main conversation gets on the user's next message. The task prompt tells the worker its text isn't shown to the user. Files: `server/runner.ts`, `server/tools.ts`, `server/prompts.ts`, `shared/types.ts`, `README.md`.
+- New pure `server/handover.ts` with `server/handover.test.ts` (4 tests). On the web side, `CardView.tsx` draws the card, each task in the Tasks list (`TasksView.tsx`) now shows its files, plus small changes in `App.tsx` and `styles.css`.
+- Added a backlog item, "Failed tasks hand over too": a failed task should get the same card with the reason, any files so far and a "Try again" button.
+- typecheck: `tsc -p tsconfig.json --noEmit` → exit 0
+- test: `22 pass, 0 fail` → exit 0
+- build: `✓ built in 107ms` → exit 0
+> CORRECTION: the item says "the thread gets whatever free text the task run streamed". In the code, that text appeared as normal assistant messages labelled "Task · <title>", and every `deliver_file` from a task also posted its own file card. Both are now replaced by the single Finished card.
+```
+
+## 2026-10-22T04:45Z — Failed tasks hand over too
+- What changed: `server/handover.ts` `handoverCard` now builds a muted card for a `failed` task: the reason as body, files delivered so far (only from the current attempt, via `retried_at`), no follow-ups, and `retry` when the task's `instructions` were kept (new on `Task`, set by `startTask`). `server/runner.ts`: a failed or stopped run, an agent-set `failed`, and a background task that couldn't start all go through one `announceEnd` (card + context note + one push that opens the card) instead of a system note.
+- "Try again": `actOnCard(id, 'retry')` → `retryTask` resets the task, restarts it in a fresh Hermes session from the stored instructions (`taskPrompt` gets the earlier failure reason), and marks the old card "Tried again". The finished retry posts a new card at the bottom. Web: `CardView` shows "Didn’t finish", the chip, and the decision stamp; muted styles in `styles.css`. 3 new tests; README tool row and `update_task.result` description updated.
+- Why it matters against Claude Duet: background work always comes back as one card, including when it doesn't work out, and recovering takes one tap.
+- Verified: typecheck pass · test 25 pass / 0 fail · build pass

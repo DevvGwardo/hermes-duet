@@ -34,9 +34,9 @@ export function CardView({ item, onOpenFile }: { item: Item; onOpenFile: (id: st
   }
 
   return (
-    <article className={`card card-${card.type} ${pending ? 'is-pending' : ''}`} id={`item-${item.id}`}>
+    <article className={`card card-${card.type} ${pending ? 'is-pending' : ''} ${card.failed ? 'is-failed' : ''}`} id={`item-${item.id}`}>
       <header className="card-head">
-        <span className="card-kind">{KIND_LABEL[card.type]}</span>
+        <span className="card-kind">{card.failed ? 'Didn’t finish' : KIND_LABEL[card.type]}</span>
         <span className="card-meta">{card.updated_label ?? timeLabel(item.updated_at)}</span>
       </header>
       <h3 className="card-title">{card.title}</h3>
@@ -60,6 +60,14 @@ export function CardView({ item, onOpenFile }: { item: Item; onOpenFile: (id: st
         <>
           {card.file_ids?.map((id) => <FileRow key={id} fileId={id} onOpen={onOpenFile} />)}
           {card.follow_ups?.length ? <FollowUps list={card.follow_ups} /> : null}
+          {card.failed && card.retry && !card.decision && (
+            <div className="follow-ups">
+              <button className="chip" disabled={!!busy} onClick={() => act('retry')}>
+                {busy === 'retry' ? 'Starting…' : 'Try again'}
+              </button>
+            </div>
+          )}
+          {card.failed && card.decision && <Decision card={card} />}
         </>
       )}
 

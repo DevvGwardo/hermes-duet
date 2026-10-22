@@ -257,8 +257,14 @@ async function launch(l: Lane, spec: RunSpec) {
       return;
     }
     const msg = `Couldn't start: ${e?.message ?? e}`;
-    if (!spec.quiet) systemNote(msg, spec.taskId);
-    if (spec.taskId) failTask(spec.taskId, msg);
+    const t = spec.taskId ? tasks.get(spec.taskId) : null;
+    if (t?.background && t.status !== 'cancelled' && t.status !== 'done') {
+      // A background task that never started hands over like any other failure, with "Try again".
+      announceEnd(putTask({ ...t, status: 'failed', result: msg, progress: '' }));
+    } else {
+      if (!spec.quiet) systemNote(msg, spec.taskId);
+      if (spec.taskId) failTask(spec.taskId, msg);
+    }
     broadcastAgent();
     setTimeout(pumpAll, 2000);
     return;
@@ -598,30 +604,34 @@ function onTaskRunEnd(taskId: string, run: ActiveRun, status: 'done' | 'error' |
   const waiting = items.pendingCards().some((c) => c.card?.task_id === taskId);
   // A run that dies after the agent already marked the task done still hands its result over.
   if ((status === 'error' || status === 'stopped') && t.status !== 'done') {
-    failTask(taskId, error ?? 'Stopped');
-    systemNote(`Task “${t.title}” stopped: ${firstLine(error ?? 'Stopped', 200)}`, taskId);
-    return;
-  }
-  if (waiting) {
+    // Keep the agent's own reason if it already marked the task failed before the run died.
+    const reason = t.status === 'failed' && t.result ? t.result : firstLine(error ?? 'Stopped before it finished.', 300);
+    putTask({ ...t, status: 'failed', result: reason, progress: '' });
+  } else if (waiting) {
     putTask({ ...t, status: 'waiting', progress: 'Waiting on you' });
     return;
+  } else {
+    const result = t.result || firstLine(stripMedia(run.text), 300) || 'Finished.';
+    if (t.status === 'running' || t.status === 'queued' || t.status === 'waiting') {
+      putTask({ ...t, status: 'done', result, progress: t.progress?.startsWith('· ') ? '' : t.progress, steps: t.steps.map((s) => ({ ...s, done: true })) });
+    }
   }
-  const result = t.result || firstLine(stripMedia(run.text), 300) || 'Finished.';
-  if (t.status === 'running' || t.status === 'queued' || t.status === 'waiting') {
-    putTask({ ...t, status: 'done', result, progress: t.progress?.startsWith('· ') ? '' : t.progress, steps: t.steps.map((s) => ({ ...s, done: true })) });
-  }
-  const final = tasks.get(taskId)!;
+  announceEnd(tasks.get(taskId)!);
+}
+
+/** A task that ended done or failed: its handover card, a note for the main session, and one push. */
+function announceEnd(final: Task) {
+  const taskId = final.id;
+  if (final.status !== 'done' && final.status !== 'failed') return;
+  const card = handOver(final);
+  const delivered = (card.card!.file_ids ?? []).map((id) => files.get(id)?.entry.title).filter(Boolean);
+  const filesNote = delivered.length ? ` Files: ${delivered.join('; ')}.` : '';
   if (final.status === 'done') {
-    const card = handOver(final);
-    const delivered = (card.card!.file_ids ?? []).map((id) => files.get(id)?.entry.title).filter(Boolean);
-    addContextNote(
-      `Background task "${final.title}" (${taskId}) finished: ${final.result ?? ''}${delivered.length ? ` Files: ${delivered.join('; ')}.` : ''} The user has its handover card in the thread.`,
-    );
+    addContextNote(`Background task "${final.title}" (${taskId}) finished: ${final.result ?? ''}${filesNote} The user has its handover card in the thread.`);
     pushSafe({ title: `Done: ${final.title}`, body: firstLine(final.result ?? 'Finished.'), tag: `task-${taskId}`, url: `/?card=${card.id}` });
-  } else if (final.status === 'failed') {
-    addContextNote(`Background task "${final.title}" (${taskId}) failed: ${final.result ?? ''}`);
-    systemNote(`Task “${final.title}” failed: ${firstLine(final.result ?? 'no reason given', 200)}`, taskId);
-    pushSafe({ title: `Task failed: ${final.title}`, body: firstLine(final.result ?? ''), tag: `task-${taskId}` });
+  } else {
+    addContextNote(`Background task "${final.title}" (${taskId}) failed: ${final.result ?? ''}${filesNote} The user has its card in the thread${card.card!.retry ? ', with a "Try again" button' : ''}.`);
+    pushSafe({ title: `Task failed: ${final.title}`, body: firstLine(final.result ?? ''), tag: `task-${taskId}`, url: `/?card=${card.id}` });
   }
 }
 
@@ -723,6 +733,7 @@ export function actOnCard(id: string, action: string, value?: string): Item {
   const item = items.get(id);
   if (!item || item.kind !== 'card' || !item.card) throw new Error('card not found');
   const c = item.card;
+  if (c.type === 'handover' && action === 'retry') return retryTask(item);
   if (c.status !== 'pending') throw new Error(`already ${c.status}`);
   let approved: boolean | undefined;
   let answer: string | undefined;
@@ -771,6 +782,34 @@ export function actOnCard(id: string, action: string, value?: string): Item {
     enqueue({ kind: c.task_id ? 'task' : 'decision', sessionId, taskId: c.task_id ?? null, input: decisionPrompt(item, { approved, answer }) });
   }
   return item;
+}
+
+/**
+ * "Try again" on a failed handover card: the same task restarts from its stored instructions in a fresh Hermes
+ * session (the old one ended in the failure), and finishing posts a new handover card at the bottom of the thread.
+ */
+function retryTask(item: Item): Item {
+  const c = item.card!;
+  const t = c.task_id ? tasks.get(c.task_id) : null;
+  if (!c.failed || !t) throw new Error('this card takes no action');
+  if (c.decision) throw new Error('already tried again');
+  if (t.status !== 'failed' || !t.instructions) throw new Error('this task cannot be restarted');
+  const previous = t.result;
+  const now = Date.now();
+  const task: Task = {
+    ...t,
+    status: 'queued',
+    progress: '',
+    result: undefined,
+    follow_ups: undefined,
+    handover_id: undefined,
+    steps: t.steps.map((s) => ({ ...s, done: false })),
+    retried_at: now,
+  };
+  const sessionId = `duet-task-${t.id}-${newId()}`;
+  putTask(task, sessionId);
+  enqueue({ kind: 'task', sessionId, taskId: t.id, input: taskPrompt(task, t.instructions, previous) });
+  return put({ ...item, card: { ...c, decision: 'Tried again', decided_at: now } });
 }
 
 export async function stopMain() {
@@ -1047,6 +1086,7 @@ function startTask(title: string, instructions: string, steps: string[]): Task {
     created_at: now,
     updated_at: now,
     background: true,
+    instructions,
   };
   const sessionId = `duet-task-${task.id}`;
   putTask(task, sessionId);

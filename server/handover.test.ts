@@ -58,4 +58,34 @@ describe('the handover card', () => {
     expect(card.file_ids).toBeUndefined();
     expect(card.follow_ups).toBeUndefined();
   });
+
+  test('a failed task hands over muted: its reason, files so far, Try again instead of follow-ups', () => {
+    const card = handoverCard(
+      task({ status: 'failed', result: 'Could not reach the CRM.', instructions: 'Build the deck', follow_ups: [{ label: 'Send it', message: 'Email it' }] }),
+      [file('partial', 't1', 10)],
+    );
+    expect(card).toEqual({
+      type: 'handover',
+      title: 'Q3 investor deck',
+      body: 'Could not reach the CRM.',
+      file_ids: ['partial'],
+      follow_ups: undefined,
+      failed: true,
+      retry: true,
+      status: 'info',
+      task_id: 't1',
+    });
+  });
+
+  test('a failed task without stored instructions cannot be tried again', () => {
+    const card = handoverCard(task({ status: 'failed' }), []);
+    expect(card.body).toBe('Stopped before it finished.');
+    expect(card.retry).toBeUndefined();
+  });
+
+  test('after Try again, files from the earlier attempt stay off the new card', () => {
+    const card = handoverCard(task({ retried_at: 15 }), [file('old', 't1', 10), file('new', 't1', 20)]);
+    expect(card.file_ids).toEqual(['new']);
+    expect(card.failed).toBeUndefined();
+  });
 });

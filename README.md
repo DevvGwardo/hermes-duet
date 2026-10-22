@@ -46,7 +46,7 @@
   | `post_brief` | Posts a prioritized brief with one-tap follow-ups. |
   | `post_card` | Posts a checklist, metrics or note, and can update it in place. |
   | `deliver_file` | Hands over a doc, sheet, deck or dashboard. HTML renders live but sandboxed. |
-  | `start_task` / `update_task` | Starts background work and keeps the Tasks tab current. When the task is done, its result, files and up to three follow-ups come back as one handover card in the thread. |
+  | `start_task` / `update_task` | Starts background work and keeps the Tasks tab current. When the task is done, its result, files and up to three follow-ups come back as one handover card in the thread. A task that fails or stops gets the same card, muted, with its reason, any files so far, and a "Try again" button that restarts it from the same instructions. |
   | `notify` | Sends a push notification. |
 
 ## Quick start

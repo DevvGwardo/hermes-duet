@@ -137,7 +137,7 @@ export const TOOLS = [
         progress: { type: 'string', description: 'One line: what you are doing now.' },
         steps: { type: 'array', items: { type: 'object', properties: { text: { type: 'string' }, done: { type: 'boolean' } }, required: ['text'] } },
         status: { type: 'string', enum: ['running', 'waiting', 'done', 'failed'] },
-        result: { type: 'string', description: 'Final outcome, when done or failed. One or two lines; it is the body of the handover card.' },
+        result: { type: 'string', description: 'Final outcome, when done or failed (for failed, the reason). One or two lines; it is the body of the handover card.' },
         follow_ups: {
           type: 'array',
           maxItems: 3,
