@@ -2,7 +2,7 @@ import { copyFileSync, mkdirSync, statSync } from 'node:fs';
 import { basename, extname, isAbsolute, join, resolve } from 'node:path';
 import { askAge } from '../shared/age';
 import type { AgentState, CardData, FileEntry, Item, Page, Task, TaskStep, ToolStep } from '../shared/types';
-import { DRAFT_MAX, PROMPT_ENDED, REPLACED, approvalDecision, approvalPush, deadPrompts, replaceRefusal } from './approval';
+import { DRAFT_MAX, PROMPT_ENDED, REPLACED, WITHDRAWN, approvalDecision, approvalPush, deadPrompts, replaceRefusal, waitingNote, withdrawRefusal } from './approval';
 import { BRIEF_RETRY, SKIP_MEMORY_DAYS, briefCard, briefFailure, briefTitle, checkinOutcome, morningOutcome, notifyRefusal, raisedToday, skipEntry, skippedLately, useAction, useDraft } from './brief';
 import { broadcast } from './bus';
 import { inQuietHours, localParts } from './clock';
@@ -231,7 +231,9 @@ async function launch(l: Lane, spec: RunSpec) {
 
   // Notes are cleared only once Hermes accepts the run, so a failed start doesn't lose them.
   const notes = l.main && spec.kind === 'chat' ? peekContextNotes() : '';
-  const input = notes + spec.input;
+  // Read fresh at launch, not at enqueue, so a card decided while this message sat in the queue isn't listed.
+  const waiting = l.main && spec.kind === 'chat' ? waitingNote(items.pendingCards(), spec.sessionId) : '';
+  const input = notes + waiting + spec.input;
 
   if (spec.taskId) {
     const t = tasks.get(spec.taskId);
@@ -1176,6 +1178,16 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
       const replaced = swap.apply();
       pushSafe({ title: 'Quick question', body: item.card!.title, card_id: item.id, tag: replaced ?? item.id, url: `/?card=${item.id}` });
       return `Question card ${item.id} posted.${swap.note} End your turn now; the answer arrives as "[answer ${item.id}] …".`;
+    }
+    case 'withdraw_card': {
+      const id = req(args.card_id, 'card_id', 64);
+      const target = items.get(id);
+      const refused = withdrawRefusal(target, o.sessionId);
+      if (refused || !target) return `Card ${id} was not withdrawn: ${refused}.`;
+      const reason = firstLine(str(args.reason, 200), 80);
+      // Expired, like a replaced card: it leaves "Needs you", and the next push or app launch clears its banner.
+      put({ ...target, card: { ...target.card!, status: 'expired', decision: reason ? `${WITHDRAWN}: ${reason}` : WITHDRAWN, decided_at: Date.now() } });
+      return `Card ${id} withdrawn; it can no longer be tapped. Carry on from what the user said in chat.`;
     }
     case 'post_brief': {
       const morning = o.run?.spec.kind === 'brief';

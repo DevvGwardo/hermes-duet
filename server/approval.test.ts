@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import type { CardData, Item } from '../shared/types';
-import { OPEN_ASKS_MAX, approvalDecision, approvalPrompt, approvalPush, askMarks, deadPrompts, replaceRefusal } from './approval';
+import { OPEN_ASKS_MAX, approvalDecision, approvalPrompt, approvalPush, askMarks, deadPrompts, replaceRefusal, waitingNote, withdrawRefusal } from './approval';
 
 const card = (extra: Partial<CardData> = {}): CardData => ({ type: 'approval', title: 'Send the reply to Dana', status: 'pending', ...extra });
 const item = (c: CardData): Item => ({ id: 'c1', kind: 'card', created_at: 0, updated_at: 0, card: c });
@@ -89,6 +89,38 @@ test('a redraft withdraws only its own pending card of the same kind', () => {
   // Once decided, the old version stands, and the agent is told why nothing was replaced.
   expect(replaceRefusal(at({ status: 'approved' }), 'approval', 'main')).toBe('the user already approved it');
   expect(replaceRefusal(at({ status: 'expired' }), 'approval', 'main')).toBe('it already expired');
+});
+
+test('withdraw_card takes down only the calling session\'s own pending asks', () => {
+  const at = (c: Partial<CardData>): Item => item(card({ session_id: 'main', ...c }));
+  expect(withdrawRefusal(at({}), 'main')).toBeNull();
+  expect(withdrawRefusal(at({ type: 'choice', options: ['A', 'B'] }), 'main')).toBeNull();
+  expect(withdrawRefusal(null, 'main')).toBe('there is no such card');
+  expect(withdrawRefusal(at({ type: 'brief', status: 'info' }), 'main')).toBe('it is not an approval or question card');
+  expect(withdrawRefusal(at({ type: 'choice', rerun: 'brief' }), 'main')).not.toBeNull();
+  expect(withdrawRefusal(at({}), 'duet-task-1')).toBe('it belongs to another conversation');
+  expect(withdrawRefusal(at({ status: 'declined' }), 'main')).toBe('the user already declined it');
+});
+
+test('a chat message is told which of its session\'s cards are still waiting, newest first', () => {
+  const at = (id: string, created_at: number, c: Partial<CardData>): Item => ({ ...item(card({ session_id: 'main', ...c })), id, created_at });
+  const pending = [
+    at('old', 1, { title: 'Send the reply to Dana' }),
+    at('q', 2, { type: 'choice', title: 'Which venue?', options: ['A', 'B'] }),
+    // Not the agent's to withdraw: another session's card, a Hermes prompt, Duet's own resume card.
+    at('task', 3, { session_id: 'duet-task-1' }),
+    at('hermes', 4, { hermes: { kind: 'approval', run_id: 'r', request_id: 'x', generation: 1 } }),
+    at('resume', 5, { type: 'choice', resume: true }),
+  ];
+  const note = waitingNote(pending, 'main');
+  expect(note).toStartWith('(Cards of yours still waiting');
+  expect(note).toContain('- [question q] Which venue?\n- [approval old] Send the reply to Dana\n');
+  expect(note).not.toMatch(/ (task|hermes|resume)\]/);
+  expect(note).toContain('withdraw_card');
+  expect(note).toEndWith(')\n\n');
+  expect(waitingNote(pending.slice(2), 'main')).toBe('');
+  const many = Array.from({ length: 7 }, (_, i) => at(`a${i}`, i, {}));
+  expect(waitingNote(many, 'main').match(/\[approval /g)).toHaveLength(5);
 });
 
 test('every push lists the open asks, and marks itself an ask only for a pending approval or question', () => {

@@ -49,6 +49,21 @@ export const TOOLS = [
     },
   },
   {
+    name: 'withdraw_card',
+    description:
+      'Take down one of your own request_approval or ask cards that is still waiting, when the user settled it in chat instead of tapping (said not to do it, answered the question) or it no longer applies. ' +
+      'The card stops being tappable and leaves their "Needs you" list. Not a way to approve: a yes in chat still needs the Approve button on the card.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        card_id: { type: 'string', description: 'The id of the waiting card.' },
+        reason: { type: 'string', description: 'A few words shown on the card, e.g. "you said not to send it" or "Dana already replied".' },
+        task_id: taskId,
+      },
+      required: ['card_id'],
+    },
+  },
+  {
     name: 'post_brief',
     description:
       'Post a brief: a short ranked list of decisions that need the user (used for the morning brief and check-ins), plus an optional Watching list. ' +

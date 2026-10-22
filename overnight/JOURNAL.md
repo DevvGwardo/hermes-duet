@@ -774,3 +774,29 @@ DONE: The brief's page line doesn't open the page
 - New pure `askAge` (shared/age.ts) returns "yesterday at 9:14 PM" once a card crosses local midnight or `OLD_ASK_MS` (6h), otherwise null. `oldAskNote` (server/approval.ts) adds it to `approvalPrompt` and the answer prompt (`decisionPrompt`, server/prompts.ts); for an edited draft the note goes before the user's text, which stays last. The note tells the agent to stop and ask rather than edit anything itself. runner.ts passes the age in the user's timezone. A pending approval or question in CardView shows "Written … · check it still fits" / "Asked …" (styles.css `.card-age`). README updated. +4 tests in server/age.test.ts.
 - Why it matters against Claude Duet: "waits for your ok when it matters". An ok given days later must not send something that stopped being true.
 - Verified: typecheck pass · test 104 pass / 0 fail · build pass
+
+## 2026-10-22T02:14:24Z — loop iteration 34
+- exit=0 gate=green committed=True files=10
+- gate: typecheck: exit 0
+- answer:
+```
+nnectors
+DONE: Old approvals are acted on as if fresh
+
+> CORRECTION: nothing in the backlog was open and unblocked, so I found this gap myself and added it to the backlog already ticked.
+
+- **What was wrong:** approving or answering a card always told the agent "do exactly what the card described", however old the card was. A draft saying "see you tomorrow" approved two days later went out as written, and something already handled in the meantime could be done twice.
+- **Fix:** a new `askAge` in `shared/age.ts` gives something like "yesterday at 9:14 PM" once a card is past local midnight or over 6 hours old. `oldAskNote` in `server/approval.ts` adds that to the message the agent gets after an approval or answer (`server/prompts.ts`, `server/runner.ts`). It tells the agent to check dates and whether it's already done, and to ask again instead of changing the text itself. If the user edited the draft, the note goes before their text, so their text is still the last thing in the message. This is an instruction to the model, not a guarantee.
+- **On the card:** a waiting approval now shows "Written yesterday at 9:14 PM · check it still fits", and a question shows "Asked …" (`CardView.tsx`, `styles.css`).
+- **Also:** README line, 4 new tests in `server/age.test.ts`, backlog and journal entries. Not tried with a real model or on a phone.
+- typecheck: `tsc -p tsconfig.json --noEmit` → exit 0
+- test: `104 pass, 0 fail, 358 expect() calls` → exit 0
+- build: `✓ built in 108ms` → exit 0
+```
+
+## 2026-10-22T06:17Z — Cards settled in chat stay tappable
+- What changed: the backlog had no open, unblocked items, so this iteration audited the approval path and added this item. A waiting approval or question the user settled in words, not by tapping, stayed pending in "Needs you" and the brief, and could be tapped later as if fresh.
+- New pure `withdrawRefusal` and `waitingNote` (server/approval.ts, +2 tests). A new `withdraw_card` tool (server/tools.ts, runner.ts `executeTool`) expires the agent's own pending card with decision "Withdrawn: <reason>", which CardView already renders as "Expired · Withdrawn: …"; the banner clears through the existing settled-ask paths. `launch` prefixes main-thread chat turns with `waitingNote` (read at launch, not enqueue). Persona and README updated. A yes in chat still needs the card's button, so the approval gate is unchanged.
+- Not changed: steered mid-run messages don't get the note (new low-priority backlog item). Not tried with a real model.
+- Why it matters against Claude Duet: "goes quiet until something genuinely needs you". A decision already given in chat shouldn't still ask for a tap.
+- Verified: typecheck pass · test 106 pass / 0 fail · build pass

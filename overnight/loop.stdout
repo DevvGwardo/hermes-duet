@@ -254,3 +254,12 @@
 2:11AM INF no leaks found
 [2026-10-22 02:11:08] iter 33 done · exit=0 gate=green committed=True changed=10
 [2026-10-22 02:11:28] iter 34 start → iter-34-20261022-021128.log
+[2026-10-22 02:14:24] iter 34 commit=ok · overnight(iter 34): DONE: Old approvals are acted on as if fresh
+ 11 files changed, 149 insertions(+), 10 deletions(-)
+ create mode 100644 server/age.test.ts
+ create mode 100644 shared/age.ts
+2:14AM INF 0 commits scanned.
+2:14AM INF scanned ~12690 bytes (12.69 KB) in 23.6ms
+2:14AM INF no leaks found
+[2026-10-22 02:14:24] iter 34 done · exit=0 gate=green committed=True changed=10
+[2026-10-22 02:14:44] iter 35 start → iter-35-20261022-021444.log

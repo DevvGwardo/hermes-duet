@@ -98,6 +98,34 @@ export function replaceRefusal(target: Item | null | undefined, type: 'approval'
   return null;
 }
 
+export const WITHDRAWN = 'Withdrawn';
+
+/**
+ * Why `withdraw_card` can't take this card down, or null if it can: the same rules as a redraft's `replaces`, for
+ * either kind of ask. The user often settles a card in chat instead of tapping ("don't send that", "the second one");
+ * left pending, it stays in "Needs you" and the brief, and a tap days later resumes the agent as if it were fresh.
+ */
+export function withdrawRefusal(target: Item | null | undefined, sessionId: string): string | null {
+  const type = target?.card?.type;
+  if (type !== 'approval' && type !== 'choice') return target?.card ? 'it is not an approval or question card' : 'there is no such card';
+  return replaceRefusal(target, type, sessionId);
+}
+
+/** Above this many, the turn's note lists only the newest waiting cards. */
+const WAITING_NOTE_MAX = 5;
+
+/**
+ * Prefixed to a chat message while this session's own approvals or questions are still waiting, so a reply that
+ * settles one in words also takes the card down (withdraw_card) instead of leaving it tappable. An approval is
+ * still only given by its button: a "yes" in chat gets pointed at the card, which holds the exact draft.
+ */
+export function waitingNote(pending: Item[], sessionId: string): string {
+  const mine = pending.filter((i) => !withdrawRefusal(i, sessionId)).sort((a, b) => b.created_at - a.created_at);
+  if (!mine.length) return '';
+  const lines = mine.slice(0, WAITING_NOTE_MAX).map((i) => `- [${i.card!.type === 'approval' ? 'approval' : 'question'} ${i.id}] ${i.card!.title}`);
+  return `(Cards of yours still waiting on the user's tap:\n${lines.join('\n')}\nIf this message declines one, answers one, or makes one moot, call withdraw_card with its id before going on, so it can't be tapped later. If it asks for changes to an approval, redraft with replaces instead. If it says yes to an approval, don't act on that: ask them to tap the card's button, which has the exact draft.)\n\n`;
+}
+
 /**
  * What an approval or answer that arrives long after its card was posted must check first (`age` from askAge).
  * The agent is told to stop and say so rather than adjust anything itself: the user approved the exact text, so a
