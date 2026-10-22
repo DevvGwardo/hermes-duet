@@ -27,7 +27,10 @@ type RunKind = 'chat' | 'brief' | 'checkin' | 'decision' | 'task';
 interface RunSpec {
   kind: RunKind;
   sessionId: string;
+  /** Briefs and check-ins queue with '' and get their prompt in `launch`, from the state at that moment. */
   input: string;
+  /** Check-ins: when the previous one ran, for "anything new since …". */
+  since?: string;
   taskId?: string | null;
   /** Buffer output and post nothing unless it has something to say (check-ins). */
   quiet?: boolean;
@@ -238,6 +241,12 @@ async function launch(l: Lane, spec: RunSpec) {
   };
   l.active = run;
   broadcastAgent();
+
+  // A brief can wait behind a long chat turn or a Hermes outage, and a check-in behind an outage. Meanwhile cards
+  // get decided and page refreshes finish, so the waiting list and page lines are read now, not when it was queued.
+  // A transient start failure re-queues the spec and this runs again on the next launch.
+  if (spec.kind === 'brief') spec.input = briefInput();
+  else if (spec.kind === 'checkin') spec.input = checkinInput(spec.since);
 
   // Notes are cleared only once Hermes accepts the run, so a failed start doesn't lose them.
   const notes = l.main && spec.kind === 'chat' ? peekContextNotes() : '';
@@ -1102,47 +1111,48 @@ function expireBriefRetries() {
   }
 }
 
-export function runBrief(source: 'scheduled' | 'manual') {
-  const m = mainLane();
-  if (m.queue.some((q) => q.kind === 'brief') || m.active?.spec.kind === 'brief') return;
+/** The morning brief's prompt, read from the state as it is now. `launch` calls it, not `runBrief`. */
+function briefInput(): string {
   const s = settings.get();
   const dayAgo = Date.now() - 86400_000;
   const today = localParts(s.timezone).date;
-  enqueue({
-    kind: 'brief',
-    sessionId: m.sessionId,
-    input: briefPrompt(s, {
-      pending: items.pendingCards(),
-      tasks: tasks.recent().filter((t) => ['queued', 'running', 'waiting'].includes(t.status) || t.updated_at > dayAgo),
-      pages: pages.all().map((p) => pageBriefLine(p, today, pageRefreshing(p))),
-      skipped: skippedLately(items.briefsSince(Date.now() - SKIP_MEMORY_DAYS * 86400_000)),
-    }),
+  return briefPrompt(s, {
+    pending: items.pendingCards(),
+    tasks: tasks.recent().filter((t) => ['queued', 'running', 'waiting'].includes(t.status) || t.updated_at > dayAgo),
+    pages: pages.all().map((p) => pageBriefLine(p, today, pageRefreshing(p))),
+    skipped: skippedLately(items.briefsSince(Date.now() - SKIP_MEMORY_DAYS * 86400_000)),
   });
+}
+
+/** A check-in's prompt, read from the state as it is now. `since` was fixed when it was scheduled. */
+function checkinInput(since?: string): string {
+  const s = settings.get();
+  const now = localParts(s.timezone);
+  // Local midnight, give or take the current minute's seconds: today's briefs are what the user has already seen.
+  const midnight = Date.now() - (now.minutes + 1) * 60_000;
+  return checkinPrompt(s, {
+    since: since || `this morning's brief (${s.brief_time})`,
+    pending: items.pendingCards(),
+    tasks: tasks.recent().filter((t) => ['running', 'waiting', 'failed'].includes(t.status)),
+    raised: raisedToday(items.briefsSince(midnight)),
+  });
+}
+
+export function runBrief(source: 'scheduled' | 'manual') {
+  const m = mainLane();
+  if (m.queue.some((q) => q.kind === 'brief') || m.active?.spec.kind === 'brief') return;
+  enqueue({ kind: 'brief', sessionId: m.sessionId, input: '' });
   console.log(`[brief] queued (${source})`);
 }
 
 export function runCheckin() {
   const s = settings.get();
-  const now = localParts(s.timezone);
-  const today = now.date;
-  const sid = `duet-checkin-${today}`;
-  // Local midnight, give or take the current minute's seconds: today's briefs are what the user has already seen.
-  const midnight = Date.now() - (now.minutes + 1) * 60_000;
+  const sid = `duet-checkin-${localParts(s.timezone).date}`;
   const l = lane(sid);
   if (l.active || l.queue.length) return;
-  const since = kv.get<string>('checkin_since_label', '') || `this morning's brief (${s.brief_time})`;
+  const since = kv.get<string>('checkin_since_label', '') || undefined;
   kv.set('checkin_since_label', new Date().toLocaleTimeString('en-US', { timeZone: s.timezone, hour: 'numeric', minute: '2-digit' }));
-  enqueue({
-    kind: 'checkin',
-    sessionId: sid,
-    quiet: true,
-    input: checkinPrompt(s, {
-      since,
-      pending: items.pendingCards(),
-      tasks: tasks.recent().filter((t) => ['running', 'waiting', 'failed'].includes(t.status)),
-      raised: raisedToday(items.briefsSince(midnight)),
-    }),
-  });
+  enqueue({ kind: 'checkin', sessionId: sid, quiet: true, input: '', since });
 }
 
 // ---------------------------------------------------------------------------

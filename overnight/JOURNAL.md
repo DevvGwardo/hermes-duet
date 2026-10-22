@@ -899,3 +899,25 @@ DONE: A failed reply is silent
 - Changed behaviour: the old deadline was total time since start (when it fired at all); a run that keeps emitting events now has no Duet-side cap, relying on Hermes's iteration limit. Not tried against a live Hermes.
 - Why it matters against Claude Duet: "large tasks run in the background and come back". A stuck one has to come back as a failure, not hold the thread forever.
 - Verified: typecheck pass · test 117 pass / 0 fail · build pass
+
+## 2026-10-22T02:32:26Z — loop iteration 39
+- exit=0 gate=green committed=True files=7
+- gate: typecheck: exit 0
+- answer:
+```
+ and added it to the backlog already ticked.
+
+- **Problem:** Hermes keeps a run's event stream open, sending a keepalive every 10s until the run ends. I confirmed this by reading the installed `_handle_run_events` in `api_server_runs.py` without changing it. Duet only checked its 45-minute timeout after the stream dropped, so a stuck tool or model call was never stopped. It blocked the chat thread (new messages went into the dead run and no "Try again" card ever appeared) or held one of the two background task slots for good.
+- **Fix:** in `server/runner.ts`, `consume` now checks every 60s and stops a run that has sent no event for `DUET_RUN_TIMEOUT_MS`. It then ends the same way a timeout already did (the "Try … again?" card, the failed task card with Try again, or the brief's "Run it now"). `onEvent` records when each event arrives. The rule is a new `runHung` function in `server/recovery.ts` with 3 tests. It only counts time with no events, never total time, and it never stops a run that is waiting on you to answer a Hermes approval or question.
+- **Behaviour change:** a run that keeps sending events no longer has any time limit in Duet; it relies on Hermes's own iteration limit. The card now reads "went N minutes without any progress". The README and the comment in `server/config.ts` are updated. Not tried against a live Hermes.
+- typecheck: `tsc -p tsconfig.json --noEmit` → exit 0
+- test: `117 pass, 0 fail, 401 expect() calls` → exit 0
+- build: `✓ built in 78ms` → exit 0
+```
+
+## 2026-10-22T06:38Z — A queued brief reports a stale world
+- What changed: the backlog had no open, unblocked items, so this iteration audited how briefs and check-ins start. `runBrief` built the prompt at enqueue, but the brief waits in the main lane behind any running chat turn or a Hermes outage, so its "already waiting" list, tasks and page lines could be stale by launch (a card approved meanwhile listed as waiting and re-raised; "refresh still running" after it finished). Now both queue with `input: ''` and `launch` (server/runner.ts) fills it from new `briefInput()` / `checkinInput(since)`; `RunSpec.since` carries the check-in's "since" label. A re-queued spec (transient start failure, unknown_execution retry) is rebuilt on its next launch; old persisted queue entries are simply rebuilt too.
+- No new test: the change is wiring in runner.ts, which has no harness; the prompt builders it calls are unchanged. Not tried against a live Hermes.
+- Discovered: after an outage the brief still launches in the same pass as the page refreshes queued before it (new backlog item).
+- Why it matters against Claude Duet: "judgment about what needs you". The brief has to rank what's true when you read it, not what was true before your last chat.
+- Verified: typecheck pass · test 117 pass / 0 fail · build pass

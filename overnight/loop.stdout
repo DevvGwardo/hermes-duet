@@ -293,3 +293,10 @@
 2:27AM INF no leaks found
 [2026-10-22 02:27:36] iter 38 done · exit=0 gate=green committed=True changed=7
 [2026-10-22 02:27:56] iter 39 start → iter-39-20261022-022756.log
+[2026-10-22 02:32:26] iter 39 commit=ok · [overnight/claude-duet-20261022 ca3cb3a] overnight(iter 39): DONE: A hung run holds the thread forever
+ 8 files changed, 130 insertions(+), 45 deletions(-)
+2:32AM INF 0 commits scanned.
+2:32AM INF scanned ~10437 bytes (10.44 KB) in 21.5ms
+2:32AM INF no leaks found
+[2026-10-22 02:32:26] iter 39 done · exit=0 gate=green committed=True changed=7
+[2026-10-22 02:32:46] iter 40 start → iter-40-20261022-023246.log
