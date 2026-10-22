@@ -49,6 +49,18 @@ export function approvalPush(card: Item): PushPayload {
   };
 }
 
+export const PROMPT_ENDED = 'Its run ended';
+
+/**
+ * Hermes-native prompts (approval or clarify) whose run is no longer live. Hermes holds the run open while it waits,
+ * so once the run has ended (stopped, timed out, interrupted by a restart) nothing can answer the prompt any more,
+ * and it must leave "Needs you" and the brief's waiting list. Duet's own cards are not tied to a live run: their
+ * answer resumes the session as a new turn, so they stay pending.
+ */
+export function deadPrompts(pending: Item[], live: ReadonlySet<string>): Item[] {
+  return pending.filter((i) => i.card?.status === 'pending' && i.card.hermes && !live.has(i.card.hermes.run_id));
+}
+
 /** The message that resumes the agent's session after an approval decision. */
 export function approvalPrompt(card: Item, approved: boolean): string {
   const c = card.card!;

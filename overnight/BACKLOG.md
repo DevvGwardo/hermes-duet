@@ -43,6 +43,8 @@ File:line references are to commit 83f3417.
 
 - [x] **Interrupted page refresh asks and pushes like user work** — when Hermes restarts during a standing page's scheduled refresh, `finish` posts the generic "Pick “Refresh: …” back up?" card and pushes "Work was interrupted" for work nobody asked for, and `pageRefreshEnded` never runs, so the page records no failure. Fix: a pure `afterInterruption` restarts the refresh once in a fresh session with no card or push; a second interruption ends it through `onTaskRunEnd`, which gives the failed-refresh path (the muted card with Try again, and the brief says it failed). Found by iteration 24 after the backlog ran out. (files: server/pages.ts, server/pages.test.ts, server/runner.ts, server/prompts.ts, README.md)
 
+- [x] **Hermes prompts outlive their run** — a Hermes-native approval or clarify card can only be answered while its run is live, but when the run ends without settling it (Stop, timeout, Hermes restart) the card stays pending forever: it sits in "Needs you", the brief and check-ins list it as waiting, and tapping "Allow once" marks it approved while only a "had already expired" note admits nothing happened. Fix: a pure `deadPrompts` expires them when a run finishes, after restart recovery reattaches live runs, and on a stale tap. Found by iteration 25 after the backlog ran out. (files: server/approval.ts, server/approval.test.ts, server/runner.ts, web/src/components/CardView.tsx)
+
 Dropped as already done (verified in code):
 - Readable agent activity — `Activity` in `web/src/components/Thread.tsx` is collapsed by default to a one-line label and expands on tap.
 - Never push when the thread is open — handled in `web/public/sw.js` (but see "Push that survives iOS" for the cost of how).

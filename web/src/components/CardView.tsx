@@ -118,7 +118,7 @@ function Decision({ card }: { card: CardData }) {
       : card.status === 'declined'
         ? 'Not now'
         : card.status === 'expired'
-          ? 'Expired'
+          ? `Expired${card.decision ? ` · ${card.decision}` : ''}`
           : card.decision ?? 'Answered';
   return (
     <div className={`decision decision-${card.status}`}>

@@ -535,3 +535,26 @@ DONE: Quiet hours drop pushes instead of holding them
 - New pure `afterInterruption` (server/pages.ts, +2 tests). The first interruption calls the new `requeueTask` (server/runner.ts, now shared with "Try again"), which starts a fresh session with spec `restarted: true` and an "it's starting over on its own" line from `taskPrompt(…, auto)` (server/prompts.ts). There is no card and no push, and the brief still holds while the refresh is running. A second interruption goes through `onTaskRunEnd` → `pageRefreshEnded`, which shows the muted failed card with Try again and no push, and the brief reports that the refresh failed. README "Survives restarts" mentions it.
 - Why it matters against Claude Duet: the standing page "refreshes on a schedule before the brief". A gateway restart at 6:30 shouldn't buzz the user about a job they never started.
 - Verified: typecheck pass · test 85 pass / 0 fail · build pass
+
+## 2026-10-22T01:39:51Z — loop iteration 24
+- exit=0 gate=green committed=True files=7
+- gate: typecheck: exit 0
+- answer:
+```
+KEY or another auth source is set and takes precedence over your claude.ai login · Unset it to load your organization's connectors
+DONE: Interrupted page refresh asks and pushes like user work
+- **Gap found:** the backlog had no open, unblocked items, so I looked for a gap myself. When Hermes restarted during a standing page's scheduled refresh, the user got a "Pick “Refresh: …” back up?" card and a "Work was interrupted" push for a job they never started. The page also never recorded that the refresh failed.
+- **Fix:** a new rule, `afterInterruption` in `server/pages.ts`, makes the first interruption quietly start the refresh over in a fresh session, with no card and no push. The morning brief still waits while it runs. If it's interrupted a second time, it ends the way any failed refresh does: a muted card with Try again, no push, and the brief says it failed.
+- **Supporting changes:** `requeueTask` in `server/runner.ts` is now shared with "Try again". `taskPrompt` in `server/prompts.ts` has an `auto` wording for this restart, so the agent isn't told the user tapped Try again. README updated, 2 new tests in `server/pages.test.ts`. Backlog item added already ticked, plus a journal entry.
+- typecheck: `tsc -p tsconfig.json --noEmit` → exit 0
+- test: `85 pass, 0 fail, 284 expect() calls` → exit 0
+- build: `✓ built in 97ms` → exit 0
+
+> CORRECTION: there was no unchecked, unblocked item for this iteration, so I found and added this one myself instead of taking one from the list.
+```
+
+## 2026-10-22T05:45Z — Hermes prompts outlive their run
+- What changed: the backlog had no open, unblocked items, so this iteration audited approvals and added this item. New pure `deadPrompts` (server/approval.ts, +1 test) picks pending `card.hermes` prompts whose run is not live. Duet's own cards are left alone, because their answer resumes the session as a new turn.
+- `expireDeadPrompts` (server/runner.ts) marks them `expired` with decision "Its run ended". It runs in `finish` (before the fg-task and task "waiting" checks count pending cards), at the end of `recoverOrphans` once live runs are reattached (which also clears cards left over from before this change), and in `actOnCard`, so a stale tap gets an error and the card isn't recorded as approved. CardView shows "Expired · Its run ended".
+- Why it matters against Claude Duet: "Needs you" and the brief should list only what the user can actually act on. A dead "Allow once" card is noise that looks like a decision.
+- Verified: typecheck pass · test 86 pass / 0 fail · build pass

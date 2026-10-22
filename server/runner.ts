@@ -1,7 +1,7 @@
 import { copyFileSync, mkdirSync, statSync } from 'node:fs';
 import { basename, extname, isAbsolute, join, resolve } from 'node:path';
 import type { AgentState, CardData, FileEntry, Item, Page, Task, TaskStep, ToolStep } from '../shared/types';
-import { DRAFT_MAX, approvalDecision, approvalPush } from './approval';
+import { DRAFT_MAX, PROMPT_ENDED, approvalDecision, approvalPush, deadPrompts } from './approval';
 import { BRIEF_RETRY, briefCard, briefFailure, briefTitle, checkinOutcome, morningOutcome, raisedToday, useAction, useDraft } from './brief';
 import { broadcast } from './bus';
 import { localParts } from './clock';
@@ -539,6 +539,8 @@ function finish(l: Lane, run: ActiveRun, status: 'done' | 'error' | 'stopped', o
     put(run.activity);
   }
   runs.end(run.id, status, error);
+  // Before anything below counts pending cards: a prompt from this run can't be answered any more.
+  expireDeadPrompts();
   if (run.fgTaskId) {
     const t = tasks.get(run.fgTaskId);
     if (t && t.status === 'running') {
@@ -832,6 +834,13 @@ function expireHermesPrompt(requestId: string) {
   }
 }
 
+/** Expire Hermes prompts whose run is no longer live; they would otherwise sit in "Needs you" and the brief forever. */
+function expireDeadPrompts(): number {
+  const dead = deadPrompts(items.pendingCards(), new Set(activeRuns().map((r) => r.id)));
+  for (const c of dead) put({ ...c, card: { ...c.card!, status: 'expired', decision: PROMPT_ENDED, decided_at: Date.now() } });
+  return dead.length;
+}
+
 function markTaskWaiting(taskId: string) {
   const t = tasks.get(taskId);
   if (t && t.status !== 'done' && t.status !== 'cancelled' && t.status !== 'failed') putTask({ ...t, status: 'waiting', progress: 'Waiting on you' });
@@ -888,6 +897,10 @@ export function actOnCard(id: string, action: string, value?: string): Item {
     return updated;
   }
   if (c.status !== 'pending') throw new Error(`already ${c.status}`);
+  // A card left over from before its run ended (or from before this check existed) must not show as decided.
+  if (c.hermes && expireDeadPrompts() && items.get(id)?.card?.status === 'expired') {
+    throw new Error("that request ended with its run, so there's nothing left to answer");
+  }
   let approved: boolean | undefined;
   let answer: string | undefined;
   let edits: { draft: string; edited: true } | undefined;
@@ -1372,6 +1385,9 @@ export function recoverOrphans() {
     console.log(`[recover] reattaching run ${row.id} (${spec.kind})`);
     consume(l, run);
   }
+  // Every run that can still be live is reattached now; prompts from any other run are dead.
+  const expired = expireDeadPrompts();
+  if (expired) console.log(`[recover] expired ${expired} Hermes prompt(s) whose run had ended`);
   pumpAll();
 }
 

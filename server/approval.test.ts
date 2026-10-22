@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import type { CardData, Item } from '../shared/types';
-import { approvalDecision, approvalPrompt, approvalPush } from './approval';
+import { approvalDecision, approvalPrompt, approvalPush, deadPrompts } from './approval';
 
 const card = (extra: Partial<CardData> = {}): CardData => ({ type: 'approval', title: 'Send the reply to Dana', status: 'pending', ...extra });
 const item = (c: CardData): Item => ({ id: 'c1', kind: 'card', created_at: 0, updated_at: 0, card: c });
@@ -58,4 +58,19 @@ test('a Hermes-native approval push never allows the command unseen', () => {
   expect(JSON.stringify(p)).not.toContain('rm -rf');
   // Even when Hermes sent no command text, the card is the only place to look before allowing it.
   expect(approvalPush(item(card({ title: 'Run a flagged command', hermes }))).must_read).toBe(true);
+});
+
+test('a Hermes prompt dies with its run; Duet cards and live runs stay pending', () => {
+  const h = (run_id: string, kind: 'approval' | 'clarify' = 'approval') => ({ kind, run_id, request_id: `q-${run_id}`, generation: 1 });
+  const at = (id: string, c: CardData): Item => ({ ...item(c), id });
+  const pending = [
+    at('dead', card({ hermes: h('r1') })),
+    at('dead-question', { type: 'choice', title: 'Which branch?', options: ['main', 'dev'], status: 'pending', hermes: h('r1', 'clarify') }),
+    at('live', card({ hermes: h('r2') })),
+    // A Duet approval from a run that ended long ago: tapping it resumes the session as a new turn.
+    at('duet', card({ draft: 'Hi Dana' })),
+    at('answered', card({ status: 'approved', hermes: h('r1') })),
+  ];
+  expect(deadPrompts(pending, new Set(['r2'])).map((i) => i.id)).toEqual(['dead', 'dead-question']);
+  expect(deadPrompts(pending, new Set(['r1', 'r2']))).toEqual([]);
 });
