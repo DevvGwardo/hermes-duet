@@ -13,7 +13,7 @@ import { HermesError, hermes, type RunEvent } from './hermes';
 import { MAX_PAGES, afterInterruption, pageBriefLine, pageInput, refreshTime, refreshToCancel } from './pages';
 import { briefPrompt, checkinPrompt, decisionPrompt, pageRefreshInstructions, persona, taskPrompt } from './prompts';
 import { notify } from './push';
-import { resumeCardBody } from './recovery';
+import { MOVED_ON, RESUME_OPTIONS, RETRY_OPTIONS, TIMED_OUT, failedTurnBody, movedOn, resumeCardBody, retryTitle } from './recovery';
 import { type Steer, undeliveredSteers } from './steer';
 
 // ---------------------------------------------------------------------------
@@ -340,7 +340,7 @@ async function consume(l: Lane, run: ActiveRun) {
     }
     if (Date.now() > deadline) {
       hermes.stop(run.id).catch(() => {});
-      finish(l, run, 'error', undefined, 'Timed out');
+      finish(l, run, 'error', undefined, TIMED_OUT);
       break;
     }
     attempts++;
@@ -615,7 +615,7 @@ function finish(l: Lane, run: ActiveRun, status: 'done' | 'error' | 'stopped', o
           type: 'choice',
           title: `Pick “${firstLine(what ?? 'that', 70)}” back up?`,
           body: resumeCardBody({ retried: spec.retried, steps: run.steps, taskSteps: task?.steps }),
-          options: ['Pick it up', 'Leave it'],
+          options: [...RESUME_OPTIONS],
           status: 'pending',
           resume: true,
           task_id: spec.taskId ?? undefined,
@@ -649,7 +649,22 @@ function finish(l: Lane, run: ActiveRun, status: 'done' | 'error' | 'stopped', o
       pushSafe({ title: "Your morning brief didn't finish", body: 'Tap to run it again.', card_id: card.id, tag: 'brief', url: `/?card=${card.id}` }, { ignoreQuiet: true });
     }
   } else if (status === 'error') {
-    systemNote(`Something went wrong${error ? `: ${error.replace(/[.\s]+$/, '')}` : ''}. Try again, or ask me differently.`);
+    // A chat or decision turn: a reply that never came reaches the user like one that did, with one tap to retry
+    // in the same session (actOnCard's resume path), and quiet hours hold its push like any card's.
+    const card = put(
+      newItem('card', {
+        card: {
+          type: 'choice',
+          title: `Try “${firstLine(retryTitle(runTitle(spec)), 70)}” again?`,
+          body: failedTurnBody({ error, steps: run.steps, limitMin: Math.round(config.runTimeoutMs / 60_000) }),
+          options: [...RETRY_OPTIONS],
+          status: 'pending',
+          resume: true,
+          session_id: spec.sessionId,
+        },
+      }),
+    );
+    pushSafe({ title: "Couldn't finish", body: card.card!.title, card_id: card.id, tag: card.id, url: `/?card=${card.id}` });
   } else if (status === 'done' && l.main) {
     if (spec.kind === 'brief') {
       const { note, stray } = morningOutcome(run);
@@ -879,6 +894,7 @@ export function submitUser(text: string, input?: string): Item {
   const t = input?.trim() || shown;
   const item = put(newItem('user', { text: shown }));
   const m = mainLane();
+  for (const c of movedOn(items.pendingCards(), m.sessionId)) put({ ...c, card: { ...c.card!, status: 'expired', decision: MOVED_ON, decided_at: Date.now() } });
   const active = m.active;
   // Mid-run messages steer the live turn. One that lands too late comes back as `pending_steer`, and finish replays it.
   if (active && active.id && !active.finished && m.queue.length === 0) {
@@ -972,7 +988,7 @@ export function actOnCard(id: string, action: string, value?: string): Item {
   } else if (c.rerun === 'brief') {
     // A fresh brief run, not an agent turn about the old one: it gathers again from now.
     if (answer === BRIEF_RETRY[0]) runBrief('manual');
-  } else if (c.resume && answer !== 'Pick it up') {
+  } else if (c.resume && answer !== c.options?.[0]) {
     // Leaving interrupted work alone needs no agent turn.
     if (c.task_id) {
       const t = tasks.get(c.task_id);

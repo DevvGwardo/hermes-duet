@@ -145,5 +145,7 @@ When you mark the task done with update_task, also pass changed: one line on the
 export function decisionPrompt(card: Item, decision: { approved?: boolean; answer?: string }, age?: string | null) {
   const c = card.card!;
   if (c.type === 'approval') return approvalPrompt(card, !!decision.approved, age);
-  return `[answer ${card.id}] To "${c.title}" the user chose: "${decision.answer}". Continue accordingly.${oldAskNote(age, 'answer')}`;
+  // A resume card was written by Duet, not the agent, so the agent needs its body: why the work stopped and how far it got.
+  const said = c.resume && c.body ? ` The card said: "${c.body}"` : '';
+  return `[answer ${card.id}] To "${c.title}" the user chose: "${decision.answer}". Continue accordingly.${said}${oldAskNote(age, 'answer')}`;
 }

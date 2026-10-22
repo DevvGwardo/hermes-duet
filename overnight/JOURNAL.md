@@ -849,3 +849,26 @@ list of cards still waiting. A "never mind, don't send it" sent then could leave
 - Limit: steers sent before a Duet restart aren't kept, so one returned undelivered after recovery can't be matched. Not tried against a live Hermes.
 - Why it matters against Claude Duet: "one thread". A message the user sees in the thread has to reach the agent.
 - Verified: typecheck pass · test 110 pass / 0 fail · build pass
+
+## 2026-10-22T02:23:48Z — loop iteration 37
+- exit=0 gate=green committed=True files=7
+- gate: typecheck: exit 0
+- answer:
+```
+cause ANTHROPIC_API_KEY or another auth source is set and takes precedence over your claude.ai login · Unset it to load your organization's connectors
+DONE: A message sent as a turn ends is lost
+- **Problem:** a message sent while the agent was on its final model call never reached the agent, even though it showed in the thread. Hermes hands it back as `pending_steer` when the run ends, and Duet ignored it. I read the installed Hermes code without changing it to confirm this.
+- **Fix:** each mid-turn message is now kept on the run as two texts: what was sent (with the waiting-cards list in front) and what the user typed. When the run ends, a new `undeliveredSteers` in `server/steer.ts` works out which messages are in `pending_steer`. Those go out first, as one chat turn, using what the user typed, so the next turn adds a fresh waiting-cards list. A message is never sent twice, whether Hermes refused it or handed it back.
+- **Files:** `server/runner.ts` (`submitUser`, `onEvent`, the status fallback in `consume`, `finish`; also corrected the `submitUser` comment), the `getRun` type in `server/hermes.ts`, `README.md`, and 3 new tests in `server/steer.test.ts`. Backlog item ticked and journal entry added.
+- **Limit:** a message sent before Duet itself restarts can't be matched after recovery. I haven't tried this against a live Hermes.
+- typecheck: `tsc -p tsconfig.json --noEmit` → exit 0
+- test: `110 pass, 0 fail, 388 expect() calls` → exit 0
+- build: `✓ built in 121ms` → exit 0
+```
+
+## 2026-10-22T06:27Z — A failed reply is silent
+- What changed: the backlog had no open, unblocked items, so this iteration audited `finish` and added this item. A chat or decision turn that errored (model error, run timeout) left only a grey note, with no push and nothing to tap. Now `finish` (server/runner.ts) posts a pending "Try “…” again?" resume card and pushes "Couldn't finish". Quiet hours hold that push like any other card's.
+- New pure helpers in server/recovery.ts (+4 tests): `failedTurnBody` gives the reason and the last step that finished; `retryTitle` stops a second failure nesting "Answered: Try …"; `movedOn` picks the main thread's pending resume cards, which `submitUser` expires ("You carried on in chat"). `actOnCard` treats a resume card's first option as the go-ahead, so both "Pick it up" and "Try again" work. `decisionPrompt` passes a resume card's body to the agent (server/prompts.ts). README updated.
+- Limit: "Try again" resumes the same Hermes session and relies on its history holding the failed turn. Not tried against a live Hermes.
+- Why it matters against Claude Duet: "goes quiet until something genuinely needs you". An errand that didn't happen does need you, and should be one tap to retry.
+- Verified: typecheck pass · test 114 pass / 0 fail · build pass

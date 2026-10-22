@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
-import type { ToolStep } from '../shared/types';
-import { lastDone, resumeCardBody } from './recovery';
+import type { CardData, Item, ToolStep } from '../shared/types';
+import { decisionPrompt } from './prompts';
+import { RETRY_OPTIONS, TIMED_OUT, failedTurnBody, lastDone, movedOn, resumeCardBody, retryTitle } from './recovery';
 
 const step = (id: string, status: ToolStep['status'], label?: string): ToolStep => ({ id, name: `tool_${id}`, label, status, started_at: 1 });
 
@@ -25,5 +26,38 @@ describe('interrupted-run card', () => {
   test('mentions the silent unpause-and-retry only when it happened', () => {
     expect(resumeCardBody({ steps: [], retried: true })).toContain('retried once on my own');
     expect(resumeCardBody({ steps: [] })).not.toContain('retried');
+  });
+});
+
+describe('failed chat turn card', () => {
+  test('says why it stopped and how far it got', () => {
+    const body = failedTurnBody({ error: 'Run failed: upstream 529 overloaded.', steps: [step('a', 'done', 'search: flights')], limitMin: 45 });
+    expect(body).toStartWith('It stopped with an error: Run failed: upstream 529 overloaded. ');
+    expect(body).toContain('The last step that finished: search: flights.');
+    expect(failedTurnBody({ error: TIMED_OUT, steps: [], limitMin: 45 })).toStartWith('This ran for over 45 minutes, so I stopped it. Nothing had finished yet.');
+    expect(failedTurnBody({ steps: [], limitMin: 45 })).toStartWith('It stopped with an error. ');
+  });
+
+  test('a retry that fails again names the original work', () => {
+    expect(retryTitle('Answered: Try “Book the 7 AM flight” again?')).toBe('Book the 7 AM flight');
+    expect(retryTitle('Answered: Pick “Plan the offsite” back up?')).toBe('Plan the offsite');
+    expect(retryTitle('Approved: Send the invoice')).toBe('Approved: Send the invoice');
+  });
+
+  test('a new chat message retires only the main thread’s pending resume cards', () => {
+    const card = (id: string, c: Partial<CardData>): Item => ({ id, kind: 'card', created_at: 1, updated_at: 1, card: { type: 'choice', title: id, status: 'pending', resume: true, session_id: 'main', ...c } });
+    const pending = [
+      card('retry', {}),
+      card('task', { task_id: 't1' }),
+      card('other', { session_id: 'duet-task-x' }),
+      card('ask', { resume: undefined }),
+      card('done', { status: 'answered' }),
+    ];
+    expect(movedOn(pending, 'main').map((i) => i.id)).toEqual(['retry']);
+  });
+
+  test('tapping Try again hands the agent the card body', () => {
+    const c = { id: 'c9', kind: 'card', created_at: 1, updated_at: 1, card: { type: 'choice', title: 'Try “x” again?', body: 'It stopped with an error.', options: [...RETRY_OPTIONS], status: 'pending', resume: true } } as Item;
+    expect(decisionPrompt(c, { answer: 'Try again' })).toContain('The card said: "It stopped with an error."');
   });
 });

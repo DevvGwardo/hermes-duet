@@ -277,3 +277,12 @@
 2:20AM INF no leaks found
 [2026-10-22 02:20:46] iter 36 done · exit=0 gate=green committed=True changed=6
 [2026-10-22 02:21:06] iter 37 start → iter-37-20261022-022106.log
+[2026-10-22 02:23:48] iter 37 commit=ok ·  overnight(iter 37): DONE: A message sent as a turn ends is lost
+ 8 files changed, 126 insertions(+), 6 deletions(-)
+ create mode 100644 server/steer.test.ts
+ create mode 100644 server/steer.ts
+2:23AM INF 0 commits scanned.
+2:23AM INF scanned ~9267 bytes (9.27 KB) in 19.7ms
+2:23AM INF no leaks found
+[2026-10-22 02:23:48] iter 37 done · exit=0 gate=green committed=True changed=7
+[2026-10-22 02:24:08] iter 38 start → iter-38-20261022-022408.log
