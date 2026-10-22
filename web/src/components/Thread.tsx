@@ -5,6 +5,7 @@ import { useStore } from '../store';
 import { Icon, Markdown, dayLabel, timeLabel } from '../ui';
 import { CardView } from './CardView';
 import { BrandBadge, Mascot, SpeechBubble } from './Manga';
+import { STATUS_LABEL } from './TasksView';
 import { WhatICanSee } from './WhatICanSee';
 
 const SUGGESTIONS = [
@@ -19,8 +20,10 @@ export function Thread({
   scrollToId,
   onSuggest,
   followKey,
+  onShowTasks,
 }: {
   onOpenFile: (id: string) => void;
+  onShowTasks?: () => void;
   scrollToId?: string | null;
   onSuggest: (text: string) => void;
   /** Bumped when you send from the composer: your own message always brings the thread back to the bottom. */
@@ -148,7 +151,7 @@ export function Thread({
           return (
             <Fragment key={item.id}>
               {sep && <div className="day-sep">{day}</div>}
-              <ItemView item={item} onOpenFile={onOpenFile} avatar={avatar} />
+              <ItemView item={item} onOpenFile={onOpenFile} onShowTasks={onShowTasks} avatar={avatar} />
             </Fragment>
           );
         })}
@@ -163,13 +166,16 @@ export function Thread({
   );
 }
 
-function ItemView({ item, onOpenFile, avatar }: { item: Item; onOpenFile: (id: string) => void; avatar: boolean }) {
+function ItemView({ item, onOpenFile, onShowTasks, avatar }: { item: Item; onOpenFile: (id: string) => void; onShowTasks?: () => void; avatar: boolean }) {
   switch (item.kind) {
     case 'user':
       return (
-        <div className="msg msg-user" id={`item-${item.id}`}>
+        <div className={`msg msg-user ${item.task_id ? 'as-task' : ''}`} id={`item-${item.id}`}>
           <div className="bubble">{item.text}</div>
-          <div className="msg-time">{timeLabel(item.created_at)}</div>
+          <div className="msg-time">
+            {item.task_id && <StartedTask id={item.task_id} onShowTasks={onShowTasks} />}
+            {timeLabel(item.created_at)}
+          </div>
         </div>
       );
     case 'assistant':
@@ -193,6 +199,17 @@ function ItemView({ item, onOpenFile, avatar }: { item: Item; onOpenFile: (id: s
         </div>
       );
   }
+}
+
+/** Under a message sent with "Run in background": which task it became, live, and a way to it. */
+function StartedTask({ id, onShowTasks }: { id: string; onShowTasks?: () => void }) {
+  const status = useStore((s) => s.tasks.find((t) => t.id === id)?.status);
+  return (
+    <button className="msg-task-link" onClick={onShowTasks}>
+      Background task{status ? ` · ${STATUS_LABEL[status]}` : ''}
+      <Icon.chevron size={12} />
+    </button>
+  );
 }
 
 function TaskLabel({ id }: { id: string }) {

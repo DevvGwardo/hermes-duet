@@ -1,5 +1,5 @@
 import { settledNotifications } from '../../shared/links';
-import type { Capabilities, Item, ServerEvent, Settings, Snapshot } from '../../shared/types';
+import type { Capabilities, Item, ServerEvent, Settings, Snapshot, Task } from '../../shared/types';
 import { applyEvent, applySnapshot, getState, prependItems, setState } from './store';
 
 class HttpError extends Error {
@@ -35,6 +35,7 @@ export const api = {
   snapshot: () => call<Snapshot>('GET', '/api/state'),
   older: (before: string) => call<{ items: Item[]; has_more: boolean }>('GET', `/api/items?before=${encodeURIComponent(before)}`),
   send: (text: string) => call<{ item: Item }>('POST', '/api/messages', { text }),
+  startTask: (text: string) => call<{ item: Item; task: Task }>('POST', '/api/tasks', { text }),
   act: (cardId: string, action: string, value?: string) =>
     call<{ item: Item }>('POST', `/api/cards/${encodeURIComponent(cardId)}/act`, { action, value }),
   stop: () => call<{ ok: true }>('POST', '/api/runs/stop'),

@@ -60,7 +60,7 @@ function Shell() {
   const agent = useStore((s) => s.agent);
   const pushEnabled = useStore((s) => s.pushEnabled);
   const pending = useStore((s) => s.pending.length);
-  const working = useStore((s) => s.tasks.filter((t) => t.status === 'running' || t.status === 'waiting').length);
+  const working = useStore((s) => s.tasks.filter((t) => t.status === 'running' || t.status === 'waiting' || t.status === 'queued').length);
   // A string, so streaming deltas don't re-run the effect below; it changes only when another ask is settled.
   const settled = useStore((s) => s.items.filter(isSettledAsk).map((i) => i.id).join(' '));
   const [hideInstall, setHideInstall] = useState(() => localStorageGet('duet.hideInstall') === '1');
@@ -223,7 +223,7 @@ function Shell() {
         )}
 
         <main className="content">
-          {tab === 'chat' && <Thread onOpenFile={setFileId} scrollToId={jump} onSuggest={startPrompt} followKey={sent} />}
+          {tab === 'chat' && <Thread onOpenFile={setFileId} scrollToId={jump} onSuggest={startPrompt} followKey={sent} onShowTasks={() => setTab('tasks')} />}
           {tab === 'tasks' && <TasksView onJump={jumpTo} onOpenFile={setFileId} />}
           {tab === 'make' && <MakeView onOpenFile={setFileId} onStart={startPrompt} />}
         </main>

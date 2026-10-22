@@ -9,7 +9,7 @@ import { files, items, kv, pages, settings, tasks } from './db';
 import { hermes } from './hermes';
 import { presence } from './presence';
 import { hasSubscriptions, notify, publicKey, saveSubscription } from './push';
-import { actOnCard, agentState, cancelTask, executeTool, recoverOrphans, runBrief, runCheckin, startHermesWatch, stopMain, stopPage, submitUser } from './runner';
+import { actOnCard, agentState, cancelTask, executeTool, recoverOrphans, runBrief, runCheckin, startHermesWatch, startUserTask, stopMain, stopPage, submitUser } from './runner';
 import { startScheduler } from './scheduler';
 import { broadcast } from './bus';
 
@@ -94,6 +94,13 @@ async function handleApp(req: Request): Promise<Response> {
       if (!t) return err(400, 'empty message');
       if (t.length > 20_000) return err(400, 'message too long');
       return json({ item: submitUser(t) });
+    }
+    if (path === '/api/tasks' && req.method === 'POST') {
+      const { text } = await body<{ text?: string }>(req);
+      const t = String(text ?? '').trim();
+      if (!t) return err(400, 'empty message');
+      if (t.length > 20_000) return err(400, 'message too long');
+      return json(startUserTask(t));
     }
 
     const cardMatch = path.match(/^\/api\/cards\/([\w-]+)\/act$/);

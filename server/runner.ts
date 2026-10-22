@@ -15,6 +15,7 @@ import { briefPrompt, checkinPrompt, decisionPrompt, pageRefreshInstructions, pe
 import { notify } from './push';
 import { MOVED_ON, RESUME_OPTIONS, RETRY_OPTIONS, TIMED_OUT, failedTurnBody, movedOn, resumeCardBody, retryTitle, runHung } from './recovery';
 import { type Steer, undeliveredSteers } from './steer';
+import { userTaskInstructions, userTaskTitle } from './usertask';
 
 // ---------------------------------------------------------------------------
 // Lanes: one per agent session. The main lane is the user's thread; each
@@ -980,6 +981,21 @@ export function submitUser(text: string, input?: string): Item {
     enqueue({ kind: 'chat', sessionId: m.sessionId, input: t });
   }
   return item;
+}
+
+/**
+ * "Run in background" from the composer: the message starts its own task instead of going to the main chat, so it
+ * runs alongside whatever the chat is doing. The message stays in the thread, tagged with its task; the main session
+ * hears about it on its next turn, and the usual handover card lands when the task finishes.
+ */
+export function startUserTask(text: string): { item: Item; task: Task } {
+  const shown = text.trim();
+  if (!shown) throw new Error('empty message');
+  const instructions = userTaskInstructions(shown, items.latest(30).items);
+  const task = startTask(userTaskTitle(shown), instructions, []);
+  const item = put(newItem('user', { text: shown, task_id: task.id }));
+  addContextNote(`The user started a background task themselves: "${task.title}" (${task.id}). It runs separately; its result reaches you when it finishes.`);
+  return { item, task };
 }
 
 export function actOnCard(id: string, action: string, value?: string): Item {

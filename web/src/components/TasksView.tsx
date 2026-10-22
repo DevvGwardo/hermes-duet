@@ -5,7 +5,7 @@ import { useStore } from '../store';
 import { Icon, relLabel } from '../ui';
 import { FileRow } from './CardView';
 
-const STATUS_LABEL: Record<Task['status'], string> = {
+export const STATUS_LABEL: Record<Task['status'], string> = {
   queued: 'Queued',
   running: 'Working',
   waiting: 'Waiting on you',
