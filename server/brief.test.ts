@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { BriefEntry, Item } from '../shared/types';
-import { EMPTY_MORNING_NOTE, USE_DRAFT_LABEL, briefCard, briefTitle, checkinOutcome, morningOutcome, raisedToday, useAction, useDraft } from './brief';
+import { BRIEF_RETRY, EMPTY_MORNING_NOTE, USE_DRAFT_LABEL, briefCard, briefFailure, briefTitle, checkinOutcome, morningOutcome, raisedToday, useAction, useDraft } from './brief';
 
 describe('check-ins stay silent unless a brief was posted', () => {
   test('free text never surfaces, NOOP or not', () => {
@@ -32,6 +32,26 @@ describe('a morning brief with no card never pushes its free text', () => {
 
   test('no card and no reply leaves a system line so the brief is seen to have run', () => {
     for (const text of ['', '  \n']) expect(morningOutcome({ briefs: 0, text })).toEqual({ note: EMPTY_MORNING_NOTE, stray: null });
+  });
+});
+
+describe('a morning brief that fails leaves a way to run it again', () => {
+  test('a brief that already posted needs nothing, whatever happened after', () => {
+    expect(briefFailure({ briefs: 1, error: 'Timed out' })).toBeNull();
+  });
+
+  test('the reason reads like a person, not a stack trace', () => {
+    expect(briefFailure({ briefs: 0, error: 'interrupted: Hermes restarted mid-run' })!.body).toStartWith('Hermes restarted while I was putting it together.');
+    expect(briefFailure({ briefs: 0, error: 'Timed out' })!.body).toStartWith('It ran out of time');
+    expect(briefFailure({ briefs: 0, error: 'model overloaded' })!.body).toStartWith('Hermes reported an error: model overloaded.');
+    expect(briefFailure({ briefs: 0 })!.body).toStartWith('Hermes stopped with an error.');
+  });
+
+  test('a long error is clipped and the card always offers the rerun', () => {
+    const f = briefFailure({ briefs: 0, error: 'x'.repeat(500) })!;
+    expect(f.body.length).toBeLessThan(260);
+    expect(f.body).toEndWith('Want me to run it again now?');
+    expect(BRIEF_RETRY[0]).toBe('Run it now');
   });
 });
 

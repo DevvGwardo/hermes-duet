@@ -23,7 +23,7 @@
 - **Asks before it acts.** Sending messages as you, paying, deleting, posting and signing all go through an **Approve / Not now** card first. Quick decisions become tappable questions.
 - **Works in the background.** Bigger jobs (decks, dashboards, research) run as tasks in their own Hermes session, while you keep chatting.
 - **Steer or stop.** A message sent mid-run steers the live turn, and Stop interrupts it.
-- **Survives restarts.** If the Hermes gateway restarts mid-run, Duet unpauses the session, retries what got blocked, and asks whether to pick up the interrupted work.
+- **Survives restarts.** If the Hermes gateway restarts mid-run, Duet unpauses the session, retries what got blocked, and asks whether to pick up the interrupted work. A morning brief that fails before posting leaves a "Run it now / Skip today" card and a push, so the day's brief isn't silently lost.
 
 <p align="center"><img src="docs/brand/phones.png" alt="Morning brief, approval card and tasks on a phone" width="100%"></p>
 <p align="center"><img src="docs/brand/desktop.png" alt="Desktop layout with sidebar, thread and context rail" width="100%"></p>

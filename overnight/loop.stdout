@@ -159,3 +159,10 @@
 1:27AM INF no leaks found
 [2026-10-22 01:27:25] iter 20 done · exit=0 gate=green committed=True changed=9
 [2026-10-22 01:27:45] iter 21 start → iter-21-20261022-012745.log
+[2026-10-22 01:29:36] iter 21 commit=ok · [overnight/claude-duet-20261022 c4ecbe6] overnight(iter 21): DONE: Check-ins re-raise this morning's decisions
+ 8 files changed, 112 insertions(+), 8 deletions(-)
+1:29AM INF 0 commits scanned.
+1:29AM INF scanned ~8523 bytes (8.52 KB) in 23.7ms
+1:29AM INF no leaks found
+[2026-10-22 01:29:36] iter 21 done · exit=0 gate=green committed=True changed=7
+[2026-10-22 01:29:56] iter 22 start → iter-22-20261022-012956.log

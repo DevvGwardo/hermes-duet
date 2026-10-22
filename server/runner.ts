@@ -2,7 +2,7 @@ import { copyFileSync, mkdirSync, statSync } from 'node:fs';
 import { basename, extname, isAbsolute, join, resolve } from 'node:path';
 import type { AgentState, CardData, FileEntry, Item, Page, Task, TaskStep, ToolStep } from '../shared/types';
 import { DRAFT_MAX, approvalDecision, approvalPush } from './approval';
-import { briefCard, briefTitle, checkinOutcome, morningOutcome, raisedToday, useAction, useDraft } from './brief';
+import { BRIEF_RETRY, briefCard, briefFailure, briefTitle, checkinOutcome, morningOutcome, raisedToday, useAction, useDraft } from './brief';
 import { broadcast } from './bus';
 import { localParts } from './clock';
 import { config } from './config';
@@ -594,6 +594,18 @@ function finish(l: Lane, run: ActiveRun, status: 'done' | 'error' | 'stopped', o
     if (stray) console.log(`[checkin] not posted (no brief): ${firstLine(stray)}`);
   } else if (spec.kind === 'task' || spec.taskId) {
     onTaskRunEnd(spec.taskId!, run, status, error);
+  } else if (spec.kind === 'brief' && status === 'error') {
+    const failed = briefFailure({ briefs: run.briefs, error });
+    if (failed) {
+      expireBriefRetries();
+      const card = put(
+        newItem('card', {
+          card: { type: 'choice', title: failed.title, body: failed.body, options: [...BRIEF_RETRY], status: 'pending', rerun: 'brief' },
+        }),
+      );
+      // The user expects a brief at this hour, so its failure reaches them the way the brief would have.
+      pushSafe({ title: "Your morning brief didn't finish", body: 'Tap to run it again.', card_id: card.id, tag: 'brief', url: `/?card=${card.id}` }, { ignoreQuiet: true });
+    }
   } else if (status === 'error') {
     systemNote(`Something went wrong${error ? `: ${error.replace(/[.\s]+$/, '')}` : ''}. Try again, or ask me differently.`);
   } else if (status === 'done' && l.main) {
@@ -893,6 +905,9 @@ export function actOnCard(id: string, action: string, value?: string): Item {
       const t = tasks.get(c.task_id);
       if (t && t.status === 'waiting') putTask({ ...t, status: 'running', progress: '' });
     }
+  } else if (c.rerun === 'brief') {
+    // A fresh brief run, not an agent turn about the old one: it gathers again from now.
+    if (answer === BRIEF_RETRY[0]) runBrief('manual');
   } else if (c.resume && answer !== 'Pick it up') {
     // Leaving interrupted work alone needs no agent turn.
     if (c.task_id) {
@@ -967,6 +982,13 @@ export async function cancelTask(id: string) {
       c.card = { ...c.card, status: 'expired', decided_at: Date.now() };
       put(c);
     }
+  }
+}
+
+/** A brief that did post (or failed again, with a new card) makes an older "Run it now?" card moot. */
+function expireBriefRetries() {
+  for (const c of items.pendingCards()) {
+    if (c.card?.rerun === 'brief') put({ ...c, card: { ...c.card, status: 'expired', decided_at: Date.now() } });
   }
 }
 
@@ -1100,6 +1122,7 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
         o,
       );
       if (o.run) o.run.briefs++;
+      if (morning) expireBriefRetries();
       // A quiet morning (Watching only) is posted but not pushed: nothing needs the user, so nothing interrupts them.
       if (!entries.length) return `Brief card ${item.id} posted with nothing to decide. It was not pushed.`;
       pushSafe(

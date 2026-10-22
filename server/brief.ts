@@ -169,3 +169,25 @@ export function morningOutcome(run: { briefs: number; text: string }): { note: s
   const t = run.text.trim();
   return t ? { note: null, stray: t } : { note: EMPTY_MORNING_NOTE, stray: null };
 }
+
+/** The two answers on the card left by a morning brief that didn't finish. */
+export const BRIEF_RETRY = ['Run it now', 'Skip today'] as const;
+
+/**
+ * The card for a morning brief run that ended in an error before posting its brief: Hermes restarted under it, it
+ * timed out, or the model call failed. The scheduler has already marked today's brief as sent, so without this the
+ * user gets nothing but a generic "Something went wrong" line they never asked for, and no brief until tomorrow.
+ * A run that posted its brief and failed afterwards needs nothing. `null` means leave the thread alone.
+ */
+export function briefFailure(run: { briefs: number; error?: string }): { title: string; body: string } | null {
+  if (run.briefs > 0) return null;
+  const e = (run.error ?? '').replace(/\s+/g, ' ').trim();
+  const why = /^interrupted\b/i.test(e)
+    ? 'Hermes restarted while I was putting it together.'
+    : /^timed out\b/i.test(e)
+      ? 'It ran out of time before it was done.'
+      : e
+        ? `Hermes reported an error: ${e.length > 160 ? `${e.slice(0, 159)}…` : e}${/[.!?…]$/.test(e) ? '' : '.'}`
+        : 'Hermes stopped with an error.';
+  return { title: "This morning's brief didn't finish", body: `${why} Nothing was posted. Want me to run it again now?` };
+}

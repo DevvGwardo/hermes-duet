@@ -82,6 +82,8 @@ export interface CardData {
   updated_label?: string; // e.g. "Updated 5:48 AM"
   /** "Pick it back up?" card offered after Hermes dropped a run mid-flight. */
   resume?: boolean;
+  /** "Run it now?" card left by a morning brief that failed; answering it needs no agent turn. */
+  rerun?: 'brief';
   /** Agent session that receives the decision (Duet-tool cards). */
   session_id?: string;
   /** Set when the card mirrors a Hermes-native approval/clarify prompt on a live run. */

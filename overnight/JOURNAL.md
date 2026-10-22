@@ -464,3 +464,27 @@ DONE: Follow-up chips forget they were tapped
 - New `items.briefsSince` query (server/db.ts). `runCheckin` (server/runner.ts) passes the briefs since local midnight. `checkinPrompt` (server/prompts.ts) tells the agent not to raise those decisions again unless something material changed, and to raise a watching item only once it needs a decision.
 - Why it matters against Claude Duet: "goes quiet until something genuinely needs you". A decision raised at breakfast shouldn't come back as an 11 AM "Heads up".
 - Verified: typecheck pass · test 75 pass / 0 fail · build pass
+
+## 2026-10-22T01:29:36Z — loop iteration 21
+- exit=0 gate=green committed=True files=7
+- gate: typecheck: exit 0
+- answer:
+```
+item was ticked except two that wait on the owner. So I looked for gaps and found this one. Check-ins only get pending cards in their "already waiting" list, but brief cards have status `info`, so they never appear there. The check-in also runs in its own session, which never saw the morning brief. That means it could push "Heads up" about a decision the user already read that morning.
+- **Fix:** a new pure function `raisedToday` in `server/brief.ts` turns today's brief cards into prompt lines. Each decision carries its card id and notes when the user already acted on it. Watching titles are listed separately. Titles are deduplicated and capped at 15 each.
+- **Wiring:** a new `items.briefsSince` query in `server/db.ts`, and `runCheckin` in `server/runner.ts` passes in the briefs posted since local midnight. `checkinPrompt` in `server/prompts.ts` tells the agent not to raise those again unless something material changed. A watching item is raised only once it needs a decision.
+- **Tests:** 3 new in `server/brief.test.ts`. I added the item to the backlog already ticked, plus a journal entry.
+- **Limit:** this is a prompt instruction, not a hard filter, so the model can still repeat itself.
+- typecheck: `tsc -p tsconfig.json --noEmit` → exit 0
+- test: `75 pass, 0 fail, 251 expect() calls` → exit 0
+- build: `✓ built in 103ms` → exit 0
+
+> CORRECTION: there was no unchecked, unblocked item for this iteration, so I found and added this one myself instead of taking one from the list.
+```
+
+## 2026-10-22T05:32Z — A failed morning brief is lost for the day
+- What changed: the backlog had no open, unblocked items, so this iteration audited the brief path and added this item. A brief run that ended in an error before posting (INTERRUPTED, timeout, model error) left only the generic "Something went wrong… ask me differently" note, and `brief_last_date` was already set, so no brief until tomorrow.
+- New pure `briefFailure` + `BRIEF_RETRY` (server/brief.ts, +3 tests) words the reason. `finish` (server/runner.ts) posts a pending choice card "This morning's brief didn't finish" with `rerun: 'brief'` (shared/types.ts) and pushes it like the brief (`ignoreQuiet`). In `actOnCard`, "Run it now" calls `runBrief('manual')` with no agent turn, and "Skip today" does nothing. `expireBriefRetries` expires older retry cards when a morning `post_brief` lands or the brief fails again. README "Survives restarts" mentions it.
+- Not changed: a brief the user stops with Stop stays silent, because that was deliberate. Queued a backlog item on quiet hours dropping pushes.
+- Why it matters against Claude Duet: "it briefs you every morning". A failure at brief time has to come back to the user with a one-tap retry, not disappear.
+- Verified: typecheck pass · test 78 pass / 0 fail · build pass
