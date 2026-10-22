@@ -119,7 +119,7 @@ async function handleApp(req: Request): Promise<Response> {
     }
 
     const fileMatch = path.match(/^\/api\/files\/([\w-]+)$/);
-    if (fileMatch && req.method === 'GET') return serveFile(fileMatch[1], url.searchParams.has('download'));
+    if (fileMatch && req.method === 'GET') return await serveFile(fileMatch[1], url.searchParams.has('download'));
 
     if (path === '/api/settings' && req.method === 'PUT') {
       const next = settings.update(await body(req));
@@ -155,17 +155,22 @@ async function handleApp(req: Request): Promise<Response> {
   }
 }
 
-function serveFile(id: string, download: boolean): Response {
+// Most sites refuse to load inside the viewer's frame (X-Frame-Options), so a link to another page opens a new tab.
+// Links within the same page (#section) still scroll in place.
+const LINK_SHIM = `<script>addEventListener('click',function(e){var a=e.target instanceof Element&&e.target.closest('a[href]');if(!a||(a.target&&a.target!=='_self'))return;var u=new URL(a.href,location.href);if(!/^https?:$/.test(u.protocol)||u.href.split('#')[0]===location.href.split('#')[0])return;a.target='_blank';a.rel='noopener'},true)</script>`;
+
+async function serveFile(id: string, download: boolean): Promise<Response> {
   const f = files.get(id);
   if (!f || !existsSync(f.path)) return err(404, 'file not found');
   const headers: Record<string, string> = {
     'content-type': f.entry.mime,
     'cache-control': 'private, max-age=300',
     'x-content-type-options': 'nosniff',
-    // Agent-made HTML runs in an opaque origin: scripts yes, cookies/API access no.
-    'content-security-policy': 'sandbox allow-scripts allow-popups allow-downloads; frame-ancestors \'self\'',
+    // Agent-made HTML runs in an opaque origin: scripts yes, cookies/API access no. Tabs it opens are ordinary pages.
+    'content-security-policy': 'sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox allow-downloads; frame-ancestors \'self\'',
   };
   if (download) headers['content-disposition'] = `attachment; filename="${f.entry.name.replace(/["\\\r\n]/g, '_')}"`;
+  else if (f.entry.mime === 'text/html') return new Response((await Bun.file(f.path).text()) + LINK_SHIM, { headers });
   return new Response(Bun.file(f.path), { headers });
 }
 

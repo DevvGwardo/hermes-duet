@@ -54,7 +54,7 @@ export function Viewer({ fileId, onClose }: { fileId: string; onClose: () => voi
         <div className="viewer-body">
           {kind === 'image' && <img src={src} alt={file!.title} />}
           {/* HTML deliverables run sandboxed without same-origin, so they can't reach the API. */}
-          {kind === 'frame' && <iframe src={src} title={file!.title} sandbox="allow-scripts allow-popups allow-downloads" />}
+          {kind === 'frame' && <iframe src={src} title={file!.title} sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-downloads" />}
           {kind === 'markdown' && text !== null && <Markdown text={text} className="doc" />}
           {kind === 'text' && text !== null && <pre className="doc-pre">{text}</pre>}
           {kind === 'download' && <p className="muted pad">No preview for this type. Use Download.</p>}
