@@ -1,0 +1,591 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Hermes Duet brand sheets</title>
+    <!-- Rendered to docs/brand/*.png by scripts/brand/render.ts. Same tokens, fonts and art as the app. -->
+    <link rel="stylesheet" href="../../node_modules/@fontsource/silkscreen/400.css" />
+    <link rel="stylesheet" href="../../node_modules/@fontsource/silkscreen/700.css" />
+    <link rel="stylesheet" href="../../node_modules/@fontsource-variable/inter/index.css" />
+    <link rel="stylesheet" href="../../node_modules/@fontsource-variable/jetbrains-mono/index.css" />
+    <style>
+      :root {
+        --ink-0: #0b0b0b;
+        --ink-2: #161616;
+        --paper: #f3eee3;
+        --dim: #b3ac9d;
+        --faint: #7a746a;
+        --gold: #ffd700;
+        --amber: #ffbf00;
+        --bronze: #cd853f;
+        --gold-band: linear-gradient(180deg, #ffd700 0 46%, #ffbf00 46% 74%, #cd853f 74% 100%);
+        --sans: 'Inter Variable', system-ui, sans-serif;
+        --pixel: 'Silkscreen', monospace;
+        --mono: 'JetBrains Mono Variable', ui-monospace, monospace;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        background: var(--ink-0);
+        color: var(--paper);
+        font-family: var(--sans);
+        -webkit-font-smoothing: antialiased;
+      }
+      .sheet {
+        position: relative;
+        overflow: hidden;
+        display: none;
+        background: radial-gradient(70% 60% at var(--fx, 50%) 0%, #1b1b1b, transparent 70%), var(--ink-0);
+      }
+      body[data-sheet='banner'] #banner,
+      body[data-sheet='desktop'] #desktop,
+      body[data-sheet='phones'] #phones,
+      body[data-sheet='flow'] #flow {
+        display: block;
+      }
+
+      /* shared texture */
+      .tone {
+        position: absolute;
+        width: 900px;
+        height: 900px;
+        pointer-events: none;
+      }
+      .tone.tr {
+        top: -360px;
+        right: -320px;
+        background: radial-gradient(circle, rgba(243, 238, 227, 0.14) 1.4px, transparent 2px) 0 0 / 9px 9px;
+        mask-image: radial-gradient(circle, #000, transparent 62%);
+      }
+      .tone.bl {
+        bottom: -420px;
+        left: -380px;
+        background: radial-gradient(circle, rgba(255, 191, 0, 0.2) 1.5px, transparent 2.1px) 0 0 / 10px 10px;
+        mask-image: radial-gradient(circle, #000, transparent 60%);
+      }
+      .lines {
+        position: absolute;
+        width: 3200px;
+        height: 3200px;
+        left: calc(var(--lx) - 1600px);
+        top: calc(var(--ly) - 1600px);
+        background: repeating-conic-gradient(from 0deg, rgba(243, 238, 227, 0.08) 0deg 0.45deg, transparent 0.45deg 3.6deg);
+        mask-image: radial-gradient(circle, transparent 7%, #000 18%, transparent 46%);
+        pointer-events: none;
+      }
+      .vignette {
+        position: absolute;
+        inset: 0;
+        background: radial-gradient(ellipse at 50% 45%, transparent 45%, rgba(0, 0, 0, 0.7));
+        pointer-events: none;
+      }
+      .frame {
+        position: absolute;
+        inset: 14px;
+        border: 2px solid rgba(243, 238, 227, 0.16);
+        border-radius: 14px;
+        pointer-events: none;
+      }
+
+      /* wordmark */
+      .wordmark {
+        font-family: var(--pixel);
+        font-weight: 700;
+        line-height: 0.9;
+        white-space: nowrap;
+      }
+      .wm-hermes {
+        position: relative;
+        display: inline-block;
+        color: transparent;
+        background: var(--gold-band);
+        -webkit-background-clip: text;
+        background-clip: text;
+      }
+      .wm-hermes::before {
+        content: attr(data-text);
+        position: absolute;
+        left: 0.08em;
+        top: 0.08em;
+        z-index: -1;
+        color: transparent;
+        -webkit-text-stroke: 2px rgba(255, 191, 0, 0.55);
+      }
+      .wm-duet {
+        display: inline-block;
+        color: var(--paper);
+        letter-spacing: 0.08em;
+      }
+      .pixel-tag {
+        display: inline-flex;
+        align-items: center;
+        padding: 6px 10px 5px;
+        font: 400 13px/1 var(--pixel);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--gold);
+        background: #000;
+        border: 1.5px solid var(--gold);
+        border-radius: 3px;
+        box-shadow: 3px 3px 0 #000;
+      }
+      .pixel-tag.paper {
+        color: #111;
+        background: var(--paper);
+        border-color: #000;
+      }
+      .pixel-tag.gold {
+        color: #111;
+        background: var(--gold-band);
+        border-color: #000;
+      }
+      .speech {
+        position: absolute;
+        background: var(--paper);
+        color: #141414;
+        border: 3px solid #000;
+        border-radius: 26px;
+        padding: 16px 22px;
+        font-size: 20px;
+        line-height: 1.35;
+        box-shadow: 6px 6px 0 #000;
+      }
+      .speech b {
+        font-weight: 800;
+      }
+      .speech::before,
+      .speech::after {
+        content: '';
+        position: absolute;
+        border-style: solid;
+      }
+      .mascot {
+        position: absolute;
+      }
+      .mascot img {
+        position: relative;
+        width: 100%;
+        filter: drop-shadow(8px 8px 0 #000);
+      }
+      .mascot .moon {
+        position: absolute;
+        inset: 6% 2% 10% 2%;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(255, 191, 0, 0.6) 2px, transparent 2.8px) 0 0 / 11px 11px;
+        mask-image: radial-gradient(circle, #000 28%, transparent 70%);
+      }
+
+      /* ---------------- banner 1280x640 */
+      #banner {
+        width: 1280px;
+        height: 640px;
+        --fx: 30%;
+        --lx: 330px;
+        --ly: 330px;
+      }
+      #banner .mascot {
+        left: 92px;
+        top: 96px;
+        width: 470px;
+      }
+      #banner .speech {
+        left: 470px;
+        top: 70px;
+        max-width: 280px;
+        font-size: 18px;
+      }
+      #banner .speech::before {
+        left: 26px;
+        bottom: -24px;
+        border-width: 24px 20px 0 0;
+        border-color: #000 transparent transparent transparent;
+      }
+      #banner .speech::after {
+        left: 30px;
+        bottom: -16px;
+        border-width: 18px 15px 0 0;
+        border-color: var(--paper) transparent transparent transparent;
+      }
+      #banner .copy {
+        position: absolute;
+        left: 600px;
+        top: 228px;
+        right: 64px;
+      }
+      #banner .wordmark {
+        font-size: 98px;
+      }
+      #banner .wordmark .wm-duet {
+        display: block;
+        margin-top: 14px;
+        font-size: 74px;
+        letter-spacing: 0.32em;
+      }
+      #banner .tagline {
+        margin: 30px 0 0;
+        font-size: 25px;
+        font-weight: 600;
+        line-height: 1.3;
+        letter-spacing: -0.01em;
+        text-shadow: 3px 3px 0 #000;
+      }
+      #banner .tagline em {
+        font-style: normal;
+        color: var(--gold);
+      }
+      #banner .tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 26px;
+      }
+
+      /* ---------------- desktop 1600x1060 */
+      #desktop {
+        width: 1600px;
+        height: 1110px;
+        --fx: 50%;
+        --lx: 800px;
+        --ly: 560px;
+      }
+      #desktop .caption {
+        position: absolute;
+        left: 80px;
+        top: 52px;
+        display: flex;
+        align-items: center;
+        gap: 18px;
+      }
+      #desktop .caption h2,
+      #phones .head h2,
+      #flow .head h2 {
+        margin: 0;
+        font-size: 34px;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+        text-shadow: 3px 3px 0 #000;
+      }
+      .window {
+        position: absolute;
+        border: 3px solid var(--paper);
+        border-radius: 12px;
+        overflow: hidden;
+        background: #000;
+        box-shadow: 14px 14px 0 var(--amber);
+      }
+      .window .bar {
+        height: 34px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 14px;
+        background: #141414;
+        border-bottom: 2px solid #000;
+        font: 400 12px var(--mono);
+        color: var(--faint);
+      }
+      .window .bar i {
+        width: 11px;
+        height: 11px;
+        border-radius: 3px;
+        background: #2a2a2a;
+        border: 1.5px solid #000;
+      }
+      .window .bar i:first-child {
+        background: var(--gold);
+      }
+      .window .bar span {
+        margin-left: 12px;
+      }
+      .window img {
+        display: block;
+        width: 100%;
+      }
+      #desktop .window {
+        left: 80px;
+        top: 122px;
+        width: 1440px;
+      }
+
+      /* ---------------- phones 1600x1080 */
+      #phones {
+        width: 1600px;
+        height: 1080px;
+        --fx: 50%;
+        --lx: 800px;
+        --ly: 600px;
+      }
+      #phones .head,
+      #flow .head {
+        position: absolute;
+        left: 80px;
+        top: 52px;
+        display: flex;
+        align-items: center;
+        gap: 18px;
+      }
+      #phones .row {
+        position: absolute;
+        left: 80px;
+        right: 80px;
+        top: 136px;
+        display: flex;
+        justify-content: space-between;
+      }
+      .panel {
+        width: 440px;
+      }
+      .panel .label {
+        display: flex;
+        align-items: baseline;
+        gap: 12px;
+        margin-bottom: 16px;
+      }
+      .panel .label b {
+        font: 700 15px var(--pixel);
+        color: var(--gold);
+      }
+      .panel .label span {
+        font-size: 21px;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+      }
+      .phone {
+        /* inner box keeps the iPhone 15's 393:852 so nothing is cropped */
+        width: 400px;
+        height: 839px;
+        border: 3px solid var(--paper);
+        border-radius: 46px;
+        padding: 12px;
+        background: #000;
+        box-shadow: 12px 12px 0 #000;
+      }
+      .panel:nth-child(2) .phone {
+        box-shadow: 12px 12px 0 var(--amber);
+      }
+      .phone img {
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        border-radius: 34px;
+      }
+
+      /* ---------------- flow 1600x700 */
+      #flow {
+        width: 1600px;
+        height: 600px;
+        --fx: 50%;
+        --lx: 800px;
+        --ly: 420px;
+      }
+      #flow .nodes {
+        position: absolute;
+        left: 80px;
+        right: 80px;
+        top: 148px;
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 64px;
+      }
+      .node {
+        position: relative;
+        padding: 22px 22px 24px;
+        border: 2.5px solid var(--paper);
+        border-radius: 10px;
+        background: linear-gradient(180deg, #1a1a1a, #121212);
+        box-shadow: 8px 8px 0 #000;
+        min-height: 262px;
+      }
+      .node.hot {
+        border-color: var(--gold);
+        box-shadow: 8px 8px 0 var(--amber);
+      }
+      .node h3 {
+        margin: 16px 0 6px;
+        font-size: 24px;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+      }
+      .node p {
+        margin: 0 0 14px;
+        font-size: 15.5px;
+        line-height: 1.45;
+        color: var(--dim);
+      }
+      .node code {
+        font: 500 13px/1.7 var(--mono);
+        color: var(--gold);
+      }
+      .node .num {
+        position: absolute;
+        right: 16px;
+        top: 14px;
+        font: 700 30px var(--pixel);
+        color: rgba(243, 238, 227, 0.12);
+      }
+      .arrow {
+        position: absolute;
+        top: 118px;
+        right: -64px;
+        width: 64px;
+        height: 30px;
+        display: grid;
+        place-items: center;
+        z-index: 2;
+      }
+      .arrow::before {
+        content: '';
+        position: absolute;
+        left: 6px;
+        right: 14px;
+        top: 50%;
+        border-top: 3px dashed var(--gold);
+      }
+      .arrow::after {
+        content: '';
+        position: absolute;
+        right: 4px;
+        top: 50%;
+        margin-top: -9px;
+        border-style: solid;
+        border-width: 9px 0 9px 12px;
+        border-color: transparent transparent transparent var(--gold);
+      }
+      #flow .foot {
+        position: absolute;
+        left: 80px;
+        right: 80px;
+        bottom: 44px;
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      .avatar {
+        width: 54px;
+        height: 54px;
+        border-radius: 28%;
+        background: var(--paper);
+        border: 2.5px solid #000;
+        box-shadow: 4px 4px 0 var(--amber);
+        overflow: hidden;
+        display: grid;
+        place-items: end center;
+      }
+      .avatar img {
+        width: 88%;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- BANNER -->
+    <section class="sheet" id="banner">
+      <span class="lines"></span><span class="tone tr"></span><span class="tone bl"></span><span class="vignette"></span>
+      <div class="mascot"><span class="moon"></span><img src="../../web/public/mascot-white.svg" alt="" /></div>
+      <div class="speech"><b>Hand me something.</b> I'll work in the background and ask before anything sensitive.</div>
+      <div class="copy">
+        <div class="wordmark"><span class="wm-hermes" data-text="HERMES">HERMES</span><span class="wm-duet">DUET</span></div>
+        <p class="tagline">A proactive phone assistant for your <em>Hermes</em> agent. One thread, a morning brief, and it asks before it acts.</p>
+        <div class="tags">
+          <span class="pixel-tag gold">PWA</span>
+          <span class="pixel-tag">Hermes /v1/runs</span>
+          <span class="pixel-tag">MCP tools</span>
+          <span class="pixel-tag paper">Web push</span>
+          <span class="pixel-tag">Self-hosted</span>
+        </div>
+      </div>
+      <span class="frame"></span>
+    </section>
+
+    <!-- DESKTOP -->
+    <section class="sheet" id="desktop">
+      <span class="lines"></span><span class="tone tr"></span><span class="tone bl"></span><span class="vignette"></span>
+      <div class="caption">
+        <div class="avatar"><img src="../../web/public/mascot-black.svg" alt="" /></div>
+        <h2>Desktop: thread, sidebar, live context rail</h2>
+        <span class="pixel-tag">demo data</span>
+      </div>
+      <div class="window">
+        <div class="bar"><i></i><i></i><i></i><span>hermes-duet · your-mac.your-tailnet.ts.net</span></div>
+        <img src="../../docs/brand/.raw/desktop.png" alt="" />
+      </div>
+      <span class="frame"></span>
+    </section>
+
+    <!-- PHONES -->
+    <section class="sheet" id="phones">
+      <span class="lines"></span><span class="tone tr"></span><span class="tone bl"></span><span class="vignette"></span>
+      <div class="head">
+        <div class="avatar"><img src="../../web/public/mascot-black.svg" alt="" /></div>
+        <h2>On your phone, it comes to you</h2>
+        <span class="pixel-tag">demo data</span>
+      </div>
+      <div class="row">
+        <div class="panel">
+          <div class="label"><b>01</b><span>A morning brief, unprompted</span></div>
+          <div class="phone"><img src="../../docs/brand/.raw/phone-brief.png" alt="" /></div>
+        </div>
+        <div class="panel">
+          <div class="label"><b>02</b><span>Approve before it acts</span></div>
+          <div class="phone"><img src="../../docs/brand/.raw/phone-approve.png" alt="" /></div>
+        </div>
+        <div class="panel">
+          <div class="label"><b>03</b><span>Big work runs in the background</span></div>
+          <div class="phone"><img src="../../docs/brand/.raw/phone-tasks.png" alt="" /></div>
+        </div>
+      </div>
+      <span class="frame"></span>
+    </section>
+
+    <!-- FLOW -->
+    <section class="sheet" id="flow">
+      <span class="lines"></span><span class="tone tr"></span><span class="tone bl"></span><span class="vignette"></span>
+      <div class="head">
+        <div class="avatar"><img src="../../web/public/mascot-black.svg" alt="" /></div>
+        <h2>How it fits together</h2>
+      </div>
+      <div class="nodes">
+        <div class="node">
+          <span class="num">01</span><span class="pixel-tag paper">You</span>
+          <h3>Phone / browser</h3>
+          <p>Installable PWA. One thread with Chat, Tasks and Make tabs. Web push brings it to you.</p>
+          <code>HTTPS · your tailnet</code>
+          <span class="arrow"></span>
+        </div>
+        <div class="node hot">
+          <span class="num">02</span><span class="pixel-tag gold">Duet server</span>
+          <h3>Bun + SQLite</h3>
+          <p>Lanes per session, scheduler for the brief and check-ins, approval cards, push.</p>
+          <code>:7456 app · :7457 loopback</code>
+          <span class="arrow"></span>
+        </div>
+        <div class="node">
+          <span class="num">03</span><span class="pixel-tag">Brain</span>
+          <h3>Hermes agent</h3>
+          <p>Your local Hermes gateway does the work: tools, skills, memory, your models.</p>
+          <code>/v1/runs · events · steer · stop</code>
+          <span class="arrow"></span>
+        </div>
+        <div class="node">
+          <span class="num">04</span><span class="pixel-tag">Back to you</span>
+          <h3>MCP "duet" tools</h3>
+          <p>request_approval, ask, post_brief, post_card, deliver_file, start_task, update_task, notify.</p>
+          <code>stdio shim → loopback API</code>
+        </div>
+      </div>
+      <div class="foot">
+        <span class="pixel-tag gold">Asks before it sends, pays or deletes</span>
+        <span class="pixel-tag">Recovers runs after a Hermes restart</span>
+        <span class="pixel-tag paper">Nothing public by default</span>
+      </div>
+      <span class="frame"></span>
+    </section>
+
+    <script>
+      document.body.dataset.sheet = new URLSearchParams(location.search).get('sheet') || 'banner';
+    </script>
+  </body>
+</html>

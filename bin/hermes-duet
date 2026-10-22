@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# Hermes Duet CLI: pair a device, check status, nudge the agent, manage the background service (macOS launchd).
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+DATA="${DUET_DATA_DIR:-$ROOT/data}"
+PORT="${DUET_INTERNAL_PORT:-7457}"
+LABEL="${DUET_LAUNCHD_LABEL:-dev.hermes-duet.server}"
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+LOGDIR="$HOME/Library/Logs/hermes-duet"
+
+internal() { # method path [json]
+  local tok
+  tok="$(cat "$DATA/internal.token" 2>/dev/null)" || { echo "Hermes Duet server isn't running (no $DATA/internal.token). Try: hermes-duet start" >&2; exit 1; }
+  curl -fsS -X "$1" "http://127.0.0.1:$PORT$2" -H "authorization: Bearer $tok" -H 'content-type: application/json' ${3:+-d "$3"}
+}
+
+case "${1:-help}" in
+  pair)
+    out="$(internal POST /internal/pair)"
+    code="$(printf '%s' "$out" | sed -E 's/.*"code":"([^"]+)".*/\1/')"
+    url="$(grep -E '^DUET_PUBLIC_URL=' "$ROOT/.env" 2>/dev/null | cut -d= -f2- || true)"
+    echo
+    echo "  Pairing code:  $code   (valid 10 minutes, single use)"
+    [ -n "$url" ] && echo "  Open:          $url" && command -v qrencode >/dev/null && qrencode -t ansiutf8 "$url"
+    echo
+    ;;
+  status)
+    internal GET /internal/status | (command -v jq >/dev/null && jq . || cat); echo ;;
+  brief)
+    internal POST /internal/brief >/dev/null && echo "Brief queued. It will land in the thread." ;;
+  checkin)
+    internal POST /internal/checkin >/dev/null && echo "Check-in queued." ;;
+  say)
+    shift; [ $# -gt 0 ] || { echo "usage: hermes-duet say <message>" >&2; exit 1; }
+    payload="$(TEXT="$*" bun -e 'console.log(JSON.stringify({text: process.env.TEXT}))')"
+    internal POST /internal/message "$payload" >/dev/null && echo "Sent." ;;
+  install)
+    BUN="$(command -v bun)" || { echo "bun not found on PATH" >&2; exit 1; }
+    AGENT_PATH="$HOME/.local/bin:$(dirname "$BUN"):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+    mkdir -p "$LOGDIR" "$(dirname "$PLIST")"
+    sed -e "s#__LABEL__#$LABEL#g" -e "s#__BUN__#$BUN#g" -e "s#__ROOT__#$ROOT#g" -e "s#__LOGDIR__#$LOGDIR#g" -e "s#__PATH__#$AGENT_PATH#g" \
+      "$ROOT/launchd/hermes-duet.plist.template" > "$PLIST"
+    launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+    launchctl bootstrap "gui/$(id -u)" "$PLIST" && echo "Installed and started $LABEL ($PLIST)" ;;
+  uninstall)
+    launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+    rm -f "$PLIST" && echo "Removed $LABEL" ;;
+  start)
+    launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null || launchctl kickstart -k "gui/$(id -u)/$LABEL"; echo "Started $LABEL" ;;
+  stop)
+    launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null && echo "Stopped $LABEL" || echo "Not running" ;;
+  restart)
+    launchctl kickstart -k "gui/$(id -u)/$LABEL" && echo "Restarted $LABEL" ;;
+  logs)
+    tail -n "${2:-80}" -f "$LOGDIR/server.log" ;;
+  *)
+    cat <<USAGE
+hermes-duet pair                  one-time code to pair a phone or browser
+hermes-duet status                agent + settings
+hermes-duet brief                 run the morning brief now
+hermes-duet checkin               run a check-in now
+hermes-duet say <msg>             send a message into the thread as you
+hermes-duet install | uninstall   background service (launchd label: $LABEL)
+hermes-duet start | stop | restart | logs
+USAGE
+    ;;
+esac
