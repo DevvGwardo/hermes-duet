@@ -33,6 +33,16 @@ export function resumeCardBody(run: InterruptedRun): string {
 }
 
 export const TIMED_OUT = 'Timed out';
+
+/**
+ * A run that has gone silent for `limitMs` is hung. Hermes holds a run's event stream open with keepalive comments
+ * until the run ends, so a wedged tool or model call never closes it, and a deadline checked only when the stream
+ * drops never fires. Silence, not total time, like Hermes's own gateway inactivity timeout: a long task that keeps
+ * reporting steps is working, and a run paused on a Hermes approval or question is waiting on the user.
+ */
+export function runHung(run: { lastEventAt: number; waitingOnUser: boolean }, now: number, limitMs: number): boolean {
+  return !run.waitingOnUser && now - run.lastEventAt >= limitMs;
+}
 export const RESUME_OPTIONS = ['Pick it up', 'Leave it'] as const;
 export const RETRY_OPTIONS = ['Try again', 'Leave it'] as const;
 export const MOVED_ON = 'You carried on in chat';
@@ -45,7 +55,7 @@ export function failedTurnBody(run: { error?: string; steps: ToolStep[]; limitMi
   const error = clip(run.error ?? '', 160).replace(/[.\s]+$/, '');
   const parts = [
     run.error === TIMED_OUT
-      ? `This ran for over ${run.limitMin} minutes, so I stopped it.`
+      ? `This went ${run.limitMin} minutes without any progress, so I stopped it.`
       : error
         ? `It stopped with an error: ${error}.`
         : 'It stopped with an error.',

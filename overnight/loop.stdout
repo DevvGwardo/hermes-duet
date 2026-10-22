@@ -286,3 +286,10 @@
 2:23AM INF no leaks found
 [2026-10-22 02:23:48] iter 37 done · exit=0 gate=green committed=True changed=7
 [2026-10-22 02:24:08] iter 38 start → iter-38-20261022-022408.log
+[2026-10-22 02:27:36] iter 38 commit=ok · [overnight/claude-duet-20261022 36fda18] overnight(iter 38): DONE: A failed reply is silent
+ 8 files changed, 136 insertions(+), 11 deletions(-)
+2:27AM INF 0 commits scanned.
+2:27AM INF scanned ~11110 bytes (11.11 KB) in 25.1ms
+2:27AM INF no leaks found
+[2026-10-22 02:27:36] iter 38 done · exit=0 gate=green committed=True changed=7
+[2026-10-22 02:27:56] iter 39 start → iter-39-20261022-022756.log

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { CardData, Item, ToolStep } from '../shared/types';
 import { decisionPrompt } from './prompts';
-import { RETRY_OPTIONS, TIMED_OUT, failedTurnBody, lastDone, movedOn, resumeCardBody, retryTitle } from './recovery';
+import { RETRY_OPTIONS, TIMED_OUT, failedTurnBody, lastDone, movedOn, resumeCardBody, retryTitle, runHung } from './recovery';
 
 const step = (id: string, status: ToolStep['status'], label?: string): ToolStep => ({ id, name: `tool_${id}`, label, status, started_at: 1 });
 
@@ -34,7 +34,7 @@ describe('failed chat turn card', () => {
     const body = failedTurnBody({ error: 'Run failed: upstream 529 overloaded.', steps: [step('a', 'done', 'search: flights')], limitMin: 45 });
     expect(body).toStartWith('It stopped with an error: Run failed: upstream 529 overloaded. ');
     expect(body).toContain('The last step that finished: search: flights.');
-    expect(failedTurnBody({ error: TIMED_OUT, steps: [], limitMin: 45 })).toStartWith('This ran for over 45 minutes, so I stopped it. Nothing had finished yet.');
+    expect(failedTurnBody({ error: TIMED_OUT, steps: [], limitMin: 45 })).toStartWith('This went 45 minutes without any progress, so I stopped it. Nothing had finished yet.');
     expect(failedTurnBody({ steps: [], limitMin: 45 })).toStartWith('It stopped with an error. ');
   });
 
@@ -59,5 +59,23 @@ describe('failed chat turn card', () => {
   test('tapping Try again hands the agent the card body', () => {
     const c = { id: 'c9', kind: 'card', created_at: 1, updated_at: 1, card: { type: 'choice', title: 'Try “x” again?', body: 'It stopped with an error.', options: [...RETRY_OPTIONS], status: 'pending', resume: true } } as Item;
     expect(decisionPrompt(c, { answer: 'Try again' })).toContain('The card said: "It stopped with an error."');
+  });
+});
+
+describe('hung-run watchdog', () => {
+  const limit = 45 * 60_000;
+  test('a run silent for the limit is hung; one that sent an event inside it is not', () => {
+    expect(runHung({ lastEventAt: 0, waitingOnUser: false }, limit, limit)).toBe(true);
+    expect(runHung({ lastEventAt: 1, waitingOnUser: false }, limit, limit)).toBe(false);
+  });
+
+  test('judges silence, not total time: a long run that keeps reporting is working', () => {
+    const startedAt = 0;
+    const lastEventAt = startedAt + 3 * limit;
+    expect(runHung({ lastEventAt, waitingOnUser: false }, lastEventAt + 60_000, limit)).toBe(false);
+  });
+
+  test('a run paused on a Hermes prompt is waiting on the user, however long', () => {
+    expect(runHung({ lastEventAt: 0, waitingOnUser: true }, 10 * limit, limit)).toBe(false);
   });
 });

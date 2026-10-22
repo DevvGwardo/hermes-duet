@@ -13,7 +13,7 @@ import { HermesError, hermes, type RunEvent } from './hermes';
 import { MAX_PAGES, afterInterruption, pageBriefLine, pageInput, refreshTime, refreshToCancel } from './pages';
 import { briefPrompt, checkinPrompt, decisionPrompt, pageRefreshInstructions, persona, taskPrompt } from './prompts';
 import { notify } from './push';
-import { MOVED_ON, RESUME_OPTIONS, RETRY_OPTIONS, TIMED_OUT, failedTurnBody, movedOn, resumeCardBody, retryTitle } from './recovery';
+import { MOVED_ON, RESUME_OPTIONS, RETRY_OPTIONS, TIMED_OUT, failedTurnBody, movedOn, resumeCardBody, retryTitle, runHung } from './recovery';
 import { type Steer, undeliveredSteers } from './steer';
 
 // ---------------------------------------------------------------------------
@@ -60,6 +60,8 @@ interface ActiveRun {
   steers: Steer[];
   /** `pending_steer` from the terminal event or status: steer text Hermes never delivered, left for us to replay. */
   leftoverSteer: string;
+  /** When the run last sent an event (keepalives don't count), for the hung-run watchdog. */
+  lastEventAt: number;
 }
 
 interface Lane {
@@ -232,6 +234,7 @@ async function launch(l: Lane, spec: RunSpec) {
     fgTaskId: null,
     steers: [],
     leftoverSteer: '',
+    lastEventAt: Date.now(),
   };
   l.active = run;
   broadcastAgent();
@@ -302,50 +305,66 @@ async function launch(l: Lane, spec: RunSpec) {
 
 async function consume(l: Lane, run: ActiveRun) {
   let attempts = 0;
-  const deadline = run.startedAt + config.runTimeoutMs;
-  while (!run.finished) {
-    try {
-      await hermes.events(
-        run.id,
-        run.lastSeq,
-        (ev) => {
-          attempts = 0;
-          onEvent(l, run, ev);
-        },
-        run.abort.signal,
-      );
-    } catch (e: any) {
-      if (run.abort.signal.aborted) break;
-    }
-    if (run.finished) break;
-    // The stream closed without a terminal event: ask for the run's status directly.
-    try {
-      const st = await hermes.getRun(run.id);
-      const s = st.status;
-      if (typeof st.pending_steer === 'string') run.leftoverSteer = st.pending_steer;
-      if (s === 'completed') finish(l, run, 'done', st.output);
-      else if (s === 'failed') finish(l, run, 'error', st.output, errorText(st.error) || 'Run failed');
-      else if (s === 'cancelled' || s === 'interrupted') finish(l, run, 'stopped', st.output);
-      else if (s === 'unknown') {
-        // Its owner died with the gateway. Acknowledge it so the session isn't left paused.
-        if (st.admission_id) await hermes.resolveUnknown(run.id, st.admission_id, Number(st.execution_generation ?? 0)).catch(() => {});
-        finish(l, run, 'error', undefined, INTERRUPTED);
+  run.lastEventAt = Date.now();
+  // Hermes keeps the stream open with keepalives while a run is wedged, so silence is checked on a timer, not when
+  // the stream drops. finish() aborts the stream, which ends the loop.
+  const watchdog = setInterval(() => stopIfHung(l, run), WATCHDOG_MS);
+  try {
+    while (!run.finished) {
+      try {
+        await hermes.events(
+          run.id,
+          run.lastSeq,
+          (ev) => {
+            attempts = 0;
+            onEvent(l, run, ev);
+          },
+          run.abort.signal,
+        );
+      } catch (e: any) {
+        if (run.abort.signal.aborted) break;
       }
       if (run.finished) break;
-    } catch (e: any) {
-      if (e instanceof HermesError && e.status === 404) {
-        finish(l, run, 'error', undefined, INTERRUPTED);
-        break;
+      // The stream closed without a terminal event: ask for the run's status directly.
+      try {
+        const st = await hermes.getRun(run.id);
+        const s = st.status;
+        if (typeof st.pending_steer === 'string') run.leftoverSteer = st.pending_steer;
+        if (s === 'completed') finish(l, run, 'done', st.output);
+        else if (s === 'failed') finish(l, run, 'error', st.output, errorText(st.error) || 'Run failed');
+        else if (s === 'cancelled' || s === 'interrupted') finish(l, run, 'stopped', st.output);
+        else if (s === 'unknown') {
+          // Its owner died with the gateway. Acknowledge it so the session isn't left paused.
+          if (st.admission_id) await hermes.resolveUnknown(run.id, st.admission_id, Number(st.execution_generation ?? 0)).catch(() => {});
+          finish(l, run, 'error', undefined, INTERRUPTED);
+        }
+        if (run.finished) break;
+      } catch (e: any) {
+        if (e instanceof HermesError && e.status === 404) {
+          finish(l, run, 'error', undefined, INTERRUPTED);
+          break;
+        }
       }
+      attempts++;
+      await Bun.sleep(Math.min(15_000, 500 * 2 ** Math.min(attempts, 5)));
     }
-    if (Date.now() > deadline) {
-      hermes.stop(run.id).catch(() => {});
-      finish(l, run, 'error', undefined, TIMED_OUT);
-      break;
-    }
-    attempts++;
-    await Bun.sleep(Math.min(15_000, 500 * 2 ** Math.min(attempts, 5)));
+  } finally {
+    clearInterval(watchdog);
   }
+}
+
+const WATCHDOG_MS = 60_000;
+
+/** Stop a run that has sent nothing for the configured limit, unless it's paused on a Hermes prompt for the user. */
+function stopIfHung(l: Lane, run: ActiveRun) {
+  if (run.finished || !run.id) return;
+  const waitingOnUser = items.pendingCards().some((c) => c.card?.hermes?.run_id === run.id);
+  // The silence clock starts again once the user answers, even if no settled event arrives.
+  if (waitingOnUser) run.lastEventAt = Date.now();
+  if (!runHung({ lastEventAt: run.lastEventAt, waitingOnUser }, Date.now(), config.runTimeoutMs)) return;
+  console.log(`[runs] ${run.id} sent nothing for ${Math.round((Date.now() - run.lastEventAt) / 60_000)} min; stopping it`);
+  hermes.stop(run.id).catch(() => {});
+  finish(l, run, 'error', undefined, TIMED_OUT);
 }
 
 const INTERRUPTED = 'interrupted: Hermes restarted mid-run';
@@ -372,6 +391,7 @@ function errorText(err: any): string {
 }
 
 function onEvent(l: Lane, run: ActiveRun, ev: RunEvent) {
+  run.lastEventAt = Date.now();
   if (typeof ev.seq === 'number') run.lastSeq = Math.max(run.lastSeq, ev.seq);
   // assistant.completed and the terminal run.* event both carry it.
   if (typeof ev.pending_steer === 'string') run.leftoverSteer = ev.pending_steer;
@@ -1479,6 +1499,7 @@ export function recoverOrphans() {
       // Steers sent before the restart aren't kept, so one Hermes returns undelivered can't be matched and replayed.
       steers: [],
       leftoverSteer: '',
+      lastEventAt: Date.now(),
     };
     l.active = run;
     console.log(`[recover] reattaching run ${row.id} (${spec.kind})`);

@@ -28,7 +28,7 @@ export const config = {
   hermesKey: env.DUET_HERMES_KEY ?? env.API_SERVER_KEY ?? '',
   hermesHome: env.HERMES_HOME ?? join(homedir(), '.hermes'),
   hermesModel: env.DUET_HERMES_MODEL ?? 'hermes-agent',
-  /** Hard cap for one agent turn before we give up waiting on the stream. */
+  /** A run that sends no event for this long (and isn't waiting on the user) is stopped as hung (runHung). */
   runTimeoutMs: Number(env.DUET_RUN_TIMEOUT_MS ?? 45 * 60_000),
   maxBackground: Number(env.DUET_MAX_BACKGROUND ?? 2),
   userName: env.DUET_USER_NAME ?? '',

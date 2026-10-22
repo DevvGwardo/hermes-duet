@@ -872,3 +872,30 @@ DONE: A message sent as a turn ends is lost
 - Limit: "Try again" resumes the same Hermes session and relies on its history holding the failed turn. Not tried against a live Hermes.
 - Why it matters against Claude Duet: "goes quiet until something genuinely needs you". An errand that didn't happen does need you, and should be one tap to retry.
 - Verified: typecheck pass · test 114 pass / 0 fail · build pass
+
+## 2026-10-22T02:27:36Z — loop iteration 38
+- exit=0 gate=green committed=True files=7
+- gate: typecheck: exit 0
+- answer:
+```
+rganization's connectors
+DONE: A failed reply is silent
+
+> CORRECTION: nothing in the backlog was open and unblocked, so I found this gap myself and added it to the backlog already ticked.
+
+- **Problem:** if a chat turn or a post-approval turn errored (model error, or the 45-minute run timeout), all you got was a grey "Something went wrong" note. There was no push, even though a reply that does come pushes, and nothing to tap. If you sent an errand and walked away, you never learned it didn't happen.
+- **Fix:** `finish` in `server/runner.ts` now posts a "Try “…” again?" card and pushes "Couldn't finish". Quiet hours hold that push like any card's. The card says why it stopped and what last finished (`failedTurnBody` in `server/recovery.ts`). "Try again" resumes the same conversation, and the agent gets the card's text (`server/prompts.ts`).
+- **Sending a new message instead** expires these cards (`movedOn`), so they don't stay in "Needs you". This also applies to the existing "Pick it back up?" cards in the main thread. If a retry fails again, its title names the original work (`retryTitle`).
+- **Also:** README line, 4 new tests in `server/recovery.test.ts`, backlog item and journal entry.
+- **Limit:** "Try again" depends on Hermes keeping the failed turn in the conversation's history. Not tried against a live Hermes or on a phone.
+- typecheck: `tsc -p tsconfig.json --noEmit` → exit 0
+- test: `114 pass, 0 fail, 397 expect() calls` → exit 0
+- build: `✓ built in 2.71s` → exit 0
+```
+
+## 2026-10-22T06:32Z — A hung run holds the thread forever
+- What changed: the backlog had no open, unblocked items, so this iteration audited `consume`. Its run deadline was only checked after the event stream dropped, but Hermes keeps that stream open with a keepalive every 10s until the run ends (checked read-only in `api_server_runs.py`; the API-server path has no inactivity timeout of its own), so a wedged run never timed out. Now a 60s watchdog in `consume` (server/runner.ts) stops a run with no event for `DUET_RUN_TIMEOUT_MS` and ends it as `TIMED_OUT`, which already gives the "Try … again?" card, the failed handover with Try again, or the brief's "Run it now". `onEvent` stamps `lastEventAt`.
+- New pure `runHung` (server/recovery.ts, +3 tests): judged on silence, not total time (like Hermes's own gateway inactivity timeout), so a long task that keeps reporting steps is not cut off; a run paused on its own Hermes approval/question is never hung, and its clock restarts after the user answers. Card text now says "went N minutes without any progress". Config comment and README updated.
+- Changed behaviour: the old deadline was total time since start (when it fired at all); a run that keeps emitting events now has no Duet-side cap, relying on Hermes's iteration limit. Not tried against a live Hermes.
+- Why it matters against Claude Duet: "large tasks run in the background and come back". A stuck one has to come back as a failure, not hold the thread forever.
+- Verified: typecheck pass · test 117 pass / 0 fail · build pass
