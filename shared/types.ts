@@ -21,6 +21,14 @@ export interface BriefEntry {
   /** Optional one-tap follow-up; tapping sends this text as a user message. */
   action_label?: string;
   action_message?: string;
+  /** Markdown the agent already prepared for this decision (a reply, a plan); shown collapsed under the entry. */
+  draft?: string;
+}
+
+/** Something the agent is keeping an eye on that doesn't need a decision; listed muted under a brief, never pushed. */
+export interface WatchEntry {
+  title: string;
+  detail?: string;
 }
 
 /** A one-tap next step; tapping sends `message` to the main thread as the user. */
@@ -49,7 +57,8 @@ export interface CardData {
   /** approval: verb shown on the primary button, e.g. "Send", "Pay $640". */
   action_label?: string;
   options?: string[]; // choice
-  entries?: BriefEntry[]; // brief
+  entries?: BriefEntry[]; // brief: decisions, ranked high to low
+  watching?: WatchEntry[]; // brief
   checklist?: ChecklistEntry[]; // checklist
   metrics?: MetricEntry[]; // metrics
   file_id?: string; // file

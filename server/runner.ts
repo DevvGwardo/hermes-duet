@@ -1,7 +1,7 @@
 import { copyFileSync, mkdirSync, statSync } from 'node:fs';
 import { basename, extname, isAbsolute, join, resolve } from 'node:path';
 import type { AgentState, CardData, FileEntry, Item, Task, TaskStep, ToolStep } from '../shared/types';
-import { briefEntries, checkinOutcome } from './brief';
+import { briefCard, briefTitle, checkinOutcome } from './brief';
 import { broadcast } from './bus';
 import { localParts } from './clock';
 import { config } from './config';
@@ -943,14 +943,15 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
       return `Question card ${item.id} posted. End your turn now; the answer arrives as "[answer ${item.id}] …".`;
     }
     case 'post_brief': {
-      const entries = briefEntries(args.entries);
+      const { entries, watching, demoted } = briefCard(args);
       const s = settings.get();
       const item = postCard(
         {
           type: 'brief',
-          title: req(args.title, 'title', 140),
+          title: briefTitle(req(args.title, 'title', 140), entries.length),
           body: str(args.summary, 2000) || undefined,
           entries,
+          watching: watching.length ? watching : undefined,
           status: 'info',
           updated_label: `Updated ${new Date().toLocaleTimeString('en-US', { timeZone: s.timezone, hour: 'numeric', minute: '2-digit' })}`,
         },
@@ -959,10 +960,18 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
       if (o.run) o.run.briefs++;
       const morning = o.run?.spec.kind === 'brief';
       pushSafe(
-        { title: item.card!.title, body: entries.slice(0, 3).map((e) => `• ${e.title}`).join('\n'), tag: morning ? 'brief' : 'checkin', url: `/?card=${item.id}` },
+        {
+          title: item.card!.title,
+          // Decisions only: Watching never notifies.
+          body: [...entries.slice(0, 3).map((e) => `• ${e.title}`), ...(entries.length > 3 ? [`+${entries.length - 3} more`] : [])].join('\n'),
+          tag: morning ? 'brief' : 'checkin',
+          url: `/?card=${item.id}`,
+        },
         { ignoreQuiet: morning },
       );
-      return `Brief card ${item.id} posted.`;
+      return demoted.length
+        ? `Brief card ${item.id} posted with the top ${entries.length} decisions. Moved to Watching (drafts dropped): ${demoted.join('; ')}.`
+        : `Brief card ${item.id} posted.`;
     }
     case 'post_card': {
       const type = str(args.type) as CardData['type'];

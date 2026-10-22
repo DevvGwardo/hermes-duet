@@ -37,3 +37,10 @@
 12:40AM INF no leaks found
 [2026-10-22 00:40:53] iter 4 done · exit=0 gate=green committed=True changed=13
 [2026-10-22 00:41:13] iter 5 start → iter-05-20261022-004113.log
+[2026-10-22 00:44:03] iter 5 commit=ok · [overnight/claude-duet-20261022 5aa72af] overnight(iter 5): DONE: Failed tasks hand over too
+ 12 files changed, 164 insertions(+), 31 deletions(-)
+12:44AM INF 0 commits scanned.
+12:44AM INF scanned ~11436 bytes (11.44 KB) in 18.9ms
+12:44AM INF no leaks found
+[2026-10-22 00:44:03] iter 5 done · exit=0 gate=green committed=True changed=11
+[2026-10-22 00:44:23] iter 6 start → iter-06-20261022-004423.log

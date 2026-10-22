@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { briefEntries, checkinOutcome } from './brief';
+import { briefCard, briefTitle, checkinOutcome } from './brief';
 
 describe('check-ins stay silent unless a brief was posted', () => {
   test('free text never surfaces, NOOP or not', () => {
@@ -22,17 +22,60 @@ describe('check-ins stay silent unless a brief was posted', () => {
 
 describe('post_brief entries', () => {
   test('an empty or missing list is rejected', () => {
-    expect(() => briefEntries([])).toThrow(/at least one entry/);
-    expect(() => briefEntries(undefined)).toThrow(/at least one entry/);
+    expect(() => briefCard({ entries: [] })).toThrow(/at least one entry/);
+    expect(() => briefCard({ watching: [{ title: 'only watching' }] })).toThrow(/at least one entry/);
   });
 
-  test('entries are trimmed, capped and given a default priority', () => {
-    const out = briefEntries([{ title: '  Reply to Dana ', priority: 'urgent', detail: '' }, ...Array(12).fill({ title: 'x' })]);
-    expect(out).toHaveLength(10);
-    expect(out[0]).toEqual({ title: 'Reply to Dana', detail: undefined, priority: 'medium', action_label: undefined, action_message: undefined });
+  test('entries are trimmed and given a default priority', () => {
+    const { entries } = briefCard({ entries: [{ title: '  Reply to Dana ', priority: 'urgent', detail: '', draft: '  Hi Dana,\n\nYes. ' }] });
+    expect(entries[0]).toEqual({
+      title: 'Reply to Dana',
+      detail: undefined,
+      priority: 'medium',
+      action_label: undefined,
+      action_message: undefined,
+      draft: 'Hi Dana,\n\nYes.',
+    });
   });
 
   test('an untitled entry is an error', () => {
-    expect(() => briefEntries([{ detail: 'no title' }])).toThrow(/missing entry title/);
+    expect(() => briefCard({ entries: [{ detail: 'no title' }] })).toThrow(/missing entry title/);
+  });
+});
+
+describe('brief = ranked decisions plus Watching', () => {
+  test('decisions sort high to low, keeping the model order within a priority', () => {
+    const { entries } = briefCard({
+      entries: [
+        { title: 'a', priority: 'low' },
+        { title: 'b', priority: 'medium' },
+        { title: 'c', priority: 'high' },
+        { title: 'd' },
+        { title: 'e', priority: 'high' },
+      ],
+    });
+    expect(entries.map((e) => e.title)).toEqual(['c', 'e', 'b', 'd', 'a']);
+  });
+
+  test('more than 5 decisions: the lowest move to the front of Watching, and are named', () => {
+    const out = briefCard({
+      entries: [{ title: 'low', priority: 'low', draft: 'x' }, ...Array.from({ length: 6 }, (_, i) => ({ title: `h${i}`, priority: 'high' }))],
+      watching: [{ title: 'Package Thursday', detail: 'UPS' }, { title: '' }],
+    });
+    expect(out.entries.map((e) => e.title)).toEqual(['h0', 'h1', 'h2', 'h3', 'h4']);
+    expect(out.demoted).toEqual(['h5', 'low']);
+    expect(out.watching).toEqual([
+      { title: 'h5', detail: undefined },
+      { title: 'low', detail: undefined },
+      { title: 'Package Thursday', detail: 'UPS' },
+    ]);
+  });
+
+  test('the title counts decisions only', () => {
+    expect(briefTitle('Good morning. 7 things need you today.', 5)).toBe('Good morning. 5 things need you today.');
+    expect(briefTitle('Good morning. 2 things need you today.', 1)).toBe('Good morning. 1 thing needs you today.');
+    expect(briefTitle('Heads up: Three things', 2)).toBe('Heads up: Two things');
+    expect(briefTitle('Heads up: 1 item', 3)).toBe('Heads up: 3 items');
+    expect(briefTitle('Good morning. Quiet day.', 2)).toBe('Good morning. Quiet day.');
   });
 });

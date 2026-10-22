@@ -62,9 +62,10 @@ export function briefPrompt(s: Settings, ctx: { pending: Item[]; tasks: Task[] }
   return `[morning brief] Prepare today's morning brief.
 
 1. Gather: the context sources listed in your standing instructions; email, calendar and messages if you have tools for them; the Hermes Duet state below.
-2. Pick the 3-7 things that actually need the user today, most urgent first. Be specific (names, amounts, deadlines). Where a next step is obvious, prepare it, for example by drafting a reply, but don't send anything.
-3. Call post_brief once. Title it like "Good morning. N things need you today." Give items one-tap actions where useful (action_message is what tapping sends you).
-4. Then reply with one short line, nothing more.
+2. Pick the decisions that actually need the user today: at most 5, ranked by priority. Be specific (names, amounts, deadlines). Where a next step is obvious, prepare it and put it in the entry's draft (the full reply, the plan), but don't send anything.
+3. Everything else worth knowing that needs no decision yet goes in watching, one line each. It's shown muted and never notifies, so don't pad the decisions with it.
+4. Call post_brief once. Title it like "Good morning. N things need you today.", counting decisions only. Give entries one-tap actions where useful (action_message is what tapping sends you).
+5. Then reply with one short line, nothing more.
 
 Waiting on the user in Hermes Duet:
 ${pendingLines(ctx.pending)}
@@ -78,7 +79,7 @@ export function checkinPrompt(s: Settings, ctx: { since: string; pending: Item[]
 
 Your text reply is never shown to the user. The only way to reach them is post_brief.
 If nothing needs them, reply with exactly NOOP and nothing else. Don't call any Hermes Duet tools.
-If something does, call post_brief with just those items (at least one; title like "Heads up: 2 things"), then reply with one short line.
+If something does, call post_brief with just those decisions (at least one; title like "Heads up: 2 things"; put any draft you prepared in the entry's draft), then reply with one short line. Something that only needs watching is not a reason to check in.
 
 Already waiting on the user (don't repeat these):
 ${pendingLines(ctx.pending)}

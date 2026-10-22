@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { CardData, FollowUp, Item } from '../../../shared/types';
+import type { CardData, FollowUp, Item, WatchEntry } from '../../../shared/types';
 import { api } from '../api';
 import { useStore } from '../store';
 import { Icon, Markdown, bytesLabel, fileIcon, timeLabel } from '../ui';
@@ -43,6 +43,7 @@ export function CardView({ item, onOpenFile }: { item: Item; onOpenFile: (id: st
       {card.body && <Markdown text={card.body} className="card-body" />}
 
       {card.type === 'brief' && card.entries && <BriefList card={card} />}
+      {card.type === 'brief' && card.watching?.length ? <Watching list={card.watching} /> : null}
       {card.type === 'checklist' && card.checklist && <Checklist card={card} />}
       {card.type === 'metrics' && card.metrics && (
         <div className="metrics">
@@ -134,6 +135,12 @@ function BriefList({ card }: { card: CardData }) {
           <div className="brief-main">
             <div className="brief-title">{e.title}</div>
             {e.detail && <div className="brief-detail">{e.detail}</div>}
+            {e.draft && (
+              <details className="brief-draft">
+                <summary>Draft ready</summary>
+                <Markdown text={e.draft} className="brief-draft-body" />
+              </details>
+            )}
             {e.action_label && e.action_message && (
               <button
                 className="chip"
@@ -150,6 +157,22 @@ function BriefList({ card }: { card: CardData }) {
         </li>
       ))}
     </ol>
+  );
+}
+
+function Watching({ list }: { list: WatchEntry[] }) {
+  return (
+    <section className="watching" aria-label="Watching">
+      <div className="watching-head">Watching</div>
+      <ul>
+        {list.map((w, i) => (
+          <li key={i}>
+            <span className="watching-title">{w.title}</span>
+            {w.detail && <span className="watching-detail"> · {w.detail}</span>}
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 

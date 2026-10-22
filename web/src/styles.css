@@ -1210,6 +1210,55 @@ code {
   font-size: 13.5px;
   color: var(--dim);
 }
+.brief-draft {
+  margin-top: 6px;
+}
+.brief-draft > summary {
+  cursor: pointer;
+  font: 600 12px var(--mono);
+  color: var(--gold);
+  list-style: none;
+}
+.brief-draft > summary::-webkit-details-marker {
+  display: none;
+}
+.brief-draft > summary::before {
+  content: '▸ ';
+}
+.brief-draft[open] > summary::before {
+  content: '▾ ';
+}
+.brief-draft-body {
+  margin-top: 6px;
+  padding: 8px 10px;
+  font-size: 13.5px;
+  color: var(--paper-2);
+  border-left: 2px solid var(--line-2);
+}
+.watching {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1.5px solid var(--line-2);
+}
+.watching-head {
+  font: 600 11px var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--faint);
+}
+.watching ul {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+}
+.watching li {
+  padding: 3px 0;
+  font-size: 13.5px;
+  color: var(--dim);
+}
+.watching-detail {
+  color: var(--faint);
+}
 
 .checklist ul,
 .task-steps {

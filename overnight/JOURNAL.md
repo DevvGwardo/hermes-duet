@@ -94,3 +94,22 @@ ne" push now opens that card.
 - "Try again": `actOnCard(id, 'retry')` → `retryTask` resets the task, restarts it in a fresh Hermes session from the stored instructions (`taskPrompt` gets the earlier failure reason), and marks the old card "Tried again". The finished retry posts a new card at the bottom. Web: `CardView` shows "Didn’t finish", the chip, and the decision stamp; muted styles in `styles.css`. 3 new tests; README tool row and `update_task.result` description updated.
 - Why it matters against Claude Duet: background work always comes back as one card, including when it doesn't work out, and recovering takes one tap.
 - Verified: typecheck pass · test 25 pass / 0 fail · build pass
+
+## 2026-10-22T00:44:03Z — loop iteration 5
+- exit=0 gate=green committed=True files=11
+- gate: typecheck: exit 0
+- answer:
+```
+inished one, styled muted with a "Didn’t finish" label. The card shows the reason, any files delivered so far, and a **Try again** button where the follow-ups would go. This covers three cases: a run that errors or stops, the agent marking the task `failed` itself, and a task that couldn't start. All three now go through one `announceEnd` step (card, a note for the main conversation, and one push that opens the card) instead of the one-line system note (`server/runner.ts`, `server/handover.ts`).
+- **Try again** restarts the same task from its saved instructions in a fresh Hermes session, telling the agent why the earlier attempt failed. The old card then reads "Tried again", and the new result arrives as a new card at the bottom of the thread. The button only appears when instructions are saved, so tasks started before this change won't show it. Files from the failed attempt don't appear on the new card. Changes: `shared/types.ts`, `server/prompts.ts`, `web/src/components/CardView.tsx`, `web/src/styles.css`, `README.md`, and the `update_task.result` description in `server/tools.ts`.
+- 3 new tests in `server/handover.test.ts`. Ticked the item and wrote the journal entry. Added a backlog item, "Interrupted tasks push twice": when Hermes restarts mid-task, the phone gets both "Task failed" and "Work was interrupted" for the same event.
+- typecheck: `tsc -p tsconfig.json --noEmit` → exit 0
+- test: `25 pass, 0 fail, 105 expect() calls` → exit 0
+- build: `✓ built in 103ms` → exit 0
+```
+
+## 2026-10-22T04:46Z — Brief = ranked decisions with drafts, plus Watching
+- What changed: `BriefEntry.draft` and a new `WatchEntry` / `CardData.watching` (shared/types.ts). `server/brief.ts` now has `briefCard`, which sorts decisions high→low (stable), caps them at 5 and moves any overflow to the front of Watching (named in the tool result), and `briefTitle`, which rewrites "N things need you" to the real decision count with matching singular/plural. `server/runner.ts` uses both; the push lists decisions only (+N more), never Watching.
+- `post_brief` schema/description gain `draft` and `watching`; both prompts say decisions go in entries with their draft and everything else goes in watching. `CardView` shows the draft collapsed under the entry ("Draft ready") and a muted Watching section (styles.css). README tool row updated. brief.test.ts: 3 new tests, existing ones moved to `briefCard`.
+- Why it matters against Claude Duet: the brief is a short ranked list of decisions, each with its draft ready, plus a separate Watching set that doesn't interrupt.
+- Verified: typecheck pass · test 28 pass / 0 fail · build pass

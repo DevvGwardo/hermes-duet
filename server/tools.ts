@@ -39,12 +39,14 @@ export const TOOLS = [
   {
     name: 'post_brief',
     description:
-      'Post a brief: a short prioritized list of what needs the user\'s attention (used for the morning brief and check-ins). Keep it to the 3-7 items that matter; each item is one line plus a short detail. ' +
-      'It posts a card and notifies the user, so it needs at least one entry; if nothing needs them, do not call it.',
+      'Post a brief: a short ranked list of decisions that need the user (used for the morning brief and check-ins), plus an optional Watching list. ' +
+      'entries are decisions only, at most 5 (the server sorts them high to low and moves any extra to Watching); each is one line, a short detail, and the draft you already prepared if there is one. ' +
+      'watching is for things you are keeping an eye on that need no decision yet; it is shown muted and never notifies. ' +
+      'It posts a card and notifies the user, so it needs at least one entry; if nothing needs a decision, do not call it.',
     inputSchema: {
       type: 'object',
       properties: {
-        title: { type: 'string', description: 'e.g. "Good morning. 4 things need you today."' },
+        title: { type: 'string', description: 'e.g. "Good morning. 3 things need you today." Count decisions only; the server corrects the number.' },
         summary: { type: 'string', description: 'Optional one or two sentences of markdown above the list.' },
         entries: {
           type: 'array',
@@ -57,7 +59,17 @@ export const TOOLS = [
               priority: { type: 'string', enum: ['high', 'medium', 'low'] },
               action_label: { type: 'string', description: 'Optional button, e.g. "Draft a reply".' },
               action_message: { type: 'string', description: 'What tapping the button sends to you as the user, e.g. "Draft a reply to Dana about the lease".' },
+              draft: { type: 'string', description: 'Markdown you already prepared for this decision, e.g. the full reply to Dana. Shown collapsed under the entry. Nothing is sent.' },
             },
+            required: ['title'],
+          },
+        },
+        watching: {
+          type: 'array',
+          description: 'Optional. Things you are tracking that need no decision yet, e.g. "Package arrives Thursday". Muted, never notifies.',
+          items: {
+            type: 'object',
+            properties: { title: { type: 'string' }, detail: { type: 'string' } },
             required: ['title'],
           },
         },
