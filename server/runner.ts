@@ -9,7 +9,7 @@ import { config } from './config';
 import { files, items, kv, newId, pages, runs, settings, tasks } from './db';
 import { followUps, handoverCard } from './handover';
 import { HermesError, hermes, type RunEvent } from './hermes';
-import { MAX_PAGES, pageBriefLine, pageInput, refreshTime } from './pages';
+import { MAX_PAGES, pageBriefLine, pageInput, refreshTime, refreshToCancel } from './pages';
 import { briefPrompt, checkinPrompt, decisionPrompt, pageRefreshInstructions, persona, taskPrompt } from './prompts';
 import { notify } from './push';
 
@@ -680,15 +680,35 @@ export function refreshPage(page: Page, date: string) {
   console.log(`[pages] refreshing ${page.id} (${page.title}) as task ${t.id}`);
 }
 
+/**
+ * Stop a standing page: drop its row and cancel a refresh still in flight, so nothing replaces the file afterwards.
+ * Files it already delivered stay in Make. `callerTask` is the task asking for the removal, which must not cancel
+ * itself mid-tool-call.
+ */
+export async function removePage(id: string, callerTask?: string | null): Promise<Page> {
+  const page = pages.get(id);
+  if (!page) throw new Error('page not found');
+  pages.remove(page.id);
+  broadcast({ type: 'page_removed', id: page.id });
+  const cancel = refreshToCancel(page, pageRefreshing(page), callerTask);
+  if (cancel) await cancelTask(cancel);
+  return page;
+}
+
+/** The user stopped a page from Make; the agent hears about it on its next turn so it doesn't offer to rebuild it. */
+export async function stopPage(id: string) {
+  const page = await removePage(id);
+  addContextNote(`The user stopped the standing page "${page.title}" (${page.id}) from the app. It no longer refreshes; its files stay in Make.`);
+}
+
 /** save_page: create, update or remove a standing page. */
-function savePage(args: Record<string, unknown>): string {
+async function savePage(args: Record<string, unknown>, callerTask?: string | null): Promise<string> {
   const pageId = str(args.page_id, 64).trim();
   const existing = pageId ? pages.get(pageId) : null;
   if (pageId && !existing) throw new Error(`no page ${pageId}`);
   if (args.remove === true) {
     if (!existing) throw new Error('remove needs page_id');
-    pages.remove(existing.id);
-    broadcast({ type: 'page_removed', id: existing.id });
+    await removePage(existing.id, callerTask);
     return `Page ${existing.id} ("${existing.title}") removed. It no longer refreshes; its files stay in the Make tab.`;
   }
   const input = pageInput(args, existing);
@@ -1106,7 +1126,7 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
       return `Started background task ${t.id} ("${t.title}"). It's in the user's Tasks tab. Tell them in one line, then end your turn. When it finishes, the user gets a handover card in the thread, and a note with its result reaches you with their next message.`;
     }
     case 'save_page':
-      return savePage(args);
+      return savePage(args, o.taskId);
     case 'update_task': {
       const id = req(args.task_id, 'task_id', 64);
       const t = tasks.get(id);

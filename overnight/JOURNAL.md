@@ -224,3 +224,24 @@ h is still running is skipped. 6 tests in `server/pages.test.ts`.
 - `runBrief` passes one `pageBriefLine` per page (server/pages.ts: refreshed + change / failed + reason / still running / stopped / not refreshed / new today) into `briefPrompt`, which tells the model to call out each page's one change or failed refresh. Scheduler holds a due brief while any page is refreshing, at most `BRIEF_HOLD_MIN` (30) via pure `holdBrief`; a held brief may go out past the midday cutoff. Make pins pages under "Every morning" (refreshed time, change line in gold, failure in red, "Refreshing now…"). 2 new tests in pages.test.ts; README row updated.
 - Why it matters against Claude Duet: the standing page now "calls out the one thing that changed", both on the page in Make and in the morning brief, and the brief waits for the refresh.
 - Verified: typecheck pass · test 48 pass / 0 fail · build pass
+
+## 2026-10-22T01:05:15Z — loop iteration 11
+- exit=0 gate=green committed=True files=14
+- gate: typecheck: exit 0
+- answer:
+```
+ars the previous day's result when it starts. Files: `server/tools.ts`, `server/runner.ts`, `server/prompts.ts`, `shared/types.ts`.
+- **The app stays current:** every page save goes through `putPage`, which sends a new `page` event, and removing a page sends `page_removed`. The startup snapshot now includes `pages` (`server/index.ts`, `web/src/store.ts`).
+- **Brief:** the morning brief prompt gets one line per page from the new `pageBriefLine` in `server/pages.ts`. It says what changed, or that the refresh failed (with the reason), is still running, was stopped, hasn't run today, or the page is new today. The model is told to mention each page's one change or failure.
+- **Brief waits for a refresh:** if any page is still refreshing when the brief is due, the scheduler holds the brief for at most 30 minutes (`holdBrief`, `BRIEF_HOLD_MIN`, in `server/scheduler.ts`). A brief that started waiting before midday can still go out after the midday cutoff.
+- **Make tab:** pages are pinned at the top under "Every morning". Each shows when it was last refreshed and the change line, "Didn't refresh: …" in red after a failure, or "Refreshing now…" while running (`web/src/components/MakeView.tsx`, `web/src/styles.css`). The README row is updated.
+- 2 new tests in `server/pages.test.ts`. I ticked the item in the backlog and added the journal entry.
+- typecheck: `tsc -p tsconfig.json --noEmit` → exit 0
+- test: `48 pass, 0 fail, 181 expect() calls` → exit 0 · build: `✓ built in 96ms` → exit 0
+```
+
+## 2026-10-22T05:12Z — Stop a standing page from the app
+- What changed: `removePage` in server/runner.ts (shared by `save_page` remove and the app) drops the row, broadcasts `page_removed`, and cancels a refresh still in flight via the pure `refreshToCancel` (server/pages.ts, never the calling task itself) so it can't deliver over the file afterwards. `stopPage` adds a context note so the agent knows the user stopped it. New `DELETE /api/pages/:id` (server/index.ts), behind pairing and the same-origin check like the other state-changing routes.
+- Web: `api.stopPage`; each pinned page in Make has "Stop refreshing" under it, with a second-tap confirm ("Stop / Keep", says today's refresh will be cancelled if one is running, files stay) and an inline error. 1 new test in pages.test.ts; README save_page row updated.
+- Why it matters against Claude Duet: the standing artifact is the user's to manage, so stopping it is one tap in the app instead of a message to the agent.
+- Verified: typecheck pass · test 49 pass / 0 fail · build pass

@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import type { FileEntry, Page, Task } from '../../../shared/types';
+import { api } from '../api';
 import { useStore } from '../store';
 import { Icon, bytesLabel, dayLabel, fileIcon, relLabel, timeLabel } from '../ui';
 
@@ -70,7 +72,10 @@ export function MakeView({ onStart, onOpenFile }: { onStart: (prompt: string) =>
   );
 }
 
-/** A standing page: when its current version arrived, and the one thing that changed (or why nothing did). */
+/**
+ * A standing page: when its current version arrived, and the one thing that changed (or why nothing did).
+ * "Stop refreshing" takes a second tap to confirm; the row disappears when the server's page_removed event lands.
+ */
 function PageRow({ page, file, task, onOpen }: { page: Page; file?: FileEntry; task?: Task; onOpen: () => void }) {
   const FIcon = file ? fileIcon(file.mime, file.name) : Icon.file;
   const at = page.refreshed_at ?? page.created_at;
@@ -83,17 +88,50 @@ function PageRow({ page, file, task, onOpen }: { page: Page; file?: FileEntry; t
       : page.last_ok && page.changed
         ? { text: page.changed, cls: '' }
         : null;
+  const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const stop = async () => {
+    setBusy(true);
+    setErr('');
+    try {
+      await api.stopPage(page.id);
+    } catch (e: any) {
+      setErr(e?.message ?? 'Could not stop it.');
+      setBusy(false);
+    }
+  };
   return (
-    <button className="row" onClick={onOpen}>
-      <span className="file-icon">
-        <FIcon size={20} />
-      </span>
-      <span className="row-main">
-        <span className="row-title">{page.title}</span>
-        <span className="row-sub">Refreshed {day === 'Today' ? timeLabel(at) : `${day}, ${timeLabel(at)}`}</span>
-        {note && <span className={`page-change${note.cls}`}>{note.text}</span>}
-      </span>
-      <Icon.chevron size={18} />
-    </button>
+    <>
+      <button className="row" onClick={onOpen}>
+        <span className="file-icon">
+          <FIcon size={20} />
+        </span>
+        <span className="row-main">
+          <span className="row-title">{page.title}</span>
+          <span className="row-sub">Refreshed {day === 'Today' ? timeLabel(at) : `${day}, ${timeLabel(at)}`}</span>
+          {note && <span className={`page-change${note.cls}`}>{note.text}</span>}
+        </span>
+        <Icon.chevron size={18} />
+      </button>
+      <div className="page-actions">
+        {confirm ? (
+          <>
+            <span className="muted">{refreshing ? 'Cancel today’s refresh and stop?' : 'Stop refreshing every morning?'} Its files stay.</span>
+            <button className="btn btn-ghost small" disabled={busy} onClick={stop}>
+              Stop
+            </button>
+            <button className="btn btn-ghost small" disabled={busy} onClick={() => setConfirm(false)}>
+              Keep
+            </button>
+          </>
+        ) : (
+          <button className="btn btn-ghost small" onClick={() => setConfirm(true)}>
+            Stop refreshing
+          </button>
+        )}
+      </div>
+      {err && <p className="card-error page-error">{err}</p>}
+    </>
   );
 }

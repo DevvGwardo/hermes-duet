@@ -83,3 +83,10 @@
 1:01AM INF no leaks found
 [2026-10-22 01:01:33] iter 10 done · exit=0 gate=green committed=True changed=11
 [2026-10-22 01:01:53] iter 11 start → iter-11-20261022-010153.log
+[2026-10-22 01:05:15] iter 11 commit=ok · [overnight/claude-duet-20261022 8e66591] overnight(iter 11): DONE: Standing page: what changed, pinned in Make
+ 15 files changed, 202 insertions(+), 20 deletions(-)
+1:05AM INF 0 commits scanned.
+1:05AM INF scanned ~14702 bytes (14.70 KB) in 159ms
+1:05AM INF no leaks found
+[2026-10-22 01:05:15] iter 11 done · exit=0 gate=green committed=True changed=14
+[2026-10-22 01:05:35] iter 12 start → iter-12-20261022-010535.log

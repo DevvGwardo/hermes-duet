@@ -38,6 +38,7 @@ export const api = {
     call<{ item: Item }>('POST', `/api/cards/${encodeURIComponent(cardId)}/act`, { action, value }),
   stop: () => call<{ ok: true }>('POST', '/api/runs/stop'),
   cancelTask: (id: string) => call<{ ok: true }>('POST', `/api/tasks/${encodeURIComponent(id)}/cancel`),
+  stopPage: (id: string) => call<{ ok: true }>('DELETE', `/api/pages/${encodeURIComponent(id)}`),
   saveSettings: (s: Partial<Settings>) => call<{ settings: Settings }>('PUT', '/api/settings', s),
   runBrief: () => call<{ ok: true }>('POST', '/api/brief/run'),
   pushKey: () => call<{ key: string }>('GET', '/api/push/key'),

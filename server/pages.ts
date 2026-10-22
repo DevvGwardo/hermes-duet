@@ -46,6 +46,14 @@ export function holdBrief(refreshing: boolean, heldSince: number | null, now: nu
   return refreshing && (heldSince === null || now - heldSince < BRIEF_HOLD_MIN * 60_000);
 }
 
+/**
+ * Which refresh to cancel when a page is stopped: one still in flight, so it can't deliver over the file afterwards,
+ * unless that refresh is the caller itself (a refresh run calling save_page remove would cancel its own tool call).
+ */
+export function refreshToCancel(page: Page, refreshing: boolean, callerTask?: string | null): string | null {
+  return page.task_id && refreshing && page.task_id !== callerTask ? page.task_id : null;
+}
+
 /** One line per page for the brief prompt: today's change, or why there isn't one. */
 export function pageBriefLine(page: Page, today: string, refreshing: boolean): string {
   const head = `- "${page.title}" (page ${page.id}): `;

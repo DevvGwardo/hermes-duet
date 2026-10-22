@@ -1586,6 +1586,19 @@ li.done .tick {
 .page-change.failed {
   color: var(--danger);
 }
+/* Under a pinned page row, lined up with its title (16px row padding + 40px icon + 12px gap). */
+.page-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px 13px 68px;
+  font-size: 13px;
+}
+.page-error {
+  padding: 0 14px 13px 68px;
+  margin: 0;
+}
 .row-dot,
 .glow-dot {
   width: 9px;

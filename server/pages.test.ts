@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { Page } from '../shared/types';
-import { holdBrief, pageBriefLine, pageInput, pagesDue, refreshTime } from './pages';
+import { holdBrief, pageBriefLine, pageInput, pagesDue, refreshTime, refreshToCancel } from './pages';
 
 const page = (id: string, fields: Partial<Page> = {}): Page => ({
   id,
@@ -80,5 +80,16 @@ describe('brief and standing pages', () => {
     expect(line({ refreshed_on: today, task_id: 't' })).toContain('stopped');
     expect(line({ refreshed_on: today })).toContain('set up today');
     expect(line({ refreshed_on: '2026-10-21', task_id: 't', last_ok: true, changed: 'old' })).toContain('not refreshed yet today');
+  });
+});
+
+describe('stopping a standing page', () => {
+  test('cancels a refresh still in flight, but never the caller itself', () => {
+    const p = page('a', { task_id: 't1' });
+    expect(refreshToCancel(p, true)).toBe('t1');
+    expect(refreshToCancel(p, true, 'other')).toBe('t1');
+    expect(refreshToCancel(p, true, 't1')).toBeNull();
+    expect(refreshToCancel(p, false)).toBeNull();
+    expect(refreshToCancel(page('b'), true)).toBeNull();
   });
 });

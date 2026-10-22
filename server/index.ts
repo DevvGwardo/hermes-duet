@@ -7,7 +7,7 @@ import { config } from './config';
 import { files, items, kv, pages, settings, tasks } from './db';
 import { hermes } from './hermes';
 import { hasSubscriptions, notify, publicKey, saveSubscription } from './push';
-import { actOnCard, agentState, cancelTask, executeTool, recoverOrphans, runBrief, runCheckin, startHermesWatch, stopMain, submitUser } from './runner';
+import { actOnCard, agentState, cancelTask, executeTool, recoverOrphans, runBrief, runCheckin, startHermesWatch, stopMain, stopPage, submitUser } from './runner';
 import { startScheduler } from './scheduler';
 import { broadcast } from './bus';
 
@@ -107,6 +107,11 @@ async function handleApp(req: Request): Promise<Response> {
     const taskMatch = path.match(/^\/api\/tasks\/([\w-]+)\/cancel$/);
     if (taskMatch && req.method === 'POST') {
       await cancelTask(taskMatch[1]);
+      return json({ ok: true });
+    }
+    const pageMatch = path.match(/^\/api\/pages\/([\w-]+)$/);
+    if (pageMatch && req.method === 'DELETE') {
+      await stopPage(pageMatch[1]);
       return json({ ok: true });
     }
 
