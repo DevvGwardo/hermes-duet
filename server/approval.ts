@@ -61,6 +61,24 @@ export function deadPrompts(pending: Item[], live: ReadonlySet<string>): Item[] 
   return pending.filter((i) => i.card?.status === 'pending' && i.card.hermes && !live.has(i.card.hermes.run_id));
 }
 
+export const REPLACED = 'Replaced by a newer version';
+
+/**
+ * Why the card a `request_approval` / `ask` names in `replaces` can't be withdrawn, or null if it can. A redraft
+ * ("make it shorter") otherwise leaves the old card live beside the new one: both sit in "Needs you", and approving
+ * the old one tells the agent to send the old draft. Only a Duet card of the same kind, still pending, from the
+ * calling session qualifies, so a task can't withdraw the main thread's card and Duet's own cards stay put.
+ */
+export function replaceRefusal(target: Item | null | undefined, type: 'approval' | 'choice', sessionId: string): string | null {
+  const c = target?.kind === 'card' ? target.card : undefined;
+  if (!c) return 'there is no such card';
+  if (c.type !== type || c.hermes || c.resume || c.rerun) return `it is not one of your ${type === 'approval' ? 'request_approval' : 'ask'} cards`;
+  if (c.session_id !== sessionId) return 'it belongs to another conversation';
+  if (c.status === 'expired') return 'it already expired';
+  if (c.status !== 'pending') return `the user already ${c.status} it`;
+  return null;
+}
+
 /** The message that resumes the agent's session after an approval decision. */
 export function approvalPrompt(card: Item, approved: boolean): string {
   const c = card.card!;

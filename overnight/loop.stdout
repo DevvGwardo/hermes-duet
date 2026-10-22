@@ -211,3 +211,10 @@
 1:48AM INF no leaks found
 [2026-10-22 01:48:08] iter 27 done · exit=0 gate=green committed=True changed=6
 [2026-10-22 01:48:29] iter 28 start → iter-28-20261022-014829.log
+[2026-10-22 01:51:36] iter 28 commit=ok · [overnight/claude-duet-20261022 eb6bbbe] overnight(iter 28): DONE: Agent notify leaves nothing in the thread
+ 12 files changed, 79 insertions(+), 15 deletions(-)
+1:51AM INF 0 commits scanned.
+1:51AM INF scanned ~8965 bytes (8.97 KB) in 20.6ms
+1:51AM INF no leaks found
+[2026-10-22 01:51:36] iter 28 done · exit=0 gate=green committed=True changed=11
+[2026-10-22 01:51:56] iter 29 start → iter-29-20261022-015156.log

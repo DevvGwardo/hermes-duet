@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import type { CardData, Item } from '../shared/types';
-import { approvalDecision, approvalPrompt, approvalPush, deadPrompts } from './approval';
+import { approvalDecision, approvalPrompt, approvalPush, deadPrompts, replaceRefusal } from './approval';
 
 const card = (extra: Partial<CardData> = {}): CardData => ({ type: 'approval', title: 'Send the reply to Dana', status: 'pending', ...extra });
 const item = (c: CardData): Item => ({ id: 'c1', kind: 'card', created_at: 0, updated_at: 0, card: c });
@@ -73,4 +73,20 @@ test('a Hermes prompt dies with its run; Duet cards and live runs stay pending',
   ];
   expect(deadPrompts(pending, new Set(['r2'])).map((i) => i.id)).toEqual(['dead', 'dead-question']);
   expect(deadPrompts(pending, new Set(['r1', 'r2']))).toEqual([]);
+});
+
+test('a redraft withdraws only its own pending card of the same kind', () => {
+  const at = (c: Partial<CardData>): Item => item(card({ session_id: 'main', ...c }));
+  expect(replaceRefusal(at({ draft: 'Hi Dana' }), 'approval', 'main')).toBeNull();
+  expect(replaceRefusal(at({ type: 'choice', options: ['A', 'B'] }), 'choice', 'main')).toBeNull();
+  expect(replaceRefusal(null, 'approval', 'main')).toBe('there is no such card');
+  // A question can't stand in for an approval, and Duet's own cards and Hermes prompts aren't the agent's to withdraw.
+  expect(replaceRefusal(at({ type: 'choice' }), 'approval', 'main')).toContain('not one of your request_approval cards');
+  expect(replaceRefusal(at({ type: 'choice', resume: true }), 'choice', 'main')).toContain('not one of your ask cards');
+  expect(replaceRefusal(at({ hermes: { kind: 'approval', run_id: 'r', request_id: 'q', generation: 1 } }), 'approval', 'main')).not.toBeNull();
+  // A background task can't withdraw the main thread's card.
+  expect(replaceRefusal(at({}), 'approval', 'duet-task-1')).toBe('it belongs to another conversation');
+  // Once decided, the old version stands, and the agent is told why nothing was replaced.
+  expect(replaceRefusal(at({ status: 'approved' }), 'approval', 'main')).toBe('the user already approved it');
+  expect(replaceRefusal(at({ status: 'expired' }), 'approval', 'main')).toBe('it already expired');
 });

@@ -1,7 +1,7 @@
 import { copyFileSync, mkdirSync, statSync } from 'node:fs';
 import { basename, extname, isAbsolute, join, resolve } from 'node:path';
 import type { AgentState, CardData, FileEntry, Item, Page, Task, TaskStep, ToolStep } from '../shared/types';
-import { DRAFT_MAX, PROMPT_ENDED, approvalDecision, approvalPush, deadPrompts } from './approval';
+import { DRAFT_MAX, PROMPT_ENDED, REPLACED, approvalDecision, approvalPush, deadPrompts, replaceRefusal } from './approval';
 import { BRIEF_RETRY, briefCard, briefFailure, briefTitle, checkinOutcome, morningOutcome, notifyRefusal, raisedToday, useAction, useDraft } from './brief';
 import { broadcast } from './bus';
 import { inQuietHours, localParts } from './clock';
@@ -1116,11 +1116,32 @@ function postCard(card: CardData, o: Origin): Item {
   return put(newItem('card', { card: { ...card, task_id: o.taskId ?? undefined, session_id: o.sessionId }, run_id: o.run?.id ?? null, task_id: o.taskId }));
 }
 
+/**
+ * The earlier card a redrafted `request_approval` / `ask` withdraws (`replaces`). It is checked before the new card
+ * is posted, and `apply` expires it once the new one is up, before the push reads the badge count. `apply` returns
+ * the withdrawn id for use as the push tag.
+ */
+function replacing(id: unknown, type: 'approval' | 'choice', o: Origin): { note: string; apply: () => string | undefined } {
+  const cardId = str(id, 64).trim();
+  if (!cardId) return { note: '', apply: () => undefined };
+  const old = items.get(cardId);
+  const refused = replaceRefusal(old, type, o.sessionId);
+  if (refused || !old) return { note: ` Card ${cardId} was not replaced: ${refused}.`, apply: () => undefined };
+  return {
+    note: ` It replaces card ${cardId}, which is withdrawn, so only the new card can be answered.`,
+    apply: () => {
+      put({ ...old, card: { ...old.card!, status: 'expired', decision: REPLACED, decided_at: Date.now() } });
+      return cardId;
+    },
+  };
+}
+
 export async function executeTool(name: string, args: Record<string, unknown>): Promise<string> {
   kv.set('last_tool_call_at', Date.now());
   const o = await originOf(name, args.task_id);
   switch (name) {
     case 'request_approval': {
+      const swap = replacing(args.replaces, 'approval', o);
       const item = postCard(
         {
           type: 'approval',
@@ -1133,16 +1154,20 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
         o,
       );
       if (o.taskId) markTaskWaiting(o.taskId);
-      pushSafe(approvalPush(item), { ignoreQuiet: true });
-      return `Approval card ${item.id} is on the user's phone. They have NOT approved yet. Do not take the action now. Tell them in one short line what you're waiting on, then end your turn. You'll get "[approval ${item.id}] APPROVED" or "NOT NOW" as a new message.`;
+      const replaced = swap.apply();
+      // Same tag as the withdrawn card's push, so the new banner takes the old one's place on the lock screen.
+      pushSafe({ ...approvalPush(item), ...(replaced && { tag: replaced }) }, { ignoreQuiet: true });
+      return `Approval card ${item.id} is on the user's phone.${swap.note} They have NOT approved yet. Do not take the action now. Tell them in one short line what you're waiting on, then end your turn. You'll get "[approval ${item.id}] APPROVED" or "NOT NOW" as a new message.`;
     }
     case 'ask': {
       const options = Array.isArray(args.options) ? args.options.map((x) => str(x, 60).trim()).filter(Boolean).slice(0, 4) : [];
       if (options.length < 2) throw new Error('ask needs 2-4 options');
+      const swap = replacing(args.replaces, 'choice', o);
       const item = postCard({ type: 'choice', title: req(args.question, 'question', 200), body: str(args.context, 4000) || undefined, options, status: 'pending' }, o);
       if (o.taskId) markTaskWaiting(o.taskId);
-      pushSafe({ title: 'Quick question', body: item.card!.title, card_id: item.id, tag: item.id, url: `/?card=${item.id}` });
-      return `Question card ${item.id} posted. End your turn now; the answer arrives as "[answer ${item.id}] …".`;
+      const replaced = swap.apply();
+      pushSafe({ title: 'Quick question', body: item.card!.title, card_id: item.id, tag: replaced ?? item.id, url: `/?card=${item.id}` });
+      return `Question card ${item.id} posted.${swap.note} End your turn now; the answer arrives as "[answer ${item.id}] …".`;
     }
     case 'post_brief': {
       const morning = o.run?.spec.kind === 'brief';

@@ -20,6 +20,11 @@ export const TOOLS = [
             'For messages, emails and posts: the exact text you will send, as plain text without headers. The user can edit it on the card; if they do, the APPROVED message contains their version and you must send that text exactly.',
         },
         action_label: { type: 'string', description: 'Primary button verb, e.g. "Send", "Pay $640", "Delete". Default "Approve".' },
+        replaces: {
+          type: 'string',
+          description:
+            'When this redrafts an approval that is still waiting (the user asked for changes in chat instead of tapping), the card_id of that earlier card. It is withdrawn so the old version can no longer be approved.',
+        },
         task_id: taskId,
       },
       required: ['title', 'summary'],
@@ -36,6 +41,7 @@ export const TOOLS = [
         question: { type: 'string' },
         options: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 4 },
         context: { type: 'string', description: 'Optional markdown with the background needed to answer.' },
+        replaces: { type: 'string', description: 'The card_id of an earlier question still waiting that this one supersedes. It is withdrawn so it can no longer be answered.' },
         task_id: taskId,
       },
       required: ['question', 'options'],

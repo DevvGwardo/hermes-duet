@@ -630,3 +630,27 @@ DONE: Notification taps on briefs and handovers don't open the card
 - `stillWorth` (server/held.ts) keeps held pushes for `alert` notes, so a notify sent during quiet hours comes back in "While you were away". The new pure `notifyRefusal` (server/brief.ts) refuses `notify` in check-in and morning-brief runs, which reach the user only through `post_brief`. CardView labels these notes "Heads up". The tool description and README are updated. +1 test, +2 assertions.
 - Why it matters against Claude Duet: "goes quiet until something genuinely needs you". Check-ins could no longer bypass their judgment rule, and what did need the user is now in the one thread instead of only in a banner.
 - Verified: typecheck pass · test 88 pass / 0 fail · build pass
+
+## 2026-10-22T01:51:36Z — loop iteration 28
+- exit=0 gate=green committed=True files=11
+- gate: typecheck: exit 0
+- answer:
+```
+ connectors
+DONE: Agent notify leaves nothing in the thread
+- **What was wrong:** the backlog had no open items the loop could take, so I picked this one myself. When the agent used `notify`, it got told "The item is in the thread", but nothing was ever posted there. Tapping the notification opened Chat with nothing to see, and quiet hours threw the push away. A check-in could also use `notify` to buzz the phone without going through `post_brief`, which skipped its rule of only speaking up when something needs a decision.
+- **Fix:** in `server/runner.ts`, `notify` now posts a "Heads up" note card in the thread (new `alert` flag in `shared/types.ts`, label in `CardView.tsx`), and the notification opens that card. `stillWorth` in `server/held.ts` keeps these pushes during quiet hours, so they come back in the "While you were away" push.
+- **Check-ins and briefs:** a new `notifyRefusal` in `server/brief.ts` refuses `notify` in check-ins and the morning brief, so they reach you only through `post_brief`. The tool description in `server/tools.ts` and the README say so.
+- **Tests:** 1 new test and 2 new checks. Backlog item added already ticked, plus a journal entry. Not tried on a real phone.
+- typecheck: `tsc -p tsconfig.json --noEmit` → exit 0
+- test: `88 pass, 0 fail, 305 expect() calls` → exit 0
+- build: `✓ built in 102ms` → exit 0
+
+> CORRECTION: there was no unchecked, unblocked item for this iteration, so I found and added this one myself instead of taking one from the list.
+```
+
+## 2026-10-22T06:05Z — A redrafted approval leaves the old one approvable
+- What changed: the backlog had no open, unblocked items, so this iteration audited the approval flow and added this item. The new pure `replaceRefusal` (server/approval.ts, +1 test) decides whether the card named in `replaces` can be withdrawn. It must be the same kind, still pending, from the calling session, and not a Hermes prompt or a resume/rerun card.
+- `replacing` (server/runner.ts) checks before posting. Once the new card is up it expires the old one with decision "Replaced by a newer version", which happens before the push reads the badge count. The new push reuses the old card's tag, so the banner on the lock screen is swapped rather than added. A refused `replaces` still posts the new card, and the tool result says why nothing was withdrawn. Updated: tool schemas (server/tools.ts), a persona line (server/prompts.ts), README.
+- Why it matters against Claude Duet: "waits for your ok when it matters". There should be one approval per decision, and approving a stale card must never send a draft the user already asked to change.
+- Verified: typecheck pass · test 89 pass / 0 fail · build pass

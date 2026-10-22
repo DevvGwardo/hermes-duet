@@ -41,8 +41,8 @@
 
   | Tool | What it does |
   |---|---|
-  | `request_approval` | Posts an Approve / Not now card, with an optional `draft` (the exact text to send) the user can edit before approving. The turn ends, and tapping resumes the same session; an edited draft comes back verbatim. |
-  | `ask` | Asks a question with 2–4 tappable answers. |
+  | `request_approval` | Posts an Approve / Not now card, with an optional `draft` (the exact text to send) the user can edit before approving. The turn ends, and tapping resumes the same session; an edited draft comes back verbatim. A redraft asked for in chat passes `replaces`, which withdraws the earlier card so its old version can't be approved. |
+  | `ask` | Asks a question with 2–4 tappable answers, optionally replacing an earlier question still waiting. |
   | `post_brief` | Posts a brief: up to 5 decisions ranked high to low, each with an optional prepared draft and one-tap follow-up (on an entry with a draft, the tap hands that draft back to the agent, which asks for approval with it instead of redrafting), plus a muted Watching list that never notifies. A quiet morning brief may be Watching only, posted without a push. |
   | `post_card` | Posts a checklist, metrics or note, and can update it in place. |
   | `deliver_file` | Hands over a doc, sheet, deck or dashboard. HTML renders live but sandboxed. |
