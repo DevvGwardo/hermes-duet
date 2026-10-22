@@ -136,6 +136,30 @@ export const TOOLS = [
     },
   },
   {
+    name: 'save_page',
+    description:
+      'Make a delivered file a standing page: something the user checks every morning (e.g. "build me one page I can check every morning"). ' +
+      'Build and deliver the first version with deliver_file, then call this with the file id it returned and instructions for rebuilding the page. ' +
+      'Every day, 30 minutes before the morning brief, Hermes Duet runs those instructions as a background task that delivers a fresh version in place of the old one. ' +
+      'Pass page_id to change an existing page, or page_id with remove: true when the user no longer wants it.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        file_id: { type: 'string', description: 'The file id deliver_file returned for the current version.' },
+        title: { type: 'string', description: 'Short page name, e.g. "Morning dashboard".' },
+        instructions: {
+          type: 'string',
+          description:
+            'Self-contained instructions for rebuilding it from scratch each morning: the sources to read, the sections and layout, the file format, and what to compare against the previous version. The refresh runs in a fresh session that knows nothing else.',
+        },
+        page_id: { type: 'string', description: 'An existing page to update or remove.' },
+        remove: { type: 'boolean', description: 'With page_id: stop refreshing that page. Its files stay in the Make tab.' },
+        task_id: taskId,
+      },
+      required: [],
+    },
+  },
+  {
     name: 'start_task',
     description:
       'Start a larger piece of work in the background (research, building a deck/model/dashboard, multi-step errands) so the conversation stays free. ' +

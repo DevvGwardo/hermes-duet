@@ -1,15 +1,16 @@
 import { copyFileSync, mkdirSync, statSync } from 'node:fs';
 import { basename, extname, isAbsolute, join, resolve } from 'node:path';
-import type { AgentState, CardData, FileEntry, Item, Task, TaskStep, ToolStep } from '../shared/types';
+import type { AgentState, CardData, FileEntry, Item, Page, Task, TaskStep, ToolStep } from '../shared/types';
 import { DRAFT_MAX, approvalDecision } from './approval';
 import { briefCard, briefTitle, checkinOutcome, useDraft } from './brief';
 import { broadcast } from './bus';
 import { localParts } from './clock';
 import { config } from './config';
-import { files, items, kv, newId, runs, settings, tasks } from './db';
+import { files, items, kv, newId, pages, runs, settings, tasks } from './db';
 import { followUps, handoverCard } from './handover';
 import { HermesError, hermes, type RunEvent } from './hermes';
-import { briefPrompt, checkinPrompt, decisionPrompt, persona, taskPrompt } from './prompts';
+import { MAX_PAGES, pageInput, refreshTime } from './pages';
+import { briefPrompt, checkinPrompt, decisionPrompt, pageRefreshInstructions, persona, taskPrompt } from './prompts';
 import { notify } from './push';
 
 // ---------------------------------------------------------------------------
@@ -624,6 +625,7 @@ function onTaskRunEnd(taskId: string, run: ActiveRun, status: 'done' | 'error' |
 function announceEnd(final: Task) {
   const taskId = final.id;
   if (final.status !== 'done' && final.status !== 'failed') return;
+  if (final.page_id) return pageRefreshEnded(final);
   const card = handOver(final);
   const delivered = (card.card!.file_ids ?? []).map((id) => files.get(id)?.entry.title).filter(Boolean);
   const filesNote = delivered.length ? ` Files: ${delivered.join('; ')}.` : '';
@@ -634,6 +636,62 @@ function announceEnd(final: Task) {
     addContextNote(`Background task "${final.title}" (${taskId}) failed: ${final.result ?? ''}${filesNote} The user has its card in the thread${card.card!.retry ? ', with a "Try again" button' : ''}.`);
     pushSafe({ title: `Task failed: ${final.title}`, body: firstLine(final.result ?? ''), tag: `task-${taskId}`, url: `/?card=${card.id}` });
   }
+}
+
+/**
+ * A standing page's scheduled refresh ended. It runs before the brief, so it never pushes and a success posts no
+ * card: the new version is already in Make. A failure leaves the muted handover card, so "Try again" is one tap.
+ */
+function pageRefreshEnded(final: Task) {
+  const page = pages.get(final.page_id!);
+  if (!page) return;
+  // Done only counts if this attempt actually delivered a new version (deliverFile moves refreshed_at).
+  const fresh = (page.refreshed_at ?? 0) >= (final.retried_at ?? final.created_at);
+  const ok = final.status === 'done' && fresh;
+  const result = ok ? final.result || 'Refreshed.' : final.status === 'done' ? 'Finished without delivering a new version.' : final.result || 'Stopped before it finished.';
+  pages.save({ ...page, task_id: final.id, last_ok: ok, last_result: result });
+  if (final.status === 'failed') handOver(final);
+  addContextNote(`Standing page "${page.title}" (${page.id}) ${ok ? 'refreshed' : 'did not refresh'} this morning: ${result}`);
+}
+
+/** The page's latest refresh is still queued, running or waiting on the user. */
+export function pageRefreshing(p: Page): boolean {
+  const t = p.task_id ? tasks.get(p.task_id) : null;
+  return !!t && ['queued', 'running', 'waiting'].includes(t.status);
+}
+
+/** Start a standing page's daily refresh as a background task; it shows in Tasks like any other. */
+export function refreshPage(page: Page, date: string) {
+  if (pageRefreshing(page)) return;
+  const current = files.get(page.file_id);
+  const t = startTask(`Refresh: ${page.title}`, pageRefreshInstructions(page, current?.path ?? null), [], page.id);
+  pages.save({ ...page, refreshed_on: date, task_id: t.id });
+  console.log(`[pages] refreshing ${page.id} (${page.title}) as task ${t.id}`);
+}
+
+/** save_page: create, update or remove a standing page. */
+function savePage(args: Record<string, unknown>): string {
+  const pageId = str(args.page_id, 64).trim();
+  const existing = pageId ? pages.get(pageId) : null;
+  if (pageId && !existing) throw new Error(`no page ${pageId}`);
+  if (args.remove === true) {
+    if (!existing) throw new Error('remove needs page_id');
+    pages.remove(existing.id);
+    return `Page ${existing.id} ("${existing.title}") removed. It no longer refreshes; its files stay in the Make tab.`;
+  }
+  const input = pageInput(args, existing);
+  if (!files.get(input.file_id)) throw new Error(`no file ${input.file_id}; pass the id deliver_file returned`);
+  const s = settings.get();
+  const at = refreshTime(s.brief_time);
+  if (existing) {
+    pages.save({ ...existing, ...input });
+    return `Page ${existing.id} ("${input.title}") updated. It still refreshes every day at ${at}.`;
+  }
+  if (pages.all().length >= MAX_PAGES) throw new Error(`there are already ${MAX_PAGES} standing pages; update or remove one first`);
+  const now = Date.now();
+  // The first version was just built, so today counts as refreshed.
+  const page = pages.save({ id: newId(), ...input, refreshed_on: localParts(s.timezone).date, refreshed_at: now, created_at: now, updated_at: now });
+  return `Saved standing page ${page.id} ("${page.title}"). It refreshes every day at ${at}, 30 minutes before the morning brief, as a background task that delivers the new version in its place. Use page_id="${page.id}" to change it later, or with remove: true to stop it.`;
 }
 
 /** Post the task's handover card, or refresh it in place if this task already handed over once. */
@@ -1018,6 +1076,12 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
     }
     case 'deliver_file': {
       const entry = deliverFile({ path: req(args.path, 'path', 2000), title: req(args.title, 'title', 140), summary: str(args.summary, 1000) }, o);
+      const page = pageOf(o.taskId);
+      if (page) {
+        return page.file_id === entry.id
+          ? `Delivered "${entry.title}" (file ${entry.id}). It is now the current version of the page "${page.title}".`
+          : `Delivered "${entry.title}" (file ${entry.id}), but it is not the same kind of file as the page "${page.title}", so the page still shows its previous version.`;
+      }
       return backgroundTask(o.taskId)
         ? `Delivered "${entry.title}" (file ${entry.id}). It is in the Make tab now and goes on this task's handover card when you finish.`
         : `Delivered "${entry.title}" (file ${entry.id}). The user sees it in the thread and the Make tab.`;
@@ -1026,6 +1090,8 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
       const t = startTask(req(args.title, 'title', 120), req(args.instructions, 'instructions', 20_000), Array.isArray(args.steps) ? args.steps.map((s) => str(s, 200)) : []);
       return `Started background task ${t.id} ("${t.title}"). It's in the user's Tasks tab. Tell them in one line, then end your turn. When it finishes, the user gets a handover card in the thread, and a note with its result reaches you with their next message.`;
     }
+    case 'save_page':
+      return savePage(args);
     case 'update_task': {
       const id = req(args.task_id, 'task_id', 64);
       const t = tasks.get(id);
@@ -1098,14 +1164,23 @@ function deliverFile(a: { path: string; title: string; summary?: string }, o: Or
   };
   files.add(entry, dest);
   broadcast({ type: 'file', file: entry });
+  // A page refresh's file replaces the page's current version, but only if it's the same kind of file, so a
+  // stray screenshot or CSV from the same run can't take the dashboard's place.
+  const page = pageOf(o.taskId);
+  const current = page ? files.get(page.file_id) : null;
+  if (page && (!current || current.entry.mime === entry.mime)) pages.save({ ...page, file_id: id, refreshed_at: entry.created_at });
   // A background task's files arrive together on its handover card instead of one card each mid-run.
   if (!backgroundTask(o.taskId)) postCard({ type: 'file', title: a.title, body: a.summary || undefined, file_id: id, status: 'info' }, o);
   return entry;
 }
 
 const backgroundTask = (taskId: string | null) => !!taskId && !!tasks.get(taskId)?.background;
+const pageOf = (taskId: string | null) => {
+  const pageId = taskId ? tasks.get(taskId)?.page_id : undefined;
+  return pageId ? pages.get(pageId) : null;
+};
 
-function startTask(title: string, instructions: string, steps: string[]): Task {
+function startTask(title: string, instructions: string, steps: string[], pageId?: string): Task {
   const now = Date.now();
   const task: Task = {
     id: newId(),
@@ -1117,6 +1192,7 @@ function startTask(title: string, instructions: string, steps: string[]): Task {
     updated_at: now,
     background: true,
     instructions,
+    page_id: pageId,
   };
   const sessionId = `duet-task-${task.id}`;
   putTask(task, sessionId);

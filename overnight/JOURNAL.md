@@ -180,3 +180,24 @@ DONE: Morning brief with nothing to decide
 - Web: `BriefList` gives every entry with a draft a chip (`action_label` or "Send as drafted") that calls the card action, stays "On it" from `used` across reloads, and shows errors. `post_brief` tool description, `briefPrompt` and README row updated. Discovered: other follow-up chips keep "On it" only in memory (new backlog item).
 - Why it matters against Claude Duet: a brief decision with its draft ready goes to a one-tap approval card with that same draft, instead of the agent redrafting from a vague message.
 - Verified: typecheck pass · test 40 pass / 0 fail · build pass
+
+## 2026-10-22T00:56:34Z — loop iteration 9
+- exit=0 gate=green committed=True files=10
+- gate: typecheck: exit 0
+- answer:
+```
+Tapping it sends the action `use_draft` with the entry's index (`actOnCard` in `server/runner.ts`). The server reads the draft from the saved card, not from the phone, and marks the entry `used`. The thread shows a short "<label>: <title>" line. The agent gets the entry and the draft word for word, with an instruction to call `request_approval` with exactly that text if it goes out. The prompt is built by the new `useDraft` in `server/brief.ts`.
+- `submitUser` can now take what the agent receives separately from what the thread shows. `BriefEntry` has a new `used` field (`shared/types.ts`), and the model can't set it itself.
+- `web/src/components/CardView.tsx`: the button still reads "On it" after a reload because it reads `used` from the saved card, and errors show under the list. Entries without a draft still send `action_message` as before. Also updated: the `post_brief` description in `server/tools.ts`, `briefPrompt` in `server/prompts.ts`, and the README row. 4 new tests in `server/brief.test.ts`.
+- New backlog item: the other one-tap buttons (`action_message` buttons on brief entries and the follow-ups on finished-task cards) only remember the tap until reload. After that they can be tapped again and send the same request twice.
+- typecheck: `tsc -p tsconfig.json --noEmit` → exit 0
+- test: `40 pass, 0 fail, 153 expect() calls` → exit 0
+- build: `✓ built in 2.33s` → exit 0
+SessionEnd hook [node "${CLAUDE_PLUGIN_ROOT}/hooks/session-end-cleanup.mjs"] failed: Hook cancelled
+```
+
+## 2026-10-22T05:01Z — Standing page: storage, schedule and tool
+- What changed: `pages` table + `pages` accessor (server/db.ts) and `Page` / `Task.page_id` (shared/types.ts). New pure `server/pages.ts` (`refreshTime` = brief_time − 30 min clamped at 00:00, `pagesDue` once per local day with catch-up until midday and skip-while-running, `pageInput`) + `server/pages.test.ts` (6 tests). New `save_page` tool (create from a delivered `file_id` + rebuild instructions, update via `page_id`, `remove`); creation marks today as refreshed; max 10 pages.
+- `server/scheduler.ts` calls `refreshPage` for due pages before the brief block; it starts a background task "Refresh: <title>" from `pageRefreshInstructions` (prompts.ts: saved instructions, path of the current version, write to ~/duet-work/page-<id>/). In `deliverFile`, a page task's file replaces `page.file_id` only if the mime matches. `pageRefreshEnded` (via `announceEnd`) records `last_ok`/`last_result`, never pushes, posts no card on success and the muted retry card on failure; done without a new file counts as not refreshed. Persona line and README row added. "Refresh time" is derived from `brief_time`, not stored, so it follows the setting.
+- Why it matters against Claude Duet: "build me one page I can check every morning" now has a standing artifact that rebuilds itself before the brief.
+- Verified: typecheck pass · test 46 pass / 0 fail · build pass

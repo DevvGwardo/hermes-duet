@@ -1,7 +1,7 @@
 import { Database } from 'bun:sqlite';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import type { FileEntry, Item, Settings, Task } from '../shared/types';
+import type { FileEntry, Item, Page, Settings, Task } from '../shared/types';
 import { config } from './config';
 
 mkdirSync(config.dataDir, { recursive: true });
@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS runs (
   id TEXT PRIMARY KEY, kind TEXT NOT NULL, session_id TEXT NOT NULL, task_id TEXT, status TEXT NOT NULL,
   started_at INTEGER NOT NULL, ended_at INTEGER, error TEXT, meta TEXT
 );
+CREATE TABLE IF NOT EXISTS pages (id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS devices (
   id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, name TEXT, created_at INTEGER NOT NULL, last_seen INTEGER NOT NULL
@@ -157,6 +158,28 @@ export const files = {
   },
   all(): FileEntry[] {
     return filesAll.all().map((r) => JSON.parse(r.json) as FileEntry);
+  },
+};
+
+// ---------- pages ----------
+const pageUpsert = db.query('INSERT INTO pages(id, created_at, json) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET json = excluded.json');
+const pageGet = db.query<{ json: string }, [string]>('SELECT json FROM pages WHERE id = ?');
+const pagesAll = db.query<{ json: string }, []>('SELECT json FROM pages ORDER BY created_at');
+export const pages = {
+  save(page: Page) {
+    page.updated_at = Date.now();
+    pageUpsert.run(page.id, page.created_at, JSON.stringify(page));
+    return page;
+  },
+  get(id: string): Page | null {
+    const row = pageGet.get(id);
+    return row ? (JSON.parse(row.json) as Page) : null;
+  },
+  all(): Page[] {
+    return pagesAll.all().map((r) => JSON.parse(r.json) as Page);
+  },
+  remove(id: string) {
+    db.query('DELETE FROM pages WHERE id = ?').run(id);
   },
 };
 

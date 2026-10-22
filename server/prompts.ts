@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import type { Item, Settings, Task } from '../shared/types';
+import type { Item, Page, Settings, Task } from '../shared/types';
 import { approvalPrompt } from './approval';
 import { friendlyNow } from './clock';
 import { config } from './config';
@@ -41,6 +41,7 @@ Bigger work
 - Building or researching anything (a dashboard, deck, sheet, report, model, multi-step errand) or anything that takes more than a minute: call start_task FIRST with complete, self-contained instructions, tell the user in one line that it's running, and end your turn. Don't do that work inline in the chat; the user wants the thread free while it runs.
 - Put deliverables in ${WORK_DIR}/<short-slug>/ and hand them over with deliver_file. A single self-contained .html file is the best format for decks and dashboards because it renders live on the phone. Style HTML to match the app's Hermes look: a dark manga/ink theme (charcoal background #0e0e0e, panels #161616 with crisp 1.5px off-white borders #f3eee3 and small radii, off-white text #f3eee3 / #b9b2a3, gold accents #ffd700 / #ffbf00 / #cd853f, hard offset shadows instead of soft glows, a subtle halftone dot texture, Inter or system sans, JetBrains Mono for numbers), and make it work at phone width. Use .md for documents and .csv for sheets.
 - For multi-step work, post a checklist with post_card and update it in place (card_id) as you go.
+- Something the user wants to check regularly ("one page I can check every morning") is a standing page: build and deliver it like any deliverable, then call save_page with its file id and complete rebuild instructions. It then refreshes itself every morning before the brief.
 
 Where the user's context lives (read-only unless noted)
 ${contextSources()}
@@ -98,6 +99,20 @@ ${retry}
 Work through this end to end in the background. Keep the user's Tasks tab current with update_task (task_id="${task.id}"): set a progress line as you go, and mark steps done. Deliver files with deliver_file. If you hit something that needs approval or a decision, use request_approval / ask with task_id="${task.id}" and end your turn; you'll be resumed with the answer.
 Your text replies are not shown to the user. When you finish, they get one handover card built from update_task: the result, the files you delivered, and your follow-ups.
 So when finished, call update_task with status "done" (or "failed"), a one or two line result, and, where there are obvious next steps, up to three follow_ups (e.g. label "Draft the email", message "Draft an email to the board sharing the Q3 deck"). Then end your turn with one short line.`;
+}
+
+/** The instructions a standing page's daily refresh task starts with (kept on the task, so "Try again" reuses them). */
+export function pageRefreshInstructions(page: Page, currentPath: string | null) {
+  const current = currentPath
+    ? `The current version is at ${currentPath}. Read it (don't edit it) and keep its layout unless the instructions say otherwise.`
+    : 'The current version is missing, so build it fresh.';
+  return `Refresh the standing page "${page.title}" (Hermes Duet page ${page.id}). The user checks it every morning, and this refresh runs on a schedule shortly before their morning brief.
+
+How to build it (written when the page was set up):
+${page.instructions}
+
+${current}
+Rebuild it with today's data, write the new version to ${WORK_DIR}/page-${page.id}/, and hand it over with deliver_file as the same kind of file. That replaces the page's current version; don't call save_page. If a source can't be reached, still deliver the page and say on it what is stale.`;
 }
 
 export function decisionPrompt(card: Item, decision: { approved?: boolean; answer?: string }) {

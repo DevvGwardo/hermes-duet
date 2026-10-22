@@ -138,9 +138,31 @@ export interface Task {
   instructions?: string;
   /** Set when "Try again" restarted it; files from earlier attempts stay off the new handover card. */
   retried_at?: number;
+  /** A standing page's scheduled refresh: the file it delivers becomes the page's current version. */
+  page_id?: string;
   created_at: number;
   updated_at: number;
   background: boolean;
+}
+
+/** A standing artifact the user checks every morning; rebuilt by a background task before each brief. */
+export interface Page {
+  id: string;
+  title: string;
+  /** Self-contained rebuild instructions the agent wrote with save_page: sources, layout, what to compare. */
+  instructions: string;
+  /** The current version; each refresh that delivers the same kind of file replaces it. */
+  file_id: string;
+  /** Local date ("YYYY-MM-DD") of the last scheduled refresh, so each day refreshes once. */
+  refreshed_on?: string;
+  /** When a new version last arrived. */
+  refreshed_at?: number;
+  /** The latest refresh task and how it went (`last_ok` is false when it failed or delivered no new version). */
+  task_id?: string;
+  last_ok?: boolean;
+  last_result?: string;
+  created_at: number;
+  updated_at: number;
 }
 
 export interface FileEntry {

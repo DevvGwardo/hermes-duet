@@ -67,3 +67,10 @@
 12:52AM INF no leaks found
 [2026-10-22 00:52:26] iter 8 done · exit=0 gate=green committed=True changed=9
 [2026-10-22 00:52:46] iter 9 start → iter-09-20261022-005246.log
+[2026-10-22 00:56:34] iter 9 commit=ok · [overnight/claude-duet-20261022 2edb50f] overnight(iter 9): DONE: Brief entries can become approvals in one tap
+ 11 files changed, 183 insertions(+), 44 deletions(-)
+12:56AM INF 0 commits scanned.
+12:56AM INF scanned ~13112 bytes (13.11 KB) in 267ms
+12:56AM INF no leaks found
+[2026-10-22 00:56:34] iter 9 done · exit=0 gate=green committed=True changed=10
+[2026-10-22 00:56:54] iter 10 start → iter-10-20261022-005654.log

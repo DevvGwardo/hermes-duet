@@ -1,16 +1,20 @@
-import { kv, settings } from './db';
+import { kv, pages, settings } from './db';
 import { hourlySlots, inQuietHours, localParts, toMinutes } from './clock';
-import { runBrief, runCheckin } from './runner';
+import { pagesDue } from './pages';
+import { pageRefreshing, refreshPage, runBrief, runCheckin } from './runner';
 
 const CHECKIN_3X = ['11:00', '14:00', '17:00'];
 
-/** Fires the morning brief and check-ins. Missed slots (Mac asleep) catch up once, within limits. */
+/** Fires standing-page refreshes, the morning brief and check-ins. Missed slots (Mac asleep) catch up once, within limits. */
 export function startScheduler() {
   if (process.env.DUET_DISABLE_SCHEDULER) return; // demo instances never call Hermes on their own
   const tick = () => {
     try {
       const s = settings.get();
       const now = localParts(s.timezone);
+
+      // Standing pages rebuild 30 minutes before the brief (whether or not the brief is on), each once a day.
+      for (const p of pagesDue(pages.all(), now, s.brief_time, pageRefreshing)) refreshPage(p, now.date);
 
       if (s.brief_enabled && kv.get('brief_last_date', '') !== now.date) {
         const due = toMinutes(s.brief_time);
