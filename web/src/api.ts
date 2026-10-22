@@ -1,3 +1,4 @@
+import { settledNotifications } from '../../shared/links';
 import type { Capabilities, Item, ServerEvent, Settings, Snapshot } from '../../shared/types';
 import { applyEvent, applySnapshot, getState, prependItems, setState } from './store';
 
@@ -154,6 +155,18 @@ async function subscribeDevice() {
   const sub = existing ?? (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToUint8Array((await api.pushKey()).key) }));
   await api.subscribe(sub.toJSON());
   setState({ pushEnabled: true });
+}
+
+/** Take banners for questions and approvals that were settled off the lock screen (settledNotifications). */
+export async function clearSettledNotifications() {
+  if (!('serviceWorker' in navigator)) return;
+  const reg = await navigator.serviceWorker.getRegistration();
+  const notes = (await reg?.getNotifications?.()) ?? [];
+  if (!notes.length) return;
+  const { items, pending } = getState();
+  // Pending last, so a card's server-side "still waiting" wins over an older copy in the loaded page.
+  const known = new Map([...items, ...pending].map((i) => [i.id, i]));
+  for (const n of settledNotifications(notes, (id) => known.get(id))) n.close();
 }
 
 let pushSynced = false;

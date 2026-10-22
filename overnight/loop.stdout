@@ -218,3 +218,10 @@
 1:51AM INF no leaks found
 [2026-10-22 01:51:36] iter 28 done · exit=0 gate=green committed=True changed=11
 [2026-10-22 01:51:56] iter 29 start → iter-29-20261022-015156.log
+[2026-10-22 01:54:59] iter 29 commit=ok · [overnight/claude-duet-20261022 7552bce] overnight(iter 29): DONE: A redrafted approval leaves the old one approvable
+ 9 files changed, 107 insertions(+), 9 deletions(-)
+1:54AM INF 0 commits scanned.
+1:54AM INF scanned ~10446 bytes (10.45 KB) in 25.9ms
+1:54AM INF no leaks found
+[2026-10-22 01:54:59] iter 29 done · exit=0 gate=green committed=True changed=8
+[2026-10-22 01:55:19] iter 30 start → iter-30-20261022-015519.log

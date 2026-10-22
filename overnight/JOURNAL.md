@@ -654,3 +654,28 @@ DONE: Agent notify leaves nothing in the thread
 - `replacing` (server/runner.ts) checks before posting. Once the new card is up it expires the old one with decision "Replaced by a newer version", which happens before the push reads the badge count. The new push reuses the old card's tag, so the banner on the lock screen is swapped rather than added. A refused `replaces` still posts the new card, and the tool result says why nothing was withdrawn. Updated: tool schemas (server/tools.ts), a persona line (server/prompts.ts), README.
 - Why it matters against Claude Duet: "waits for your ok when it matters". There should be one approval per decision, and approving a stale card must never send a draft the user already asked to change.
 - Verified: typecheck pass · test 89 pass / 0 fail · build pass
+
+## 2026-10-22T01:54:59Z — loop iteration 29
+- exit=0 gate=green committed=True files=8
+- gate: typecheck: exit 0
+- answer:
+```
+ef counted both, and approving the old card told the agent to send the draft the user had asked to change.
+- **Fix:** `request_approval` and `ask` now take an optional `replaces` card id. A new check, `replaceRefusal` in `server/approval.ts`, only lets the agent withdraw its own pending card of the same kind from the same conversation. It can't withdraw a Hermes prompt or one of Duet's own cards.
+- **How it behaves:** `replacing` in `server/runner.ts` marks the old card expired ("Replaced by a newer version") before the push reads the badge count. The new notification replaces the old one on the lock screen. If the replace is refused, the new card is still posted and the agent is told why nothing was withdrawn.
+- **Limit:** this only works if the agent passes the old card's id. If it forgets, both cards stay up as before.
+- **Also changed:** tool descriptions (`server/tools.ts`), a line in the agent's instructions (`server/prompts.ts`), README, 1 new test in `server/approval.test.ts`. The backlog item is added already ticked, plus a journal entry. Not tried with a real model or on a phone.
+- typecheck: `tsc -p tsconfig.json --noEmit` → exit 0
+- test: `89 pass, 0 fail, 314 expect() calls` → exit 0
+- build: `✓ built in 105ms` → exit 0
+
+> CORRECTION: there was no unchecked, unblocked item for this iteration, so I found and added this one myself instead of taking one from the list.
+SessionEnd hook [node "${CLAUDE_PLUGIN_ROOT}/hooks/session-end-cleanup.mjs"] failed: Hook cancelled
+```
+
+## 2026-10-22T06:10Z — Decided approvals stay on the lock screen
+- What changed: the backlog had no open, unblocked items, so this iteration audited the push lifecycle and added this item. A "Needs your OK" or "Quick question" banner stayed on the lock screen after the card was settled anywhere (in the app, on another device, replaced, expired with its run). Its Approve action then got a 400 the SW swallows.
+- New pure `isSettledAsk` / `settledNotifications` in shared/links.ts (+3 tests in the new server/links.test.ts). `clearSettledNotifications` (web/src/api.ts) closes those via `registration.getNotifications()`, with pending cards overriding older copies in the loaded page. App.tsx runs it on launch and whenever the set of settled asks changes; that set is a string selector, so streaming deltas don't re-run it. Briefs, handovers, "Heads up" notes and cards that aren't loaded are left alone. README line updated.
+- Not changed: server and sw.js. Clearing without the app open is a new low-priority backlog item; it can't be a push of its own, because iOS revokes subscriptions that push silently.
+- Why it matters against Claude Duet: "goes quiet until something genuinely needs you". A banner for a decision already made is a false "needs you".
+- Verified: typecheck pass · test 92 pass / 0 fail · build pass

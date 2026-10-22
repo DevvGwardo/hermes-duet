@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { cardOf } from '../../shared/links';
-import { api, connect, isStandalone, pushSupported } from './api';
+import { cardOf, isSettledAsk } from '../../shared/links';
+import { api, clearSettledNotifications, connect, isStandalone, pushSupported } from './api';
 import { Composer, type ComposerHandle } from './components/Composer';
 import { MakeView } from './components/MakeView';
 import { BrandBadge, MangaBackdrop, Mascot, SpeechBubble, Wordmark } from './components/Manga';
@@ -60,6 +60,8 @@ function Shell() {
   const pushEnabled = useStore((s) => s.pushEnabled);
   const pending = useStore((s) => s.pending.length);
   const working = useStore((s) => s.tasks.filter((t) => t.status === 'running' || t.status === 'waiting').length);
+  // A string, so streaming deltas don't re-run the effect below; it changes only when another ask is settled.
+  const settled = useStore((s) => s.items.filter(isSettledAsk).map((i) => i.id).join(' '));
   const [hideInstall, setHideInstall] = useState(() => localStorageGet('duet.hideInstall') === '1');
   const status = useStatus();
   const stirred = agent.busy || agent.background_running > 0;
@@ -69,6 +71,11 @@ function Shell() {
     const nav = navigator as any;
     (pending ? nav.setAppBadge?.(pending) : nav.clearAppBadge?.())?.catch?.(() => {});
   }, [pending]);
+
+  useEffect(() => {
+    // An approval or question decided here, on another device, or expired takes its banner with it.
+    clearSettledNotifications().catch(() => {});
+  }, [settled]);
 
   useEffect(() => {
     // Notification taps arrive here when the app is already open. Brief and handover pushes name their card only
