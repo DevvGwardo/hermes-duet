@@ -1248,6 +1248,30 @@ code {
 .brief-draft {
   margin-top: 6px;
 }
+.brief-actions {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+}
+.brief-actions .link {
+  color: var(--faint);
+}
+.brief-entry.is-skipped .brief-title {
+  color: var(--dim);
+  text-decoration: line-through;
+}
+.brief-entry.is-skipped .prio-dot {
+  background: var(--faint);
+  box-shadow: none;
+}
+.brief-skipped {
+  margin-top: 4px;
+  font-size: 12.5px;
+  color: var(--faint);
+}
+.brief-skipped .link {
+  margin: 0 0 0 8px;
+}
 .brief-draft > summary {
   cursor: pointer;
   font: 600 12px var(--mono);

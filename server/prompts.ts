@@ -60,10 +60,16 @@ function taskLines(list: Task[]) {
   return list.map((t) => `- [task ${t.id}] ${t.title}: ${t.status}${t.result ? `. ${t.result.slice(0, 200)}` : ''}`).join('\n');
 }
 
-/** `pages` holds one line per standing page (pageBriefLine): what its refresh this morning changed, or why not. */
-export function briefPrompt(s: Settings, ctx: { pending: Item[]; tasks: Task[]; pages: string[] }) {
+/**
+ * `pages` holds one line per standing page (pageBriefLine): what its refresh this morning changed, or why not.
+ * `skipped` holds decisions the user skipped in recent briefs (skippedLately).
+ */
+export function briefPrompt(s: Settings, ctx: { pending: Item[]; tasks: Task[]; pages: string[]; skipped: string[] }) {
   const pages = ctx.pages.length
     ? `\n\nStanding pages (rebuilt shortly before this brief; the user checks them every morning):\n${ctx.pages.join('\n')}`
+    : '';
+  const skipped = ctx.skipped.length
+    ? `\n\nSkipped by the user in a recent brief (they said it doesn't need them; don't raise it again, not even under watching, unless something material changed, and then put what changed in the title):\n${ctx.skipped.join('\n')}`
     : '';
   const pageStep = ctx.pages.length
     ? ` For each standing page, give the one thing that changed (or that its refresh failed) as a watching line, or as a decision if it needs one, with that page's id as page_id so tapping the line opens the page; don't repeat the whole page.`
@@ -80,7 +86,7 @@ Waiting on the user in Hermes Duet:
 ${pendingLines(ctx.pending)}
 
 Hermes Duet tasks (active, or finished in the last day):
-${taskLines(ctx.tasks)}${pages}`;
+${taskLines(ctx.tasks)}${pages}${skipped}`;
 }
 
 /** `raised` is what today's briefs already showed the user (raisedToday). */

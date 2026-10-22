@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { BriefEntry, Item } from '../shared/types';
-import { BRIEF_RETRY, EMPTY_MORNING_NOTE, USE_DRAFT_LABEL, briefCard, briefFailure, briefTitle, checkinOutcome, morningOutcome, notifyRefusal, raisedToday, useAction, useDraft } from './brief';
+import { BRIEF_RETRY, EMPTY_MORNING_NOTE, USE_DRAFT_LABEL, briefCard, briefFailure, briefTitle, checkinOutcome, morningOutcome, notifyRefusal, raisedToday, skipEntry, skippedLately, useAction, useDraft } from './brief';
 
 describe('check-ins stay silent unless a brief was posted', () => {
   test('free text never surfaces, NOOP or not', () => {
@@ -241,5 +241,58 @@ describe('check-ins see what today\'s briefs already raised', () => {
 
   test('no briefs today means nothing raised', () => {
     expect(raisedToday([])).toEqual({ decisions: [], watching: [] });
+  });
+
+  test('a skipped decision says so', () => {
+    expect(raisedToday([brief('b1', [{ title: 'Renew the domain', skipped_at: 1 }])]).decisions).toEqual([
+      '- [brief b1] Renew the domain (the user skipped it: it does not need them)',
+    ]);
+  });
+});
+
+describe('a skipped brief decision stays skipped', () => {
+  const card: { entries: BriefEntry[] } = {
+    entries: [
+      { title: 'Renew the domain', draft: 'Renew for 1 year' },
+      { title: 'Book the dentist', action_label: 'Find a slot', action_message: 'Find me a dentist slot' },
+      { title: 'Pay rent', used: true },
+    ],
+  };
+  const brief = (id: string, entries: BriefEntry[]): Item =>
+    ({ id, kind: 'card', created_at: 0, updated_at: 0, card: { type: 'brief', title: 'Brief', status: 'info', entries } }) as Item;
+
+  test('only the tapped entry is marked, the card is not mutated, and undo clears it', () => {
+    const skipped = skipEntry(card, '1', false, 42);
+    expect(skipped.map((e) => e.skipped_at)).toEqual([undefined, 42, undefined]);
+    expect(card.entries.some((e) => e.skipped_at)).toBe(false);
+    const undone = skipEntry({ entries: skipped }, '1', true);
+    expect(undone[1]).toEqual(card.entries[1]);
+  });
+
+  test('a second skip, an undo of nothing, an acted-on entry or a bad index is refused', () => {
+    expect(() => skipEntry({ entries: skipEntry(card, '0') }, '0')).toThrow(/already skipped/);
+    expect(() => skipEntry(card, '0', true)).toThrow(/not skipped/);
+    expect(() => skipEntry(card, '2')).toThrow(/already sent/);
+    for (const bad of [undefined, '', '-1', '9', '1.0']) expect(() => skipEntry(card, bad)).toThrow(/not on this brief/);
+  });
+
+  test('its chip is refused until the skip is undone', () => {
+    expect(() => useDraft({ entries: skipEntry(card, '0') }, 'c1', '0')).toThrow(/skipped/);
+    expect(() => useAction({ entries: skipEntry(card, '1') }, '1')).toThrow(/skipped/);
+  });
+
+  test('the model cannot pre-mark an entry as skipped', () => {
+    expect(briefCard({ entries: [{ title: 'x', skipped_at: 5 }] }).entries[0].skipped_at).toBeUndefined();
+  });
+
+  test('later briefs see skips by their newest brief, newest first, once each', () => {
+    const lines = skippedLately([
+      brief('b1', [{ title: 'Renew the domain', skipped_at: 1 }, { title: 'Call the bank', skipped_at: 1 }]),
+      brief('b2', [{ title: 'call the bank' }, { title: 'Cancel the gym', skipped_at: 2 }]),
+      brief('b3', [{ title: 'renew the domain', skipped_at: 3 }]),
+    ]);
+    // "Call the bank" came back in b2 and wasn't skipped there, so the user let it back in.
+    expect(lines).toEqual(['- renew the domain', '- Cancel the gym']);
+    expect(skippedLately([])).toEqual([]);
   });
 });

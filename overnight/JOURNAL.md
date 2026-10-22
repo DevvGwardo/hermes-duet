@@ -725,3 +725,27 @@ DONE: Clear settled banners without opening the app
 - CardView renders "Open page" under the line, which opens the viewer. It shows nothing if the file is gone. `briefPrompt` (server/prompts.ts) tells the model to pass the page's id, which `pageBriefLine` already prints. README line updated.
 - Why it matters against Claude Duet: "one page I can check every morning … calls out the one thing that changed". The callout should be one tap from the page itself.
 - Verified: typecheck pass · test 94 pass / 0 fail · build pass
+
+## 2026-10-22T02:07:52Z — loop iteration 32
+- exit=0 gate=green committed=True files=11
+- gate: typecheck: exit 0
+- answer:
+```
+ecedence over your claude.ai login · Unset it to load your organization's connectors
+DONE: The brief's page line doesn't open the page
+- **What was wrong:** nothing in the backlog was open and unblocked, so I picked this gap myself. The morning brief names each standing page's one change, but only as plain text. To see the page you had to leave the brief and go to Make.
+- **Fix:** brief decisions and watching lines can now take an optional `page_id`. `briefCard` in `server/brief.ts` turns it into the page's current file and saves that on the line, so the link still works after the page is stopped. If a decision gets bumped to Watching, it keeps its link. Unknown page ids are left without a link, and the agent is told about them (`server/runner.ts`).
+- **On the card:** `CardView.tsx` shows "Open page" under the line, and tapping it opens the file. The tool description (`server/tools.ts`), the brief prompt (`server/prompts.ts`), `shared/types.ts`, `styles.css` and the README are updated. There is 1 new test in `server/brief.test.ts`, and the backlog and journal have their entries.
+- **Limit:** the link only appears if the agent passes the page id. Not tried with a real model or on a phone.
+- typecheck: `tsc -p tsconfig.json --noEmit` → exit 0
+- test: `94 pass, 0 fail, 325 expect() calls` → exit 0
+- build: `✓ built in 572ms` → exit 0
+
+> CORRECTION: there was no unchecked, unblocked item for this iteration, so I found and added this one myself instead of taking one from the list.
+```
+
+## 2026-10-22T06:25Z — Skipped brief decisions come back
+- What changed: the backlog had no open, unblocked items, so this iteration audited the brief path and added this item. Brief decisions could be acted on but not dismissed, so one the user didn't care about came back in the day's check-ins and the next brief. New pure `skipEntry` (server/brief.ts) sets or clears `skipped_at` (shared/types.ts) on the stored entry. `actOnCard` handles `skip`/`unskip` with no agent turn (server/runner.ts). `useDraft`/`useAction` refuse a skipped entry.
+- `raisedToday` labels skipped decisions for check-ins. The new pure `skippedLately` lists decisions skipped in briefs from the last `SKIP_MEMORY_DAYS` (7), judging each title by its newest brief. `runBrief` passes that list to `briefPrompt` (server/prompts.ts), which says not to raise those again unless something material changed. CardView adds "Skip" next to the chip, and a skipped entry shows struck through with "Undo" (styles.css). README updated. +6 tests.
+- Why it matters against Claude Duet: "judgment about what needs you". When the user says something doesn't need them, it should stop coming back.
+- Verified: typecheck pass · test 100 pass / 0 fail · build pass

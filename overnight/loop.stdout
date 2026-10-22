@@ -240,3 +240,10 @@
 2:05AM INF no leaks found
 [2026-10-22 02:05:14] iter 31 done · exit=0 gate=green committed=True changed=7
 [2026-10-22 02:05:34] iter 32 start → iter-32-20261022-020534.log
+[2026-10-22 02:07:52] iter 32 commit=ok · [overnight/claude-duet-20261022 accc28c] overnight(iter 32): DONE: The brief's page line doesn't open the page
+ 12 files changed, 109 insertions(+), 16 deletions(-)
+2:07AM INF 0 commits scanned.
+2:07AM INF scanned ~9692 bytes (9.69 KB) in 24.1ms
+2:07AM INF no leaks found
+[2026-10-22 02:07:52] iter 32 done · exit=0 gate=green committed=True changed=11
+[2026-10-22 02:08:12] iter 33 start → iter-33-20261022-020812.log

@@ -2,7 +2,7 @@ import { copyFileSync, mkdirSync, statSync } from 'node:fs';
 import { basename, extname, isAbsolute, join, resolve } from 'node:path';
 import type { AgentState, CardData, FileEntry, Item, Page, Task, TaskStep, ToolStep } from '../shared/types';
 import { DRAFT_MAX, PROMPT_ENDED, REPLACED, approvalDecision, approvalPush, deadPrompts, replaceRefusal } from './approval';
-import { BRIEF_RETRY, briefCard, briefFailure, briefTitle, checkinOutcome, morningOutcome, notifyRefusal, raisedToday, useAction, useDraft } from './brief';
+import { BRIEF_RETRY, SKIP_MEMORY_DAYS, briefCard, briefFailure, briefTitle, checkinOutcome, morningOutcome, notifyRefusal, raisedToday, skipEntry, skippedLately, useAction, useDraft } from './brief';
 import { broadcast } from './bus';
 import { inQuietHours, localParts } from './clock';
 import { config } from './config';
@@ -890,6 +890,10 @@ export function actOnCard(id: string, action: string, value?: string): Item {
     submitUser(d.message);
     return updated;
   }
+  // Skipping a decision runs no agent turn: the mark on the card is what later check-ins and briefs read.
+  if (c.type === 'brief' && (action === 'skip' || action === 'unskip')) {
+    return put({ ...item, card: { ...c, entries: skipEntry(c, value, action === 'unskip') } });
+  }
   if (c.type === 'handover' && action === 'follow_up') {
     const d = useFollowUp(c, value);
     const updated = put({ ...item, card: { ...c, follow_ups: d.follow_ups } });
@@ -1044,6 +1048,7 @@ export function runBrief(source: 'scheduled' | 'manual') {
       pending: items.pendingCards(),
       tasks: tasks.recent().filter((t) => ['queued', 'running', 'waiting'].includes(t.status) || t.updated_at > dayAgo),
       pages: pages.all().map((p) => pageBriefLine(p, today, pageRefreshing(p))),
+      skipped: skippedLately(items.briefsSince(Date.now() - SKIP_MEMORY_DAYS * 86400_000)),
     }),
   });
   console.log(`[brief] queued (${source})`);

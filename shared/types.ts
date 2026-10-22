@@ -25,6 +25,8 @@ export interface BriefEntry {
   draft?: string;
   /** The user tapped the entry's chip: `draft` went back to the agent as is, or `action_message` was sent. */
   used?: boolean;
+  /** When the user tapped "Skip": it doesn't need them. Later check-ins and briefs are told not to raise it again. */
+  skipped_at?: number;
   /** The entry is about a standing page: its version when the brief was posted, opened by tapping "Open page". */
   file_id?: string;
 }

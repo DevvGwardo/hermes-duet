@@ -76,6 +76,7 @@ export function useAction(card: { entries?: BriefEntry[] }, index: unknown): { e
   const entry = card.entries?.[i];
   if (!entry || entry.draft || !entry.action_label || !entry.action_message) throw new Error('that entry has no button');
   if (entry.used) throw new Error('already sent to Hermes');
+  if (entry.skipped_at) throw new Error('you skipped this one; undo the skip first');
   return { entries: card.entries!.map((e, j) => (j === i ? { ...e, used: true } : e)), message: entry.action_message };
 }
 
@@ -99,6 +100,7 @@ export function useDraft(
   const entry = card.entries?.[i];
   if (!entry?.draft) throw new Error('that entry has no draft');
   if (entry.used) throw new Error('already sent to Hermes');
+  if (entry.skipped_at) throw new Error('you skipped this one; undo the skip first');
   const label = entry.action_label || USE_DRAFT_LABEL;
   const intent = entry.action_message ? `\nWhat the button was for: ${entry.action_message}` : '';
   return {
@@ -112,6 +114,30 @@ Draft:
 ${entry.draft}`,
   };
 }
+
+/**
+ * "Skip" on a brief decision: the user says it doesn't need them. No agent turn runs; the mark on the stored card
+ * is what today's check-ins (raisedToday) and the next few mornings' briefs (skippedLately) read, so the agent
+ * stops raising it. `undo` clears the mark after a mis-tap. An entry whose chip was tapped has already gone to the
+ * agent, so it can't be skipped.
+ */
+export function skipEntry(card: { entries?: BriefEntry[] }, index: unknown, undo = false, now = Date.now()): BriefEntry[] {
+  const i = chipIndex(index);
+  const entry = card.entries?.[i];
+  if (!entry) throw new Error('that entry is not on this brief');
+  if (entry.used) throw new Error('already sent to Hermes');
+  if (!undo && entry.skipped_at) throw new Error('already skipped');
+  if (undo && !entry.skipped_at) throw new Error('that entry is not skipped');
+  return card.entries!.map((e, j) => {
+    if (j !== i) return e;
+    if (!undo) return { ...e, skipped_at: now };
+    const { skipped_at: _, ...rest } = e;
+    return rest;
+  });
+}
+
+/** How far back the morning brief looks for decisions the user skipped. */
+export const SKIP_MEMORY_DAYS = 7;
 
 const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
 
@@ -175,9 +201,30 @@ export function raisedToday(briefs: Item[]): { decisions: string[]; watching: st
     seen.add(key);
     list.push(line);
   };
-  for (const b of briefs) for (const e of b.card?.entries ?? []) add(decisions, e.title, `- [brief ${b.id}] ${e.title}${e.used ? ' (the user already acted on it)' : ''}`);
+  const state = (e: BriefEntry) => (e.used ? ' (the user already acted on it)' : e.skipped_at ? ' (the user skipped it: it does not need them)' : '');
+  for (const b of briefs) for (const e of b.card?.entries ?? []) add(decisions, e.title, `- [brief ${b.id}] ${e.title}${state(e)}`);
   for (const b of briefs) for (const w of b.card?.watching ?? []) add(watching, w.title, `- ${w.title}`);
   return { decisions, watching };
+}
+
+/**
+ * Decisions the user skipped in recent briefs, newest first, as prompt lines for the morning brief. The brief runs
+ * in the main session but a skip runs no agent turn, so without this list tomorrow's brief raises the same thing
+ * again. Each title is judged by its newest brief (case-insensitively): skipped there, it's listed once; raised
+ * again later and not skipped, the user let it back in, so it isn't.
+ */
+export function skippedLately(briefs: Item[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const b of [...briefs].reverse()) {
+    for (const e of b.card?.entries ?? []) {
+      const key = e.title.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (e.skipped_at && out.length < RAISED_MAX) out.push(`- ${e.title}`);
+    }
+  }
+  return out;
 }
 
 /** The thread line for a morning brief that ended with no card and said nothing either. */

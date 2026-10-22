@@ -181,36 +181,71 @@ function BriefList({ id, card, onOpenFile }: { id: string; card: CardData; onOpe
   // An entry with a draft hands that draft back to the agent, which then asks for approval with it instead of
   // redrafting; an entry without one sends its action_message as the user.
   const { sent, err, tap } = useChips(id, 'send_action');
+  // "Skip" says the entry doesn't need the user; the server keeps the mark, so later check-ins and briefs drop it.
+  const [skipping, setSkipping] = useState<number | null>(null);
+  const [skipErr, setSkipErr] = useState<string | null>(null);
+  async function skip(i: number, undo: boolean) {
+    setSkipping(i);
+    setSkipErr(null);
+    try {
+      await api.act(id, undo ? 'unskip' : 'skip', String(i));
+    } catch (e: any) {
+      setSkipErr(e.message ?? 'Failed');
+    } finally {
+      setSkipping(null);
+    }
+  }
   return (
     <>
       <ol className="brief">
-        {card.entries!.map((e, i) => (
-          <li key={i} className={`brief-entry prio-${e.priority ?? 'medium'}`}>
-            <span className="prio-dot" aria-hidden="true" />
-            <div className="brief-main">
-              <div className="brief-title">{e.title}</div>
-              {e.detail && <div className="brief-detail">{e.detail}</div>}
-              {e.file_id && <PageLink fileId={e.file_id} onOpen={onOpenFile} />}
-              {e.draft && (
-                <details className="brief-draft">
-                  <summary>Draft ready</summary>
-                  <Markdown text={e.draft} className="brief-draft-body" />
-                </details>
-              )}
-              {e.draft ? (
-                <button className="chip" disabled={sent[i] || e.used} onClick={() => tap(i, 'use_draft')}>
-                  {sent[i] || e.used ? 'On it' : e.action_label || 'Send as drafted'}
-                </button>
-              ) : e.action_label && e.action_message && (
-                <button className="chip" disabled={sent[i] || e.used} onClick={() => tap(i)}>
-                  {sent[i] || e.used ? 'On it' : e.action_label}
-                </button>
-              )}
-            </div>
-          </li>
-        ))}
+        {card.entries!.map((e, i) => {
+          const done = sent[i] || e.used;
+          return (
+            <li key={i} className={`brief-entry prio-${e.priority ?? 'medium'} ${e.skipped_at ? 'is-skipped' : ''}`}>
+              <span className="prio-dot" aria-hidden="true" />
+              <div className="brief-main">
+                <div className="brief-title">{e.title}</div>
+                {e.detail && <div className="brief-detail">{e.detail}</div>}
+                {e.file_id && <PageLink fileId={e.file_id} onOpen={onOpenFile} />}
+                {e.skipped_at ? (
+                  <div className="brief-skipped">
+                    Skipped · won’t come back unless it changes
+                    <button className="link" disabled={skipping === i} onClick={() => skip(i, true)}>
+                      Undo
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    {e.draft && (
+                      <details className="brief-draft">
+                        <summary>Draft ready</summary>
+                        <Markdown text={e.draft} className="brief-draft-body" />
+                      </details>
+                    )}
+                    <div className="brief-actions">
+                      {e.draft ? (
+                        <button className="chip" disabled={done || skipping === i} onClick={() => tap(i, 'use_draft')}>
+                          {done ? 'On it' : e.action_label || 'Send as drafted'}
+                        </button>
+                      ) : e.action_label && e.action_message && (
+                        <button className="chip" disabled={done || skipping === i} onClick={() => tap(i)}>
+                          {done ? 'On it' : e.action_label}
+                        </button>
+                      )}
+                      {!done && (
+                        <button className="link" disabled={skipping === i} onClick={() => skip(i, false)}>
+                          Skip
+                        </button>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+            </li>
+          );
+        })}
       </ol>
-      {err && <p className="card-error">{err}</p>}
+      {(err || skipErr) && <p className="card-error">{err || skipErr}</p>}
     </>
   );
 }
