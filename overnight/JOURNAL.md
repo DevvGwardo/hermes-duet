@@ -488,3 +488,26 @@ item was ticked except two that wait on the owner. So I looked for gaps and foun
 - Not changed: a brief the user stops with Stop stays silent, because that was deliberate. Queued a backlog item on quiet hours dropping pushes.
 - Why it matters against Claude Duet: "it briefs you every morning". A failure at brief time has to come back to the user with a one-tap retry, not disappear.
 - Verified: typecheck pass · test 78 pass / 0 fail · build pass
+
+## 2026-10-22T01:33:05Z — loop iteration 22
+- exit=0 gate=green committed=True files=7
+- gate: typecheck: exit 0
+- answer:
+```
+cked, unblocked backlog item (only the two that wait on the owner). So I looked for a gap myself, fixed it, and added it to the backlog already ticked, as iteration 21 did.
+
+- **The gap:** the scheduler marks today's brief as sent before it runs. If the run then errors (Hermes restarts under it, it times out, or the model call fails), the user only got a generic "Something went wrong… ask me differently" line, with no push and no retry until tomorrow.
+- **Fix:** a new `briefFailure` in `server/brief.ts` turns the error into a plain reason. `finish` in `server/runner.ts` then posts a pending "This morning's brief didn't finish" card with **Run it now / Skip today**, flagged `rerun: 'brief'` in `shared/types.ts`. It pushes even in quiet hours, the same as the brief itself.
+- **Behaviour:** "Run it now" calls `runBrief('manual')` directly, with no extra agent turn. When a morning brief does post, or the brief fails again, older retry cards are marked expired. A brief the user stopped with Stop still leaves no card, on purpose. README "Survives restarts" mentions it. 3 new tests in `server/brief.test.ts`.
+- **New backlog item (open):** quiet hours throw away pushes for questions, finished tasks and interrupted work instead of holding them, while approvals ignore quiet hours. The owner should decide whether approvals should respect them.
+- typecheck: `tsc -p tsconfig.json --noEmit` → exit 0
+- test: `78 pass, 0 fail, 259 expect() calls` → exit 0
+- build: `✓ built in 120ms` → exit 0
+```
+
+## 2026-10-22T05:35Z — Quiet hours drop pushes instead of holding them
+- What changed: `notify` (server/push.ts) no longer drops a push that quiet hours suppress. It adds it to kv `push_held` via the new pure `holdPush` (server/held.ts). Only pushes about a card are held: questions, interrupted work, Done/Task failed. Each card is held once, newest wins, capped at 20, and the list survives restarts.
+- `releaseHeld` in server/scheduler.ts runs on the first tick outside quiet hours. It clears the list and sends one "While you were away" push (`awayPush`: up to 3 lines plus "+N more", and it links the card when there is only one). Cards still pending and task handovers are kept, anything resolved overnight is dropped. If `briefCoversHeld` finds the brief due within the hour (or catching up) and not yet sent, nothing is pushed. README updated. +5 tests (server/held.test.ts).
+- Not changed: approvals, Hermes clarify questions and the brief still push with `ignoreQuiet`. The item said to ask the owner, so I queued that as a blocked owner question.
+- Why it matters against Claude Duet: "goes quiet until something genuinely needs you" now means quiet, without losing anything. What needed the user overnight still reaches them once, when they're awake.
+- Verified: typecheck pass · test 83 pass / 0 fail · build pass

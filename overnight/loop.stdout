@@ -166,3 +166,10 @@
 1:29AM INF no leaks found
 [2026-10-22 01:29:36] iter 21 done · exit=0 gate=green committed=True changed=7
 [2026-10-22 01:29:56] iter 22 start → iter-22-20261022-012956.log
+[2026-10-22 01:33:05] iter 22 commit=ok · [overnight/claude-duet-20261022 3cd7ffa] overnight(iter 22): DONE: A failed morning brief is lost for the day
+ 8 files changed, 104 insertions(+), 3 deletions(-)
+1:33AM INF 0 commits scanned.
+1:33AM INF scanned ~9031 bytes (9.03 KB) in 23ms
+1:33AM INF no leaks found
+[2026-10-22 01:33:05] iter 22 done · exit=0 gate=green committed=True changed=7
+[2026-10-22 01:33:25] iter 23 start → iter-23-20261022-013325.log

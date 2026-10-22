@@ -3,6 +3,7 @@ import { db, items, kv, settings } from './db';
 import { config } from './config';
 import { inQuietHours } from './clock';
 import { presence } from './presence';
+import { holdPush, type HeldPush } from './held';
 
 interface Vapid {
   publicKey: string;
@@ -58,7 +59,12 @@ export interface PushPayload {
 }
 
 export async function notify(p: PushPayload, opts: { ignoreQuiet?: boolean } = {}): Promise<number> {
-  if (!opts.ignoreQuiet && inQuietHours(settings.get())) return 0;
+  if (!opts.ignoreQuiet && inQuietHours(settings.get())) {
+    // Held, not dropped: the scheduler sends one "While you were away" push for what is still worth it once
+    // quiet hours end.
+    kv.set('push_held', holdPush(kv.get<HeldPush[]>('push_held', []), p, Date.now()));
+    return 0;
+  }
   // A device looking at the thread already sees this, so it gets no push at all. The service worker
   // must show every push it receives (iOS revokes subscriptions that push silently).
   const subs = db
