@@ -419,3 +419,24 @@ DONE: Push "Allow once" runs a command unseen
 - What changed: `failTask` (server/runner.ts) takes `{ push = true }`. The INTERRUPTED branch of `finish` calls it with `push: false`, so the task is still marked failed and the agent still gets its context note, but the "Pick it back up?" card's "Work was interrupted" push is the only notification. The other caller (a run that couldn't start) still pushes.
 - Why it matters against Claude Duet: "goes quiet until something genuinely needs you". One event now sends one push.
 - Verified: typecheck pass · test 66 pass / 0 fail · build pass (no new test: the change is one flag at an impure call site in runner.ts, which has no harness)
+
+## 2026-10-22T01:24:41Z — loop iteration 19
+- exit=0 gate=green committed=True files=3
+- gate: typecheck: exit 0
+- answer:
+```
+⚠ claude.ai connectors are disabled because ANTHROPIC_API_KEY or another auth source is set and takes precedence over your claude.ai login · Unset it to load your organization's connectors
+DONE: Interrupted tasks push twice
+- **Change:** in `server/runner.ts`, `failTask` now takes an option `{ push = true }`. When Hermes restarts mid-task, `finish` calls it with `push: false`. The task is still marked failed and the agent still gets its note, but the "Work was interrupted" push from the "Pick it back up?" card is now the only notification. When a run can't start at all, it still sends its "Task failed" push.
+- **No new test:** the fix is one flag at a call site in `runner.ts`, and `runner.ts` has no test setup. The existing 66 tests still pass.
+- Backlog item ticked; journal entry added.
+- typecheck: `tsc -p tsconfig.json --noEmit` → exit 0
+- test: `66 pass, 0 fail, 223 expect() calls` → exit 0
+- build: `✓ built in 103ms` → exit 0
+```
+
+## 2026-10-22T05:27Z — Follow-up chips forget they were tapped
+- What changed: two new card actions in `actOnCard` (server/runner.ts). `send_action` (a brief entry without a draft) and `follow_up` (a handover chip) read the message from the stored card, mark that entry or follow-up `used`, then send the message as the user through `submitUser`. The pure rules are the new `useAction` (server/brief.ts) and `useFollowUp` (server/handover.ts), sharing `chipIndex`. `FollowUp.used` was added in shared/types.ts.
+- `handoverCard` takes the previous card, so `handOver` refreshing a card in place keeps chips that were already tapped spent. web/src/components/CardView.tsx: both chip kinds go through a shared `useChips` hook, read "On it" from `used`, and show errors. They no longer call `api.send` directly. +6 tests (brief.test.ts, handover.test.ts).
+- Why it matters against Claude Duet: one tap means one request. A reload or a second device can no longer send the same follow-up twice.
+- Verified: typecheck pass · test 72 pass / 0 fail · build pass

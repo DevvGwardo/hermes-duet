@@ -145,3 +145,10 @@
 1:23AM INF no leaks found
 [2026-10-22 01:23:32] iter 18 done · exit=0 gate=green committed=True changed=7
 [2026-10-22 01:23:52] iter 19 start → iter-19-20261022-012352.log
+[2026-10-22 01:24:41] iter 19 commit=ok · [overnight/claude-duet-20261022 b22492d] overnight(iter 19): DONE: Interrupted tasks push twice
+ 4 files changed, 37 insertions(+), 4 deletions(-)
+1:24AM INF 0 commits scanned.
+1:24AM INF scanned ~3688 bytes (3.69 KB) in 23.1ms
+1:24AM INF no leaks found
+[2026-10-22 01:24:41] iter 19 done · exit=0 gate=green committed=True changed=3
+[2026-10-22 01:25:01] iter 20 start → iter-20-20261022-012501.log

@@ -2,12 +2,12 @@ import { copyFileSync, mkdirSync, statSync } from 'node:fs';
 import { basename, extname, isAbsolute, join, resolve } from 'node:path';
 import type { AgentState, CardData, FileEntry, Item, Page, Task, TaskStep, ToolStep } from '../shared/types';
 import { DRAFT_MAX, approvalDecision, approvalPush } from './approval';
-import { briefCard, briefTitle, checkinOutcome, morningOutcome, useDraft } from './brief';
+import { briefCard, briefTitle, checkinOutcome, morningOutcome, useAction, useDraft } from './brief';
 import { broadcast } from './bus';
 import { localParts } from './clock';
 import { config } from './config';
 import { files, items, kv, newId, pages, runs, settings, tasks } from './db';
-import { followUps, handoverCard } from './handover';
+import { followUps, handoverCard, useFollowUp } from './handover';
 import { HermesError, hermes, type RunEvent } from './hermes';
 import { MAX_PAGES, pageBriefLine, pageInput, refreshTime, refreshToCancel } from './pages';
 import { briefPrompt, checkinPrompt, decisionPrompt, pageRefreshInstructions, persona, taskPrompt } from './prompts';
@@ -733,8 +733,8 @@ async function savePage(args: Record<string, unknown>, callerTask?: string | nul
 
 /** Post the task's handover card, or refresh it in place if this task already handed over once. */
 function handOver(t: Task): Item {
-  const card = handoverCard(t, files.all());
   const existing = t.handover_id ? items.get(t.handover_id) : null;
+  const card = handoverCard(t, files.all(), existing?.card);
   if (existing) return put({ ...existing, card });
   const item = put(newItem('card', { card, task_id: t.id }));
   putTask({ ...t, handover_id: item.id });
@@ -842,6 +842,19 @@ export function actOnCard(id: string, action: string, value?: string): Item {
     const d = useDraft(c, item.id, value);
     const updated = put({ ...item, card: { ...c, entries: d.entries } });
     submitUser(d.shown, d.prompt);
+    return updated;
+  }
+  // One-tap chips that send a stored message as the user. The card records the tap, so the chip stays spent.
+  if (c.type === 'brief' && action === 'send_action') {
+    const d = useAction(c, value);
+    const updated = put({ ...item, card: { ...c, entries: d.entries } });
+    submitUser(d.message);
+    return updated;
+  }
+  if (c.type === 'handover' && action === 'follow_up') {
+    const d = useFollowUp(c, value);
+    const updated = put({ ...item, card: { ...c, follow_ups: d.follow_ups } });
+    submitUser(d.message);
     return updated;
   }
   if (c.status !== 'pending') throw new Error(`already ${c.status}`);

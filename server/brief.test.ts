@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { BriefEntry } from '../shared/types';
-import { EMPTY_MORNING_NOTE, USE_DRAFT_LABEL, briefCard, briefTitle, checkinOutcome, morningOutcome, useDraft } from './brief';
+import { EMPTY_MORNING_NOTE, USE_DRAFT_LABEL, briefCard, briefTitle, checkinOutcome, morningOutcome, useAction, useDraft } from './brief';
 
 describe('check-ins stay silent unless a brief was posted', () => {
   test('free text never surfaces, NOOP or not', () => {
@@ -147,5 +147,29 @@ describe('a brief entry hands its draft back in one tap', () => {
 
   test('the model cannot pre-mark an entry as used', () => {
     expect(briefCard({ entries: [{ title: 'x', draft: 'y', used: true }] }).entries[0].used).toBeUndefined();
+  });
+});
+
+describe('a brief entry without a draft sends its message in one tap', () => {
+  const card: { entries: BriefEntry[] } = {
+    entries: [
+      { title: 'Reply to Dana', draft: 'Hi Dana', action_label: 'Send it', action_message: 'Reply to Dana' },
+      { title: 'Book the dentist', action_label: 'Find a slot', action_message: 'Find me a dentist slot' },
+      { title: 'Rent went up', detail: 'Just so you know' },
+    ],
+  };
+
+  test('the stored message is what gets sent, and only that entry is marked used', () => {
+    const out = useAction(card, '1');
+    expect(out.message).toBe('Find me a dentist slot');
+    expect(out.entries.map((e) => !!e.used)).toEqual([false, true, false]);
+    expect(card.entries.some((e) => e.used)).toBe(false);
+  });
+
+  test('a second tap, an entry with a draft or no button, or a bad index is refused', () => {
+    expect(() => useAction({ entries: useAction(card, '1').entries }, '1')).toThrow(/already/);
+    expect(() => useAction(card, '0')).toThrow(/no button/);
+    expect(() => useAction(card, '2')).toThrow(/no button/);
+    for (const bad of [undefined, '', '-1', '9', '1.0']) expect(() => useAction(card, bad)).toThrow(/no button/);
   });
 });

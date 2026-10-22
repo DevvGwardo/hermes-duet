@@ -63,7 +63,7 @@ export function CardView({ item, onOpenFile }: { item: Item; onOpenFile: (id: st
       {card.type === 'handover' && (
         <>
           {card.file_ids?.map((id) => <FileRow key={id} fileId={id} onOpen={onOpenFile} />)}
-          {card.follow_ups?.length ? <FollowUps list={card.follow_ups} /> : null}
+          {card.follow_ups?.length ? <FollowUps id={item.id} list={card.follow_ups} /> : null}
           {card.failed && card.retry && !card.decision && (
             <div className="follow-ups">
               <button className="chip" disabled={!!busy} onClick={() => act('retry')}>
@@ -156,21 +156,31 @@ function DraftEditor({ original, value, onChange, disabled }: { original: string
   );
 }
 
-function BriefList({ id, card }: { id: string; card: CardData }) {
+/**
+ * One-tap chips that act through the stored card: the server reads what to send from the card, not from here,
+ * and marks the chip `used` on it, so "On it" survives a reload and shows on every device. `sent` only covers
+ * the moment between the tap and the card coming back.
+ */
+function useChips(id: string, action: string) {
   const [sent, setSent] = useState<Record<number, boolean>>({});
   const [err, setErr] = useState<string | null>(null);
-  // An entry with a draft hands that draft back to the agent (server-side, from the stored card), which then asks
-  // for approval with it instead of redrafting. `used` comes back on the card, so the chip stays spent after reload.
-  async function handBack(i: number) {
+  async function tap(i: number, act = action) {
     setSent((s) => ({ ...s, [i]: true }));
     setErr(null);
     try {
-      await api.act(id, 'use_draft', String(i));
+      await api.act(id, act, String(i));
     } catch (e: any) {
       setSent((s) => ({ ...s, [i]: false }));
       setErr(e.message ?? 'Failed');
     }
   }
+  return { sent, err, tap };
+}
+
+function BriefList({ id, card }: { id: string; card: CardData }) {
+  // An entry with a draft hands that draft back to the agent, which then asks for approval with it instead of
+  // redrafting; an entry without one sends its action_message as the user.
+  const { sent, err, tap } = useChips(id, 'send_action');
   return (
     <>
       <ol className="brief">
@@ -187,19 +197,12 @@ function BriefList({ id, card }: { id: string; card: CardData }) {
                 </details>
               )}
               {e.draft ? (
-                <button className="chip" disabled={sent[i] || e.used} onClick={() => handBack(i)}>
+                <button className="chip" disabled={sent[i] || e.used} onClick={() => tap(i, 'use_draft')}>
                   {sent[i] || e.used ? 'On it' : e.action_label || 'Send as drafted'}
                 </button>
               ) : e.action_label && e.action_message && (
-                <button
-                  className="chip"
-                  disabled={sent[i]}
-                  onClick={async () => {
-                    setSent((s) => ({ ...s, [i]: true }));
-                    await api.send(e.action_message!);
-                  }}
-                >
-                  {sent[i] ? 'On it' : e.action_label}
+                <button className="chip" disabled={sent[i] || e.used} onClick={() => tap(i)}>
+                  {sent[i] || e.used ? 'On it' : e.action_label}
                 </button>
               )}
             </div>
@@ -227,24 +230,19 @@ function Watching({ list }: { list: WatchEntry[] }) {
   );
 }
 
-function FollowUps({ list }: { list: FollowUp[] }) {
-  const [sent, setSent] = useState<Record<number, boolean>>({});
+function FollowUps({ id, list }: { id: string; list: FollowUp[] }) {
+  const { sent, err, tap } = useChips(id, 'follow_up');
   return (
-    <div className="follow-ups">
-      {list.map((f, i) => (
-        <button
-          key={i}
-          className="chip"
-          disabled={sent[i]}
-          onClick={async () => {
-            setSent((s) => ({ ...s, [i]: true }));
-            await api.send(f.message);
-          }}
-        >
-          {sent[i] ? 'On it' : f.label}
-        </button>
-      ))}
-    </div>
+    <>
+      <div className="follow-ups">
+        {list.map((f, i) => (
+          <button key={i} className="chip" disabled={sent[i] || f.used} onClick={() => tap(i)}>
+            {sent[i] || f.used ? 'On it' : f.label}
+          </button>
+        ))}
+      </div>
+      {err && <p className="card-error">{err}</p>}
+    </>
   );
 }
 

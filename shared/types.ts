@@ -23,7 +23,7 @@ export interface BriefEntry {
   action_message?: string;
   /** Markdown the agent already prepared for this decision (a reply, a plan); shown collapsed under the entry. */
   draft?: string;
-  /** The user tapped the entry's draft chip, which handed `draft` back to the agent to go ahead with as is. */
+  /** The user tapped the entry's chip: `draft` went back to the agent as is, or `action_message` was sent. */
   used?: boolean;
 }
 
@@ -37,6 +37,8 @@ export interface WatchEntry {
 export interface FollowUp {
   label: string;
   message: string;
+  /** Set on the handover card once tapped, so the chip stays spent across reloads and devices. */
+  used?: boolean;
 }
 
 export interface ChecklistEntry {

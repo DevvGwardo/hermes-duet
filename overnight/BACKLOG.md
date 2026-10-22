@@ -33,7 +33,7 @@ File:line references are to commit 83f3417.
 
 - [x] **Interrupted tasks push twice** — when Hermes restarts mid-task, `failTask` pushes "Task failed: …" and the "Pick it back up?" card then pushes "Work was interrupted" for the same event (`server/runner.ts`, the `INTERRUPTED` branch of `finish`). Fix: mark the task failed there without its own push, so the resume card's push is the only one. (files: server/runner.ts)
 
-- [ ] **Follow-up chips forget they were tapped** — brief `action_message` chips and handover follow-up chips keep "On it" only in React state (`web/src/components/CardView.tsx` `BriefList`, `FollowUps`), so after a reload or on another device they can be tapped again and re-send the request. Fix: route them through a card action like `use_draft` that marks the entry/follow-up `used` on the stored card. (files: server/runner.ts, shared/types.ts, web/src/components/CardView.tsx)
+- [x] **Follow-up chips forget they were tapped** — brief `action_message` chips and handover follow-up chips keep "On it" only in React state (`web/src/components/CardView.tsx` `BriefList`, `FollowUps`), so after a reload or on another device they can be tapped again and re-send the request. Fix: route them through a card action like `use_draft` that marks the entry/follow-up `used` on the stored card. (files: server/runner.ts, shared/types.ts, web/src/components/CardView.tsx)
 
 Dropped as already done (verified in code):
 - Readable agent activity — `Activity` in `web/src/components/Thread.tsx` is collapsed by default to a one-line label and expands on tap.

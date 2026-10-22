@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { FileEntry, Task } from '../shared/types';
-import { followUps, handoverCard } from './handover';
+import { followUps, handoverCard, useFollowUp } from './handover';
 
 const task = (patch: Partial<Task> = {}): Task => ({
   id: 't1',
@@ -87,5 +87,36 @@ describe('the handover card', () => {
     const card = handoverCard(task({ retried_at: 15 }), [file('old', 't1', 10), file('new', 't1', 20)]);
     expect(card.file_ids).toEqual(['new']);
     expect(card.failed).toBeUndefined();
+  });
+
+  test('refreshing the card in place keeps tapped follow-ups spent', () => {
+    const t = task({ follow_ups: [{ label: 'Send it', message: 'Email the deck to Dana' }, { label: 'Shorter', message: 'Cut it to 8 slides' }] });
+    const first = handoverCard(t, []);
+    const tapped = { ...first, follow_ups: useFollowUp(first, '0').follow_ups };
+    expect(handoverCard(t, [], tapped).follow_ups).toEqual([
+      { label: 'Send it', message: 'Email the deck to Dana', used: true },
+      { label: 'Shorter', message: 'Cut it to 8 slides' },
+    ]);
+  });
+});
+
+describe('tapping a follow-up', () => {
+  const card = { follow_ups: [{ label: 'Send it', message: 'Email the deck to Dana' }, { label: 'Shorter', message: 'Cut it to 8 slides' }] };
+
+  test('sends the stored message and marks only that follow-up used', () => {
+    const out = useFollowUp(card, '1');
+    expect(out.message).toBe('Cut it to 8 slides');
+    expect(out.follow_ups.map((f) => !!f.used)).toEqual([false, true]);
+    expect(card.follow_ups.some((f) => 'used' in f)).toBe(false);
+  });
+
+  test('a second tap or a bad index is refused', () => {
+    expect(() => useFollowUp({ follow_ups: useFollowUp(card, '0').follow_ups }, '0')).toThrow(/already/);
+    for (const bad of [undefined, '', '-1', '2', 'x']) expect(() => useFollowUp(card, bad)).toThrow(/no such/);
+    expect(() => useFollowUp({}, '0')).toThrow(/no such/);
+  });
+
+  test('the model cannot pre-mark one as used', () => {
+    expect(followUps([{ label: 'a', message: 'b', used: true }])).toEqual([{ label: 'a', message: 'b' }]);
   });
 });

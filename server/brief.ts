@@ -49,6 +49,22 @@ export function briefCard(
   };
 }
 
+/** A tapped chip's position as the client sent it ("0", "1", …); anything else is -1, which matches no chip. */
+export const chipIndex = (value: unknown) => (typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : -1);
+
+/**
+ * Tapping the chip on an entry without a draft. Its `action_message` comes from the stored card, not from the
+ * client, and goes to the agent as the user's message, the same as typing it. The entry is marked `used` like a
+ * draft chip, so a reload or a second device can't send the same request again.
+ */
+export function useAction(card: { entries?: BriefEntry[] }, index: unknown): { entries: BriefEntry[]; message: string } {
+  const i = chipIndex(index);
+  const entry = card.entries?.[i];
+  if (!entry || entry.draft || !entry.action_label || !entry.action_message) throw new Error('that entry has no button');
+  if (entry.used) throw new Error('already sent to Hermes');
+  return { entries: card.entries!.map((e, j) => (j === i ? { ...e, used: true } : e)), message: entry.action_message };
+}
+
 /** The chip on an entry with a draft, when the agent gave it no label of its own. */
 export const USE_DRAFT_LABEL = 'Send as drafted';
 
@@ -65,7 +81,7 @@ export function useDraft(
   cardId: string,
   index: unknown,
 ): { entries: BriefEntry[]; shown: string; prompt: string } {
-  const i = typeof index === 'string' && /^\d+$/.test(index) ? Number(index) : -1;
+  const i = chipIndex(index);
   const entry = card.entries?.[i];
   if (!entry?.draft) throw new Error('that entry has no draft');
   if (entry.used) throw new Error('already sent to Hermes');
