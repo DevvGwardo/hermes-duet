@@ -270,3 +270,10 @@
 2:17AM INF no leaks found
 [2026-10-22 02:17:32] iter 35 done · exit=0 gate=green committed=True changed=8
 [2026-10-22 02:17:53] iter 36 start → iter-36-20261022-021753.log
+[2026-10-22 02:20:46] iter 36 commit=ok · [overnight/claude-duet-20261022 065cc15] overnight(iter 36): DONE: Steered messages miss the waiting-cards note
+ 7 files changed, 59 insertions(+), 6 deletions(-)
+2:20AM INF 0 commits scanned.
+2:20AM INF scanned ~7008 bytes (7.01 KB) in 70ms
+2:20AM INF no leaks found
+[2026-10-22 02:20:46] iter 36 done · exit=0 gate=green committed=True changed=6
+[2026-10-22 02:21:06] iter 37 start → iter-37-20261022-022106.log

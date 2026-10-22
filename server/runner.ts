@@ -14,6 +14,7 @@ import { MAX_PAGES, afterInterruption, pageBriefLine, pageInput, refreshTime, re
 import { briefPrompt, checkinPrompt, decisionPrompt, pageRefreshInstructions, persona, taskPrompt } from './prompts';
 import { notify } from './push';
 import { resumeCardBody } from './recovery';
+import { type Steer, undeliveredSteers } from './steer';
 
 // ---------------------------------------------------------------------------
 // Lanes: one per agent session. The main lane is the user's thread; each
@@ -55,6 +56,10 @@ interface ActiveRun {
   reuse: Item[];
   /** Main-thread turns that run long get mirrored into Tasks so the work is visible there. */
   fgTaskId: string | null;
+  /** Chat messages steered into this run, matched against `pending_steer` when it ends. */
+  steers: Steer[];
+  /** `pending_steer` from the terminal event or status: steer text Hermes never delivered, left for us to replay. */
+  leftoverSteer: string;
 }
 
 interface Lane {
@@ -225,6 +230,8 @@ async function launch(l: Lane, spec: RunSpec) {
     lastSave: 0,
     reuse: [],
     fgTaskId: null,
+    steers: [],
+    leftoverSteer: '',
   };
   l.active = run;
   broadcastAgent();
@@ -315,6 +322,7 @@ async function consume(l: Lane, run: ActiveRun) {
     try {
       const st = await hermes.getRun(run.id);
       const s = st.status;
+      if (typeof st.pending_steer === 'string') run.leftoverSteer = st.pending_steer;
       if (s === 'completed') finish(l, run, 'done', st.output);
       else if (s === 'failed') finish(l, run, 'error', st.output, errorText(st.error) || 'Run failed');
       else if (s === 'cancelled' || s === 'interrupted') finish(l, run, 'stopped', st.output);
@@ -365,6 +373,8 @@ function errorText(err: any): string {
 
 function onEvent(l: Lane, run: ActiveRun, ev: RunEvent) {
   if (typeof ev.seq === 'number') run.lastSeq = Math.max(run.lastSeq, ev.seq);
+  // assistant.completed and the terminal run.* event both carry it.
+  if (typeof ev.pending_steer === 'string') run.leftoverSteer = ev.pending_steer;
   switch (ev.event) {
     case 'message.delta':
       if (typeof ev.delta === 'string') appendText(run, ev.delta);
@@ -526,6 +536,15 @@ function finish(l: Lane, run: ActiveRun, status: 'done' | 'error' | 'stopped', o
   if (run.finished) return;
   run.finished = true;
   run.abort.abort();
+
+  // Messages that arrived during the final model call come back undelivered; they go next, as one chat turn.
+  // Front of the queue: steering only happens while the queue is empty, so everything queued now came after them.
+  const late = undeliveredSteers(run.steers, run.leftoverSteer);
+  if (late.length) {
+    for (const s of late) s.queued = true;
+    l.queue.unshift({ kind: 'chat', sessionId: l.sessionId, input: late.map((s) => s.raw).join('\n\n') });
+    persistQueues();
+  }
 
   if (!run.text.trim() && output && output.trim()) appendText(run, output);
   closeSegment(run);
@@ -861,15 +880,21 @@ export function submitUser(text: string, input?: string): Item {
   const item = put(newItem('user', { text: shown }));
   const m = mainLane();
   const active = m.active;
-  // Mid-run messages steer the live turn (Hermes re-queues the steer as the next turn if it lands too late).
+  // Mid-run messages steer the live turn. One that lands too late comes back as `pending_steer`, and finish replays it.
   if (active && active.id && !active.finished && m.queue.length === 0) {
-    // The note goes only on the steer: if it isn't accepted, the queued turn gets a fresh one from launch.
+    // The note goes only on the steer: a refused or replayed one is queued raw, and launch gives it a fresh note.
+    const steer: Steer = { sent: turnNote(items.pendingCards(), active.spec) + t, raw: t };
+    active.steers.push(steer);
     hermes
-      .steer(active.id, turnNote(items.pendingCards(), active.spec) + t)
+      .steer(active.id, steer.sent)
       .then((r) => {
         if (!r?.accepted) throw new Error('not accepted');
       })
-      .catch(() => enqueue({ kind: 'chat', sessionId: m.sessionId, input: t }));
+      .catch(() => {
+        if (steer.queued) return;
+        steer.queued = true;
+        enqueue({ kind: 'chat', sessionId: m.sessionId, input: t });
+      });
   } else {
     enqueue({ kind: 'chat', sessionId: m.sessionId, input: t });
   }
@@ -1435,6 +1460,9 @@ export function recoverOrphans() {
       // Replay from the start, reusing this run's existing text segments in order.
       reuse: segmentsOf(row.id),
       fgTaskId: meta.fgTaskId ?? null,
+      // Steers sent before the restart aren't kept, so one Hermes returns undelivered can't be matched and replayed.
+      steers: [],
+      leftoverSteer: '',
     };
     l.active = run;
     console.log(`[recover] reattaching run ${row.id} (${spec.kind})`);

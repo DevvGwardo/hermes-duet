@@ -826,3 +826,26 @@ DONE: Cards settled in chat stay tappable
 - Discovered: the API server returns a steer that is still undelivered when the turn ends as `pending_steer` for client replay, and Duet ignores it, so that message is lost. Added a backlog item for it, ahead of polish.
 - Why it matters against Claude Duet: "goes quiet until something genuinely needs you". A "never mind" typed while the agent is working should take the card down too.
 - Verified: typecheck pass · test 107 pass / 0 fail · build pass
+
+## 2026-10-22T02:20:46Z — loop iteration 36
+- exit=0 gate=green committed=True files=6
+- gate: typecheck: exit 0
+- answer:
+```
+list of cards still waiting. A "never mind, don't send it" sent then could leave the approval up.
+- **Fix:** I added a small `turnNote` in `server/approval.ts`. `launch` and `submitUser` in `server/runner.ts` both use it now, so a mid-turn message gets the same list as a new one. If Hermes doesn't accept the mid-turn message, the queued retry still sends the plain text and gets the list when it starts, so it never appears twice. Also 1 new test in `server/approval.test.ts` and a README line. This still only works if the model follows the instruction, and I haven't tried it with a real model.
+- **Hermes check:** I read the installed Hermes code without changing it. It passes a mid-turn message to the model unchanged inside its own marker, so the list arrives as written.
+- **New backlog item, found along the way:** a message that arrives during the agent's last reply is lost. Hermes hands it back as `pending_steer` when the run ends and expects Duet to resend it, but Duet ignores it. The message shows in the thread and the agent never sees it. I added this ahead of polish in `overnight/BACKLOG.md`.
+- typecheck: `tsc -p tsconfig.json --noEmit` → exit 0
+- test: `107 pass, 0 fail, 382 expect() calls` → exit 0
+- build: `✓ built in 110ms` → exit 0
+
+> CORRECTION: the comment in `submitUser` says Hermes re-queues a late mid-turn message as the next turn. The installed API server doesn't; it returns it as `pending_steer` and leaves resending to Duet. That is the new backlog item above.
+```
+
+## 2026-10-22T06:23Z — A message sent as a turn ends is lost
+- What changed: new pure `undeliveredSteers` (server/steer.ts, +3 tests in server/steer.test.ts) matches each steer's sent text against Hermes's `pending_steer`, which holds the stripped, "\n"-joined steers the run never delivered. Each steer uses up one occurrence, and steers already queued are skipped. `submitUser` keeps each steer (`sent` with its note, `raw`) on the `ActiveRun`. `onEvent` and the `getRun` fallback record `pending_steer` (server/hermes.ts type). `finish` puts the raw texts at the front of the lane queue as one chat turn, so launch adds a fresh waiting-cards note. A refused steer and a replayed one each mark `queued`, so the message is never sent twice. Corrected the `submitUser` comment, and README line updated.
+- Checked first (read-only): `terminal_run_status` in api_server_runs.py adds `pending_steer` to every terminal event and status, and `_handle_steer_run` strips the text before `agent.steer`.
+- Limit: steers sent before a Duet restart aren't kept, so one returned undelivered after recovery can't be matched. Not tried against a live Hermes.
+- Why it matters against Claude Duet: "one thread". A message the user sees in the thread has to reach the agent.
+- Verified: typecheck pass · test 110 pass / 0 fail · build pass

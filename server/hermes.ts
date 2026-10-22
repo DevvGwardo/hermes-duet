@@ -98,6 +98,8 @@ export const hermes = {
       pending_controls?: any[];
       execution_generation?: number;
       admission_id?: string;
+      /** Steer text the run ended without delivering, returned for the client to replay. */
+      pending_steer?: string;
     }>(
       'GET',
       `/v1/runs/${encodeURIComponent(runId)}`,
