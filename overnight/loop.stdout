@@ -97,3 +97,12 @@
 1:08AM INF no leaks found
 [2026-10-22 01:08:05] iter 12 done · exit=0 gate=green committed=True changed=10
 [2026-10-22 01:08:26] iter 13 start → iter-13-20261022-010826.log
+[2026-10-22 01:10:34] iter 13 commit=ok · b622] overnight(iter 13): DONE: Push that survives iOS
+ 10 files changed, 190 insertions(+), 10 deletions(-)
+ create mode 100644 server/presence.test.ts
+ create mode 100644 server/presence.ts
+1:10AM INF 0 commits scanned.
+1:10AM INF scanned ~11917 bytes (11.92 KB) in 26.9ms
+1:10AM INF no leaks found
+[2026-10-22 01:10:34] iter 13 done · exit=0 gate=green committed=True changed=9
+[2026-10-22 01:10:55] iter 14 start → iter-14-20261022-011055.log

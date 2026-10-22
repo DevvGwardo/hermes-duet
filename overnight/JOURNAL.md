@@ -270,3 +270,27 @@ DONE: Stop a standing page from the app
 - WebKit check: web search was not permitted this run. The rule that Safari revokes push permission when a push shows no notification comes from memory of WebKit's "Web Push for Web Apps on iOS and iPadOS" post, not a fresh read. Added a backlog item for checking it on a real device.
 - Why it matters against Claude Duet: "goes quiet until something needs you" depends on the push channel staying alive; iOS no longer sees silent pushes, so it has no reason to cut the subscription.
 - Verified: typecheck pass · test 52 pass / 0 fail · build pass
+
+## 2026-10-22T01:10:34Z — loop iteration 13
+- exit=0 gate=green committed=True files=9
+- gate: typecheck: exit 0
+- answer:
+```
+t lasts 40 seconds unless renewed. It's reported through a new `POST /api/presence` route in `server/index.ts`, which requires pairing and the same-origin check. `notify` in `server/push.ts` doesn't send to a device that has the app on screen, except for the test push. 3 new tests in `server/presence.test.ts`.
+- **Service worker:** `web/public/sw.js` now shows every push it receives; the check that skipped pushes while the app was visible is gone. It also handles `pushsubscriptionchange` by subscribing again and sending the new subscription to the server.
+- **App:** `web/src/api.ts` reports visibility when it connects, when visibility changes, when the page closes, and every 15 seconds while visible. Once per launch, if notifications are allowed, it registers its push subscription again. README line updated.
+- I couldn't check the WebKit rule against current docs because web search wasn't permitted. The rule (Safari revokes push permission when a push shows no notification) is from memory of WebKit's "Web Push for Web Apps on iOS and iPadOS" post, and I don't know whether iOS Safari fires `pushsubscriptionchange`. I added a backlog item, "Check push on a real iPhone", which needs the owner.
+- typecheck: `tsc -p tsconfig.json --noEmit` → exit 0
+- test: `52 pass, 0 fail, 195 expect() calls` → exit 0
+- build: `✓ built in 102ms` → exit 0
+
+> CORRECTION: `server/bus.ts` didn't need changing. Visibility goes through its own small route instead of being tied to the live event stream.
+```
+
+## 2026-10-22T05:15Z — Continuity is visible
+- Skipped "Check push on a real iPhone": it needs the owner on a device. It's now marked BLOCKED in the backlog.
+- What changed: new `server/capabilities.ts` (+5 tests in capabilities.test.ts) builds a names-only `Capabilities` (shared/types.ts). It has: context-file bullet labels; Hermes skills counted per category from `GET /v1/skills`, falling back to a read-only SKILL.md walk of `~/.hermes/skills`; enabled toolset labels from `GET /v1/toolsets` (both new in server/hermes.ts); and MCP server names from `~/.hermes/config.yaml` (disabled servers and `duet` left out, no YAML parser). Cached 5 min. New paired `GET /api/capabilities` (server/index.ts).
+- Web: new `WhatICanSee` component. Settings has a "What I can see" section (context, skills, tools, apps). The empty thread shows a one-line "Already here: …". `api.capabilities`, CSS, README line.
+- Found: the installed Hermes `_handle_skills` passes `include_editorial=True` to a function that doesn't accept it, so `/v1/skills` probably returns 500 here and the file fallback is used. Added as an owner backlog item.
+- Why it matters against Claude Duet: "memory, skills and apps are there from the first message", and now the user can see that they are.
+- Verified: typecheck pass · test 57 pass / 0 fail · build pass

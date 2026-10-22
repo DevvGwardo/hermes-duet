@@ -1824,6 +1824,33 @@ li.done .tick {
   min-height: 46px;
   color: var(--paper-2);
 }
+.can-see {
+  margin: 4px 0 0;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 8px 14px;
+  font-size: 13.5px;
+}
+.can-see dt {
+  color: var(--paper-2);
+  font-weight: 600;
+}
+.can-see dd {
+  margin: 0;
+  color: var(--paper);
+  overflow-wrap: anywhere;
+}
+.can-see-line {
+  margin: 22px 0 0;
+  max-width: 520px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--faint);
+}
+.can-see-line strong {
+  color: var(--gold);
+  font-weight: 600;
+}
 .setting-row input[type='time'] {
   background: #000;
   border: 1.5px solid var(--line-2);

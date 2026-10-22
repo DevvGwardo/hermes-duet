@@ -76,7 +76,12 @@ export const hermes = {
     }
   },
 
-  startRun(p: { input: string; session_id: string; instructions: string; idempotencyKey: string }) {
+  /** Installed skills, the same set `/skills list` shows: `{ data: [{ name, description, category }] }`. */
+  skills: () => req<{ data?: unknown }>('GET', '/v1/skills'),
+  /** Toolsets the API-server agent exposes: `{ data: [{ name, label, enabled, ... }] }`. */
+  toolsets: () => req<{ data?: unknown }>('GET', '/v1/toolsets'),
+
+  startRun(p:{ input: string; session_id: string; instructions: string; idempotencyKey: string }) {
     return req<{ run_id: string; status: string }>(
       'POST',
       '/v1/runs',

@@ -5,6 +5,7 @@ import { useStore } from '../store';
 import { Icon, Markdown, dayLabel, timeLabel } from '../ui';
 import { CardView } from './CardView';
 import { BrandBadge, Mascot, SpeechBubble } from './Manga';
+import { WhatICanSee } from './WhatICanSee';
 
 const SUGGESTIONS = [
   'What’s on my plate today?',
@@ -78,6 +79,7 @@ export function Thread({ onOpenFile, scrollToId, onSuggest }: { onOpenFile: (id:
               <strong>Hand me something.</strong> I'll work on it in the background, ask before anything sensitive, and check in each morning.
             </SpeechBubble>
           </div>
+          <WhatICanSee compact />
           <div className="suggestions">
             {SUGGESTIONS.map((q) => (
               <button key={q} className="suggestion" onClick={() => onSuggest(q)}>

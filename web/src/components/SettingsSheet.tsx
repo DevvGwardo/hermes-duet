@@ -3,6 +3,7 @@ import type { Settings } from '../../../shared/types';
 import { api, enablePush, isStandalone, pushSupported } from '../api';
 import { useStore } from '../store';
 import { Icon } from '../ui';
+import { WhatICanSee } from './WhatICanSee';
 
 export function SettingsSheet({ onClose }: { onClose: () => void }) {
   const settings = useStore((s) => s.settings);
@@ -105,6 +106,12 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
               <span>Timezone</span>
               <span className="muted">{settings.timezone}</span>
             </div>
+          </section>
+
+          <section>
+            <h3>What I can see</h3>
+            <p className="muted small">Loaded before your first message, every turn.</p>
+            <WhatICanSee />
           </section>
         </div>
       </div>

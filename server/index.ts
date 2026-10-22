@@ -1,6 +1,7 @@
 import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, normalize } from 'node:path';
 import type { Snapshot } from '../shared/types';
+import { capabilities } from './capabilities';
 import { createPairCode, deviceCookie, deviceFor, internalToken, isHttps, redeemPairCode, sameOrigin } from './auth';
 import { sseResponse } from './bus';
 import { config } from './config';
@@ -85,6 +86,7 @@ async function handleApp(req: Request): Promise<Response> {
       return json(items.before(before, 100));
     }
     if (path === '/api/events' && req.method === 'GET') return sseResponse(req);
+    if (path === '/api/capabilities' && req.method === 'GET') return json(await capabilities());
 
     if (path === '/api/messages' && req.method === 'POST') {
       const { text } = await body<{ text?: string }>(req);

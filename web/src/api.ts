@@ -1,4 +1,4 @@
-import type { Item, ServerEvent, Settings, Snapshot } from '../../shared/types';
+import type { Capabilities, Item, ServerEvent, Settings, Snapshot } from '../../shared/types';
 import { applyEvent, applySnapshot, getState, prependItems, setState } from './store';
 
 class HttpError extends Error {
@@ -44,6 +44,7 @@ export const api = {
   pushKey: () => call<{ key: string }>('GET', '/api/push/key'),
   subscribe: (sub: PushSubscriptionJSON) => call<{ ok: true }>('POST', '/api/push/subscribe', sub),
   testPush: () => call<{ sent: number }>('POST', '/api/push/test'),
+  capabilities: () => call<Capabilities>('GET', '/api/capabilities'),
 };
 
 let es: EventSource | null = null;

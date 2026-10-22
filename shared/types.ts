@@ -196,6 +196,20 @@ export interface AgentState {
   background_running: number;
 }
 
+/** What the agent already has before the first message ("What I can see"). Names only, never config values. */
+export interface Capabilities {
+  /** One short label per source line in the context file; empty when there is no context file. */
+  context: string[];
+  /** Installed Hermes skills, counted per category (largest first). `skills_from` says where the list came from. */
+  skills: { total: number; categories: { name: string; count: number }[] };
+  skills_from: 'hermes' | 'files' | 'none';
+  /** Labels of the toolsets enabled for the API server, or null when Hermes didn't answer. */
+  toolsets: string[] | null;
+  /** MCP server names from the Hermes config (the Duet tools themselves are left out). */
+  apps: string[];
+  checked_at: number;
+}
+
 export interface Snapshot {
   items: Item[];
   has_more: boolean;
