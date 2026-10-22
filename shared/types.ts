@@ -140,6 +140,8 @@ export interface Task {
   retried_at?: number;
   /** A standing page's scheduled refresh: the file it delivers becomes the page's current version. */
   page_id?: string;
+  /** Page refresh only: the agent's one line on what changed since the previous version. */
+  changed?: string;
   created_at: number;
   updated_at: number;
   background: boolean;
@@ -161,6 +163,8 @@ export interface Page {
   task_id?: string;
   last_ok?: boolean;
   last_result?: string;
+  /** What changed since the previous version, from the latest successful refresh; cleared when a refresh fails. */
+  changed?: string;
   created_at: number;
   updated_at: number;
 }
@@ -199,6 +203,7 @@ export interface Snapshot {
   pending: Item[];
   tasks: Task[];
   files: FileEntry[];
+  pages: Page[];
   settings: Settings;
   agent: AgentState;
   push_enabled: boolean;
@@ -209,6 +214,8 @@ export type ServerEvent =
   | { type: 'delta'; item_id: string; text: string }
   | { type: 'task'; task: Task }
   | { type: 'file'; file: FileEntry }
+  | { type: 'page'; page: Page }
+  | { type: 'page_removed'; id: string }
   | { type: 'agent'; agent: AgentState }
   | { type: 'settings'; settings: Settings }
   | { type: 'hello'; at: number };

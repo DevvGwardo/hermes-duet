@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { Page } from '../shared/types';
-import { pageInput, pagesDue, refreshTime } from './pages';
+import { holdBrief, pageBriefLine, pageInput, pagesDue, refreshTime } from './pages';
 
 const page = (id: string, fields: Partial<Page> = {}): Page => ({
   id,
@@ -57,5 +57,28 @@ describe('save_page input', () => {
   test('an update keeps what it does not pass', () => {
     const existing = page('a', { title: 'Old', instructions: 'Old way.', file_id: 'f-old' });
     expect(pageInput({ instructions: 'New way.' }, existing)).toEqual({ title: 'Old', instructions: 'New way.', file_id: 'f-old' });
+  });
+});
+
+describe('brief and standing pages', () => {
+  test('the brief waits for a running refresh, at most 30 minutes', () => {
+    const t0 = 1_000_000;
+    expect(holdBrief(false, null, t0)).toBe(false);
+    expect(holdBrief(true, null, t0)).toBe(true);
+    expect(holdBrief(true, t0, t0 + 29 * 60_000)).toBe(true);
+    expect(holdBrief(true, t0, t0 + 30 * 60_000)).toBe(false);
+  });
+
+  test('each page tells the brief what changed, or why it cannot', () => {
+    const today = '2026-10-22';
+    const line = (fields: Partial<Page>, refreshing = false) => pageBriefLine(page('a', { title: 'Morning', ...fields }), today, refreshing);
+    expect(line({ refreshed_on: today, task_id: 't', last_ok: true, changed: 'Rent is due Friday, not Monday.' })).toBe(
+      '- "Morning" (page a): refreshed. What changed: Rent is due Friday, not Monday.',
+    );
+    expect(line({ refreshed_on: today, task_id: 't', last_ok: false, last_result: 'Calendar timed out.' })).toContain('failed (Calendar timed out.)');
+    expect(line({ refreshed_on: today, task_id: 't' }, true)).toContain('still running');
+    expect(line({ refreshed_on: today, task_id: 't' })).toContain('stopped');
+    expect(line({ refreshed_on: today })).toContain('set up today');
+    expect(line({ refreshed_on: '2026-10-21', task_id: 't', last_ok: true, changed: 'old' })).toContain('not refreshed yet today');
   });
 });

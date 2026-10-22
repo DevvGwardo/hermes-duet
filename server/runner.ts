@@ -9,7 +9,7 @@ import { config } from './config';
 import { files, items, kv, newId, pages, runs, settings, tasks } from './db';
 import { followUps, handoverCard } from './handover';
 import { HermesError, hermes, type RunEvent } from './hermes';
-import { MAX_PAGES, pageInput, refreshTime } from './pages';
+import { MAX_PAGES, pageBriefLine, pageInput, refreshTime } from './pages';
 import { briefPrompt, checkinPrompt, decisionPrompt, pageRefreshInstructions, persona, taskPrompt } from './prompts';
 import { notify } from './push';
 
@@ -164,6 +164,13 @@ function putTask(task: Task, sessionId?: string | null) {
   tasks.save(task, sessionId);
   broadcast({ type: 'task', task });
   return task;
+}
+
+/** Every page write goes out as an event, so the pinned pages in Make stay current. */
+function putPage(page: Page) {
+  pages.save(page);
+  broadcast({ type: 'page', page });
+  return page;
 }
 
 function firstLine(text: string, max = 140) {
@@ -649,9 +656,12 @@ function pageRefreshEnded(final: Task) {
   const fresh = (page.refreshed_at ?? 0) >= (final.retried_at ?? final.created_at);
   const ok = final.status === 'done' && fresh;
   const result = ok ? final.result || 'Refreshed.' : final.status === 'done' ? 'Finished without delivering a new version.' : final.result || 'Stopped before it finished.';
-  pages.save({ ...page, task_id: final.id, last_ok: ok, last_result: result });
+  // `changed` describes the newest version against the one before it, so a failed refresh has nothing to say.
+  const changed = ok ? final.changed?.trim() || undefined : undefined;
+  putPage({ ...page, task_id: final.id, last_ok: ok, last_result: result, changed });
   if (final.status === 'failed') handOver(final);
-  addContextNote(`Standing page "${page.title}" (${page.id}) ${ok ? 'refreshed' : 'did not refresh'} this morning: ${result}`);
+  const what = changed ? ` What changed: ${changed}` : '';
+  addContextNote(`Standing page "${page.title}" (${page.id}) ${ok ? 'refreshed' : 'did not refresh'} this morning: ${result}${what}`);
 }
 
 /** The page's latest refresh is still queued, running or waiting on the user. */
@@ -665,7 +675,8 @@ export function refreshPage(page: Page, date: string) {
   if (pageRefreshing(page)) return;
   const current = files.get(page.file_id);
   const t = startTask(`Refresh: ${page.title}`, pageRefreshInstructions(page, current?.path ?? null), [], page.id);
-  pages.save({ ...page, refreshed_on: date, task_id: t.id });
+  // Yesterday's outcome no longer describes today's refresh; pageRefreshEnded fills these in again.
+  putPage({ ...page, refreshed_on: date, task_id: t.id, last_ok: undefined, last_result: undefined, changed: undefined });
   console.log(`[pages] refreshing ${page.id} (${page.title}) as task ${t.id}`);
 }
 
@@ -677,6 +688,7 @@ function savePage(args: Record<string, unknown>): string {
   if (args.remove === true) {
     if (!existing) throw new Error('remove needs page_id');
     pages.remove(existing.id);
+    broadcast({ type: 'page_removed', id: existing.id });
     return `Page ${existing.id} ("${existing.title}") removed. It no longer refreshes; its files stay in the Make tab.`;
   }
   const input = pageInput(args, existing);
@@ -684,13 +696,13 @@ function savePage(args: Record<string, unknown>): string {
   const s = settings.get();
   const at = refreshTime(s.brief_time);
   if (existing) {
-    pages.save({ ...existing, ...input });
+    putPage({ ...existing, ...input });
     return `Page ${existing.id} ("${input.title}") updated. It still refreshes every day at ${at}.`;
   }
   if (pages.all().length >= MAX_PAGES) throw new Error(`there are already ${MAX_PAGES} standing pages; update or remove one first`);
   const now = Date.now();
   // The first version was just built, so today counts as refreshed.
-  const page = pages.save({ id: newId(), ...input, refreshed_on: localParts(s.timezone).date, refreshed_at: now, created_at: now, updated_at: now });
+  const page = putPage({ id: newId(), ...input, refreshed_on: localParts(s.timezone).date, refreshed_at: now, created_at: now, updated_at: now });
   return `Saved standing page ${page.id} ("${page.title}"). It refreshes every day at ${at}, 30 minutes before the morning brief, as a background task that delivers the new version in its place. Use page_id="${page.id}" to change it later, or with remove: true to stop it.`;
 }
 
@@ -872,6 +884,7 @@ function retryTask(item: Item): Item {
     progress: '',
     result: undefined,
     follow_ups: undefined,
+    changed: undefined,
     handover_id: undefined,
     steps: t.steps.map((s) => ({ ...s, done: false })),
     retried_at: now,
@@ -918,12 +931,14 @@ export function runBrief(source: 'scheduled' | 'manual') {
   if (m.queue.some((q) => q.kind === 'brief') || m.active?.spec.kind === 'brief') return;
   const s = settings.get();
   const dayAgo = Date.now() - 86400_000;
+  const today = localParts(s.timezone).date;
   enqueue({
     kind: 'brief',
     sessionId: m.sessionId,
     input: briefPrompt(s, {
       pending: items.pendingCards(),
       tasks: tasks.recent().filter((t) => ['queued', 'running', 'waiting'].includes(t.status) || t.updated_at > dayAgo),
+      pages: pages.all().map((p) => pageBriefLine(p, today, pageRefreshing(p))),
     }),
   });
   console.log(`[brief] queued (${source})`);
@@ -1101,6 +1116,7 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
       if (args.progress !== undefined) next.progress = str(args.progress, 300);
       if (Array.isArray(args.steps)) next.steps = args.steps.slice(0, 60).map((s: any): TaskStep => ({ text: str(s?.text ?? s, 200), done: !!s?.done }));
       if (args.result !== undefined) next.result = str(args.result, 2000);
+      if (args.changed !== undefined) next.changed = str(args.changed, 300);
       if (args.follow_ups !== undefined) next.follow_ups = followUps(args.follow_ups);
       if (typeof args.status === 'string' && ['running', 'waiting', 'done', 'failed'].includes(args.status)) next.status = args.status as Task['status'];
       putTask(next);
@@ -1168,7 +1184,7 @@ function deliverFile(a: { path: string; title: string; summary?: string }, o: Or
   // stray screenshot or CSV from the same run can't take the dashboard's place.
   const page = pageOf(o.taskId);
   const current = page ? files.get(page.file_id) : null;
-  if (page && (!current || current.entry.mime === entry.mime)) pages.save({ ...page, file_id: id, refreshed_at: entry.created_at });
+  if (page && (!current || current.entry.mime === entry.mime)) putPage({ ...page, file_id: id, refreshed_at: entry.created_at });
   // A background task's files arrive together on its handover card instead of one card each mid-run.
   if (!backgroundTask(o.taskId)) postCard({ type: 'file', title: a.title, body: a.summary || undefined, file_id: id, status: 'info' }, o);
   return entry;

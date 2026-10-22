@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import { trackPending } from '../../shared/pending';
-import type { AgentState, FileEntry, Item, ServerEvent, Settings, Snapshot, Task } from '../../shared/types';
+import type { AgentState, FileEntry, Item, Page, ServerEvent, Settings, Snapshot, Task } from '../../shared/types';
 
 export interface State {
   ready: boolean;
@@ -12,6 +12,8 @@ export interface State {
   pending: Item[];
   tasks: Task[];
   files: FileEntry[];
+  /** Standing pages, pinned at the top of Make. */
+  pages: Page[];
   settings: Settings | null;
   agent: AgentState;
   pushEnabled: boolean;
@@ -28,6 +30,7 @@ let state: State = {
   pending: [],
   tasks: [],
   files: [],
+  pages: [],
   settings: null,
   agent: initialAgent,
   pushEnabled: false,
@@ -73,6 +76,7 @@ export function applySnapshot(s: Snapshot) {
     pending: s.pending,
     tasks: s.tasks.sort(byUpdatedDesc),
     files: s.files,
+    pages: s.pages ?? [],
     settings: s.settings,
     agent: s.agent,
     pushEnabled: s.push_enabled,
@@ -98,6 +102,12 @@ export function applyEvent(ev: ServerEvent) {
       break;
     case 'file':
       setState((s) => ({ files: [ev.file, ...s.files.filter((f) => f.id !== ev.file.id)] }));
+      break;
+    case 'page':
+      setState((s) => ({ pages: upsert(s.pages, ev.page, byCreated) }));
+      break;
+    case 'page_removed':
+      setState((s) => ({ pages: s.pages.filter((p) => p.id !== ev.id) }));
       break;
     case 'agent':
       setState({ agent: ev.agent });

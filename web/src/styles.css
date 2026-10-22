@@ -1578,6 +1578,14 @@ li.done .tick {
   color: var(--faint);
   flex: none;
 }
+.page-change {
+  margin-top: 4px;
+  font-size: 13.5px;
+  color: var(--gold);
+}
+.page-change.failed {
+  color: var(--danger);
+}
 .row-dot,
 .glow-dot {
   width: 9px;

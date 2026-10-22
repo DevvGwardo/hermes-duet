@@ -201,3 +201,26 @@ SessionEnd hook [node "${CLAUDE_PLUGIN_ROOT}/hooks/session-end-cleanup.mjs"] fai
 - `server/scheduler.ts` calls `refreshPage` for due pages before the brief block; it starts a background task "Refresh: <title>" from `pageRefreshInstructions` (prompts.ts: saved instructions, path of the current version, write to ~/duet-work/page-<id>/). In `deliverFile`, a page task's file replaces `page.file_id` only if the mime matches. `pageRefreshEnded` (via `announceEnd`) records `last_ok`/`last_result`, never pushes, posts no card on success and the muted retry card on failure; done without a new file counts as not refreshed. Persona line and README row added. "Refresh time" is derived from `brief_time`, not stored, so it follows the setting.
 - Why it matters against Claude Duet: "build me one page I can check every morning" now has a standing artifact that rebuilds itself before the brief.
 - Verified: typecheck pass · test 46 pass / 0 fail · build pass
+
+## 2026-10-22T01:01:33Z — loop iteration 10
+- exit=0 gate=green committed=True files=11
+- gate: typecheck: exit 0
+- answer:
+```
+h is still running is skipped. 6 tests in `server/pages.test.ts`.
+- **Tool:** new `save_page` in `server/tools.ts` and `server/runner.ts`. It creates a page from a delivered `file_id` plus rebuild instructions, updates one with `page_id`, and stops one with `page_id` + `remove`. It is capped at 10 pages, and a new page counts as already refreshed today.
+- **Schedule:** `server/scheduler.ts` calls `refreshPage` before the brief check. That starts a background task "Refresh: <title>" using `pageRefreshInstructions` (`server/prompts.ts`). A file the task delivers replaces the page's current version only if it is the same file type.
+- **When a refresh ends:** it never sends a push. Success posts no card. Failure leaves the muted card with "Try again". A task marked done that delivered no new file is recorded as not refreshed.
+- Also added a line to the agent's standing instructions and a README tool row. The backlog item is ticked, a new item "Stop a standing page from the app" is added, and the next item now also covers putting pages in `Snapshot` and holding the brief while a refresh is still running.
+- typecheck: `tsc -p tsconfig.json --noEmit` → exit 0
+- test: `46 pass, 0 fail, 171 expect() calls` → exit 0
+- build: `✓ built in 109ms` → exit 0
+
+> CORRECTION: the item lists "refresh time" as a stored column. I compute it from `brief_time` instead, so changing the brief time moves the refresh too. The page stores `refreshed_on` (to refresh once a day) and `refreshed_at` instead.
+```
+
+## 2026-10-22T05:04Z — Standing page: what changed, pinned in Make
+- What changed: `update_task` takes `changed` (tools.ts, stored on `Task.changed`); `pageRefreshEnded` copies it to `Page.changed` on a successful refresh and clears it on failure; `refreshPage` resets last_ok/last_result/changed when a refresh starts. `pageRefreshInstructions` asks for `changed`. Every page write goes through `putPage`, which broadcasts a new `page` event (`page_removed` on save_page remove); `Snapshot.pages` added (server/index.ts, shared/types.ts).
+- `runBrief` passes one `pageBriefLine` per page (server/pages.ts: refreshed + change / failed + reason / still running / stopped / not refreshed / new today) into `briefPrompt`, which tells the model to call out each page's one change or failed refresh. Scheduler holds a due brief while any page is refreshing, at most `BRIEF_HOLD_MIN` (30) via pure `holdBrief`; a held brief may go out past the midday cutoff. Make pins pages under "Every morning" (refreshed time, change line in gold, failure in red, "Refreshing now…"). 2 new tests in pages.test.ts; README row updated.
+- Why it matters against Claude Duet: the standing page now "calls out the one thing that changed", both on the page in Make and in the morning brief, and the brief waits for the refresh.
+- Verified: typecheck pass · test 48 pass / 0 fail · build pass

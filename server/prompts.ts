@@ -60,12 +60,19 @@ function taskLines(list: Task[]) {
   return list.map((t) => `- [task ${t.id}] ${t.title}: ${t.status}${t.result ? `. ${t.result.slice(0, 200)}` : ''}`).join('\n');
 }
 
-export function briefPrompt(s: Settings, ctx: { pending: Item[]; tasks: Task[] }) {
+/** `pages` holds one line per standing page (pageBriefLine): what its refresh this morning changed, or why not. */
+export function briefPrompt(s: Settings, ctx: { pending: Item[]; tasks: Task[]; pages: string[] }) {
+  const pages = ctx.pages.length
+    ? `\n\nStanding pages (rebuilt shortly before this brief; the user checks them every morning):\n${ctx.pages.join('\n')}`
+    : '';
+  const pageStep = ctx.pages.length
+    ? ` For each standing page, give the one thing that changed (or that its refresh failed) as a watching line, or as a decision if it needs one; don't repeat the whole page.`
+    : '';
   return `[morning brief] Prepare today's morning brief.
 
 1. Gather: the context sources listed in your standing instructions; email, calendar and messages if you have tools for them; the Hermes Duet state below.
 2. Pick the decisions that actually need the user today: at most 5, ranked by priority. Be specific (names, amounts, deadlines). Where a next step is obvious, prepare it and put it in the entry's draft (the full reply, the plan), but don't send anything.
-3. Everything else worth knowing that needs no decision yet goes in watching, one line each. It's shown muted and never notifies, so don't pad the decisions with it.
+3. Everything else worth knowing that needs no decision yet goes in watching, one line each. It's shown muted and never notifies, so don't pad the decisions with it.${pageStep}
 4. Call post_brief once. Title it like "Good morning. N things need you today.", counting decisions only. Give entries one-tap actions where useful (action_message is what tapping sends you). An entry with a draft gets a button that hands the draft back to you as is; when that arrives, use it as drafted, through request_approval if it goes out. If nothing needs a decision today, still call it, with no entries and your watching list ("Good morning. Nothing needs you today."); it posts without notifying.
 5. Then reply with one short line, nothing more.
 
@@ -73,7 +80,7 @@ Waiting on the user in Hermes Duet:
 ${pendingLines(ctx.pending)}
 
 Hermes Duet tasks (active, or finished in the last day):
-${taskLines(ctx.tasks)}`;
+${taskLines(ctx.tasks)}${pages}`;
 }
 
 export function checkinPrompt(s: Settings, ctx: { since: string; pending: Item[]; tasks: Task[] }) {
@@ -112,7 +119,8 @@ How to build it (written when the page was set up):
 ${page.instructions}
 
 ${current}
-Rebuild it with today's data, write the new version to ${WORK_DIR}/page-${page.id}/, and hand it over with deliver_file as the same kind of file. That replaces the page's current version; don't call save_page. If a source can't be reached, still deliver the page and say on it what is stale.`;
+Rebuild it with today's data, write the new version to ${WORK_DIR}/page-${page.id}/, and hand it over with deliver_file as the same kind of file. That replaces the page's current version; don't call save_page. If a source can't be reached, still deliver the page and say on it what is stale.
+When you mark the task done with update_task, also pass changed: one line on the single most important difference from the previous version, e.g. "Rent moved to Friday" or "No change since yesterday". It is pinned on the page in the Make tab and the morning brief calls it out.`;
 }
 
 export function decisionPrompt(card: Item, decision: { approved?: boolean; answer?: string }) {

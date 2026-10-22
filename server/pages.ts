@@ -6,6 +6,8 @@ import { toMinutes } from './clock';
 /** Pages refresh this long before the morning brief, so the brief sees today's version. */
 export const REFRESH_LEAD_MIN = 30;
 export const MAX_PAGES = 10;
+/** A brief that comes due while a refresh is still running waits this long at most, then goes ahead without it. */
+export const BRIEF_HOLD_MIN = 30;
 
 const text = (v: unknown, max: number) => (typeof v === 'string' ? v.slice(0, max).trim() : '');
 const hhmm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
@@ -37,4 +39,20 @@ export function pageInput(raw: Record<string, unknown>, existing?: Page | null):
   if (!out.title) throw new Error('missing title');
   if (!out.instructions) throw new Error('missing instructions: say how to rebuild the page from scratch each morning');
   return out;
+}
+
+/** Whether the due brief should keep waiting: some page is still refreshing and the hold hasn't run out. */
+export function holdBrief(refreshing: boolean, heldSince: number | null, now: number): boolean {
+  return refreshing && (heldSince === null || now - heldSince < BRIEF_HOLD_MIN * 60_000);
+}
+
+/** One line per page for the brief prompt: today's change, or why there isn't one. */
+export function pageBriefLine(page: Page, today: string, refreshing: boolean): string {
+  const head = `- "${page.title}" (page ${page.id}): `;
+  if (refreshing) return `${head}today's refresh is still running, so this brief can't say what changed.`;
+  if (page.refreshed_on !== today) return `${head}not refreshed yet today.`;
+  if (!page.task_id) return `${head}set up today, so there is no earlier version to compare with.`;
+  if (page.last_ok) return `${head}refreshed. What changed: ${page.changed || 'the refresh did not say.'}`;
+  if (page.last_ok === false) return `${head}today's refresh failed (${page.last_result || 'no reason given'}); the page still shows the previous version.`;
+  return `${head}today's refresh was stopped before it finished; the page still shows the previous version.`;
 }

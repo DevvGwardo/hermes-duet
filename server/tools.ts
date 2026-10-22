@@ -185,6 +185,10 @@ export const TOOLS = [
         steps: { type: 'array', items: { type: 'object', properties: { text: { type: 'string' }, done: { type: 'boolean' } }, required: ['text'] } },
         status: { type: 'string', enum: ['running', 'waiting', 'done', 'failed'] },
         result: { type: 'string', description: 'Final outcome, when done or failed (for failed, the reason). One or two lines; it is the body of the handover card.' },
+        changed: {
+          type: 'string',
+          description: 'Standing page refreshes only: one line on the single most important thing that changed since the previous version ("No change since yesterday" if nothing did).',
+        },
         follow_ups: {
           type: 'array',
           maxItems: 3,

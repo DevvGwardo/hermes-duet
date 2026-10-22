@@ -4,7 +4,7 @@ import type { Snapshot } from '../shared/types';
 import { createPairCode, deviceCookie, deviceFor, internalToken, isHttps, redeemPairCode, sameOrigin } from './auth';
 import { sseResponse } from './bus';
 import { config } from './config';
-import { files, items, kv, settings, tasks } from './db';
+import { files, items, kv, pages, settings, tasks } from './db';
 import { hermes } from './hermes';
 import { hasSubscriptions, notify, publicKey, saveSubscription } from './push';
 import { actOnCard, agentState, cancelTask, executeTool, recoverOrphans, runBrief, runCheckin, startHermesWatch, stopMain, submitUser } from './runner';
@@ -72,6 +72,7 @@ async function handleApp(req: Request): Promise<Response> {
         pending: items.pendingCards(),
         tasks: tasks.recent(),
         files: files.all(),
+        pages: pages.all(),
         settings: settings.get(),
         agent: agentState(),
         push_enabled: hasSubscriptions(device),
