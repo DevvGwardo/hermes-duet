@@ -127,6 +127,15 @@ export function waitingNote(pending: Item[], sessionId: string): string {
 }
 
 /**
+ * The waiting-cards note for a user message going into `run`: a fresh chat turn, or text steered into a live one
+ * (Hermes hands steer text to the model verbatim inside its own marker, so the prefix arrives the same way). Briefs,
+ * check-ins and tasks get none: the user's words don't reach them as a chat message.
+ */
+export function turnNote(pending: Item[], run: { kind: string; sessionId: string }): string {
+  return run.kind === 'chat' ? waitingNote(pending, run.sessionId) : '';
+}
+
+/**
  * What an approval or answer that arrives long after its card was posted must check first (`age` from askAge).
  * The agent is told to stop and say so rather than adjust anything itself: the user approved the exact text, so a
  * changed date or a done errand needs a fresh card, not a silent edit. An edited draft was rewritten by the user just

@@ -2,7 +2,7 @@ import { copyFileSync, mkdirSync, statSync } from 'node:fs';
 import { basename, extname, isAbsolute, join, resolve } from 'node:path';
 import { askAge } from '../shared/age';
 import type { AgentState, CardData, FileEntry, Item, Page, Task, TaskStep, ToolStep } from '../shared/types';
-import { DRAFT_MAX, PROMPT_ENDED, REPLACED, WITHDRAWN, approvalDecision, approvalPush, deadPrompts, replaceRefusal, waitingNote, withdrawRefusal } from './approval';
+import { DRAFT_MAX, PROMPT_ENDED, REPLACED, WITHDRAWN, approvalDecision, approvalPush, deadPrompts, replaceRefusal, turnNote, withdrawRefusal } from './approval';
 import { BRIEF_RETRY, SKIP_MEMORY_DAYS, briefCard, briefFailure, briefTitle, checkinOutcome, morningOutcome, notifyRefusal, raisedToday, skipEntry, skippedLately, useAction, useDraft } from './brief';
 import { broadcast } from './bus';
 import { inQuietHours, localParts } from './clock';
@@ -232,7 +232,7 @@ async function launch(l: Lane, spec: RunSpec) {
   // Notes are cleared only once Hermes accepts the run, so a failed start doesn't lose them.
   const notes = l.main && spec.kind === 'chat' ? peekContextNotes() : '';
   // Read fresh at launch, not at enqueue, so a card decided while this message sat in the queue isn't listed.
-  const waiting = l.main && spec.kind === 'chat' ? waitingNote(items.pendingCards(), spec.sessionId) : '';
+  const waiting = l.main ? turnNote(items.pendingCards(), spec) : '';
   const input = notes + waiting + spec.input;
 
   if (spec.taskId) {
@@ -863,8 +863,9 @@ export function submitUser(text: string, input?: string): Item {
   const active = m.active;
   // Mid-run messages steer the live turn (Hermes re-queues the steer as the next turn if it lands too late).
   if (active && active.id && !active.finished && m.queue.length === 0) {
+    // The note goes only on the steer: if it isn't accepted, the queued turn gets a fresh one from launch.
     hermes
-      .steer(active.id, t)
+      .steer(active.id, turnNote(items.pendingCards(), active.spec) + t)
       .then((r) => {
         if (!r?.accepted) throw new Error('not accepted');
       })

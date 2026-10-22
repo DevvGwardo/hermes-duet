@@ -263,3 +263,10 @@
 2:14AM INF no leaks found
 [2026-10-22 02:14:24] iter 34 done · exit=0 gate=green committed=True changed=10
 [2026-10-22 02:14:44] iter 35 start → iter-35-20261022-021444.log
+[2026-10-22 02:17:32] iter 35 commit=ok · [overnight/claude-duet-20261022 39622f1] overnight(iter 35): DONE: Cards settled in chat stay tappable
+ 9 files changed, 129 insertions(+), 4 deletions(-)
+2:17AM INF 0 commits scanned.
+2:17AM INF scanned ~11897 bytes (11.90 KB) in 24.6ms
+2:17AM INF no leaks found
+[2026-10-22 02:17:32] iter 35 done · exit=0 gate=green committed=True changed=8
+[2026-10-22 02:17:53] iter 36 start → iter-36-20261022-021753.log

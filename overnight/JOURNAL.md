@@ -800,3 +800,29 @@ DONE: Old approvals are acted on as if fresh
 - Not changed: steered mid-run messages don't get the note (new low-priority backlog item). Not tried with a real model.
 - Why it matters against Claude Duet: "goes quiet until something genuinely needs you". A decision already given in chat shouldn't still ask for a tap.
 - Verified: typecheck pass · test 106 pass / 0 fail · build pass
+
+## 2026-10-22T02:17:32Z — loop iteration 35
+- exit=0 gate=green committed=True files=8
+- gate: typecheck: exit 0
+- answer:
+```
+ load your organization's connectors
+DONE: Cards settled in chat stay tappable
+
+> CORRECTION: nothing in the backlog was open and unblocked, so I found this gap myself and added it to the backlog already ticked.
+
+- **Problem:** if you answered a waiting approval or question by typing ("no, don't send that", "the second one") instead of tapping, the card stayed open. It stayed in "Needs you" and in the brief, and tapping it days later told the agent to "do exactly what the card described".
+- **Fix:** a new `withdraw_card` tool lets the agent close one of its own waiting cards. The card then reads "Expired · Withdrawn: <reason>". It is checked by a new `withdrawRefusal`, which uses the same rules as `replaces`. Each chat message now starts with a short list of that conversation's cards still waiting (new `waitingNote`) and says when to withdraw one. Files: `server/approval.ts`, `server/runner.ts`, `server/tools.ts`, `server/prompts.ts`, `README.md`, plus 2 tests in `server/approval.test.ts`.
+- **Approvals unchanged:** saying yes in chat still doesn't approve anything. The agent asks you to tap the card's button.
+- **Limit:** a message sent while the agent is mid-turn doesn't get the list yet, so I added that as a low-priority backlog item. This only works if the model follows the instruction, and I haven't tried it with a real model.
+- typecheck: `tsc -p tsconfig.json --noEmit` → exit 0
+- test: `106 pass, 0 fail, 377 expect() calls` → exit 0
+- build: `✓ built in 100ms` → exit 0
+```
+
+## 2026-10-22T06:20Z — Steered messages miss the waiting-cards note
+- What changed: new pure `turnNote(pending, run)` (server/approval.ts, +1 test) returns `waitingNote` for chat runs and '' for briefs, check-ins and tasks. `launch` uses it in place of its inline check, and `submitUser` now prefixes the text it steers into a live run with `turnNote(items.pendingCards(), active.spec)`, read when the message is sent. If the steer isn't accepted, the queued fallback still sends the raw text, and launch adds a fresh note, so it is never doubled. README line updated.
+- Checked first (read-only, ~/.hermes/hermes-agent): `agent.steer` strips the text and delivers it unchanged as its own user row inside Hermes's steer marker (`steer_user_row`), so a prefix reaches the model as written. Two steers in one tool batch are joined with "\n", so each carries its own note. That only costs tokens.
+- Discovered: the API server returns a steer that is still undelivered when the turn ends as `pending_steer` for client replay, and Duet ignores it, so that message is lost. Added a backlog item for it, ahead of polish.
+- Why it matters against Claude Duet: "goes quiet until something genuinely needs you". A "never mind" typed while the agent is working should take the card down too.
+- Verified: typecheck pass · test 107 pass / 0 fail · build pass

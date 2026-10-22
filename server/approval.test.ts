@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import type { CardData, Item } from '../shared/types';
-import { OPEN_ASKS_MAX, approvalDecision, approvalPrompt, approvalPush, askMarks, deadPrompts, replaceRefusal, waitingNote, withdrawRefusal } from './approval';
+import { OPEN_ASKS_MAX, approvalDecision, approvalPrompt, approvalPush, askMarks, deadPrompts, replaceRefusal, turnNote, waitingNote, withdrawRefusal } from './approval';
 
 const card = (extra: Partial<CardData> = {}): CardData => ({ type: 'approval', title: 'Send the reply to Dana', status: 'pending', ...extra });
 const item = (c: CardData): Item => ({ id: 'c1', kind: 'card', created_at: 0, updated_at: 0, card: c });
@@ -121,6 +121,15 @@ test('a chat message is told which of its session\'s cards are still waiting, ne
   expect(waitingNote(pending.slice(2), 'main')).toBe('');
   const many = Array.from({ length: 7 }, (_, i) => at(`a${i}`, i, {}));
   expect(waitingNote(many, 'main').match(/\[approval /g)).toHaveLength(5);
+});
+
+test('the waiting-cards note goes on chat turns and steers into them, not on briefs or tasks', () => {
+  const pending = [{ ...item(card({ session_id: 'main', title: 'Send the reply to Dana' })), id: 'a' }];
+  expect(turnNote(pending, { kind: 'chat', sessionId: 'main' })).toBe(waitingNote(pending, 'main'));
+  expect(turnNote(pending, { kind: 'chat', sessionId: 'main' })).toContain('[approval a]');
+  expect(turnNote(pending, { kind: 'brief', sessionId: 'main' })).toBe('');
+  expect(turnNote(pending, { kind: 'task', sessionId: 'main' })).toBe('');
+  expect(turnNote(pending, { kind: 'chat', sessionId: 'duet-task-1' })).toBe('');
 });
 
 test('every push lists the open asks, and marks itself an ask only for a pending approval or question', () => {
