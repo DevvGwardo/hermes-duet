@@ -38,6 +38,16 @@ describe('post_brief entries', () => {
     });
   });
 
+  test('the morning brief may be Watching only; a check-in may not', () => {
+    const quiet = { entries: [], watching: [{ title: 'Package arrives Thursday' }] };
+    expect(briefCard(quiet, { morning: true })).toEqual({ entries: [], watching: [{ title: 'Package arrives Thursday', detail: undefined }], demoted: [] });
+    expect(() => briefCard(quiet)).toThrow(/at least one entry/);
+  });
+
+  test('a morning brief with nothing at all is still an error', () => {
+    expect(() => briefCard({ entries: [], watching: [{ title: '  ' }] }, { morning: true })).toThrow(/at least one watching item/);
+  });
+
   test('an untitled entry is an error', () => {
     expect(() => briefCard({ entries: [{ detail: 'no title' }] })).toThrow(/missing entry title/);
   });
@@ -77,5 +87,12 @@ describe('brief = ranked decisions plus Watching', () => {
     expect(briefTitle('Heads up: Three things', 2)).toBe('Heads up: Two things');
     expect(briefTitle('Heads up: 1 item', 3)).toBe('Heads up: 3 items');
     expect(briefTitle('Good morning. Quiet day.', 2)).toBe('Good morning. Quiet day.');
+  });
+
+  test('with no decisions the count reads "Nothing needs"', () => {
+    expect(briefTitle('Good morning. 2 things need you today.', 0)).toBe('Good morning. Nothing needs you today.');
+    expect(briefTitle('Good morning, 0 things need you', 0)).toBe('Good morning, nothing needs you');
+    expect(briefTitle('Zero items need you', 0)).toBe('Nothing needs you');
+    expect(briefTitle('Good morning. Nothing needs you today.', 0)).toBe('Good morning. Nothing needs you today.');
   });
 });

@@ -136,3 +136,25 @@ DONE: Brief = ranked decisions with drafts, plus Watching
 - Web: `CardView` renders a pending Duet approval's draft as a textarea (Undo edits, empty guard) and sends it with Approve only when changed; decided cards show the draft read-only and "Sent with your edits". Tool description, persona line and README row updated.
 - Why it matters against Claude Duet: "approvals are one tap, with the full draft in the card": the user can fix a typo without a round trip to the agent.
 - Verified: typecheck pass · test 33 pass / 0 fail · build pass
+
+## 2026-10-22T00:50:22Z — loop iteration 7
+- exit=0 gate=green committed=True files=11
+- gate: typecheck: exit 0
+- answer:
+```
+ion's connectors
+DONE: Approvals carry an editable draft
+- `request_approval` now takes an optional `draft`, the exact text to be sent (`server/tools.ts`, `shared/types.ts`, which also adds `edited`). New pure `server/approval.ts` with 5 tests in `server/approval.test.ts`. If the user changes the text and approves, `actOnCard` (`server/runner.ts`) saves their version on the card as `draft` and sets `edited: true`. An empty or too-long edit is refused. Declines, the push notification's Approve button and Hermes-native cards ignore any edit.
+- When the draft was edited, the agent gets "APPROVED with edits … Send exactly the text below" followed by the user's text (`approvalPrompt`, used by `decisionPrompt` in `server/prompts.ts`). I also updated the regex that titles these runs so it still matches the new wording. The tool description, the line in the agent's instructions and the README row are updated.
+- On the phone (`web/src/components/CardView.tsx`, `web/src/styles.css`), a pending approval shows its draft in an editable box with "Undo edits". Approve sends the text back only if it was changed. A decided card shows the draft read-only, labelled "Sent with your edits" when edited.
+- New backlog item, "Push approve skips the draft": the Approve button on the notification can approve a draft card when the push only showed its title.
+- typecheck: `tsc -p tsconfig.json --noEmit` → exit 0
+- test: `33 pass, 0 fail, 128 expect() calls` → exit 0
+- build: `✓ built in 11.40s` → exit 0
+```
+
+## 2026-10-22T04:52Z — Morning brief with nothing to decide
+- What changed: `briefCard(raw, { morning })` (server/brief.ts) accepts zero decisions for the morning brief when Watching is non-empty; check-ins still need a decision, and a brief with neither is an error. `briefTitle` turns "<N> things need" into "Nothing needs" at zero decisions (capital only where a sentence starts). `post_brief` in server/runner.ts passes `morning` and skips the push when there are no decisions.
+- `post_brief` schema drops `minItems`/required `entries` and its description explains the quiet-morning exception; `briefPrompt` step 4 tells the model to still call it on a quiet day. CardView skips the empty decision list. README row updated; 3 new tests in brief.test.ts.
+- Why it matters against Claude Duet: a quiet morning still gets a brief card (Watching only) instead of a push of free text, and it doesn't interrupt the user.
+- Verified: typecheck pass · test 36 pass / 0 fail · build pass

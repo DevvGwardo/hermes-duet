@@ -954,7 +954,8 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
       return `Question card ${item.id} posted. End your turn now; the answer arrives as "[answer ${item.id}] …".`;
     }
     case 'post_brief': {
-      const { entries, watching, demoted } = briefCard(args);
+      const morning = o.run?.spec.kind === 'brief';
+      const { entries, watching, demoted } = briefCard(args, { morning });
       const s = settings.get();
       const item = postCard(
         {
@@ -969,7 +970,8 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
         o,
       );
       if (o.run) o.run.briefs++;
-      const morning = o.run?.spec.kind === 'brief';
+      // A quiet morning (Watching only) is posted but not pushed: nothing needs the user, so nothing interrupts them.
+      if (!entries.length) return `Brief card ${item.id} posted with nothing to decide. It was not pushed.`;
       pushSafe(
         {
           title: item.card!.title,

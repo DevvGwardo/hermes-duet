@@ -45,7 +45,7 @@ export function CardView({ item, onOpenFile }: { item: Item; onOpenFile: (id: st
       <h3 className="card-title">{card.title}</h3>
       {card.body && <Markdown text={card.body} className="card-body" />}
 
-      {card.type === 'brief' && card.entries && <BriefList card={card} />}
+      {card.type === 'brief' && card.entries?.length ? <BriefList card={card} /> : null}
       {card.type === 'brief' && card.watching?.length ? <Watching list={card.watching} /> : null}
       {card.type === 'checklist' && card.checklist && <Checklist card={card} />}
       {card.type === 'metrics' && card.metrics && (

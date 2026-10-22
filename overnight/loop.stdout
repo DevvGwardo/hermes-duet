@@ -51,3 +51,12 @@
 12:46AM INF no leaks found
 [2026-10-22 00:46:34] iter 6 done · exit=0 gate=green committed=True changed=11
 [2026-10-22 00:46:54] iter 7 start → iter-07-20261022-004654.log
+[2026-10-22 00:50:22] iter 7 commit=ok · ht(iter 7): DONE: Approvals carry an editable draft
+ 12 files changed, 215 insertions(+), 20 deletions(-)
+ create mode 100644 server/approval.test.ts
+ create mode 100644 server/approval.ts
+12:50AM INF 0 commits scanned.
+12:50AM INF scanned ~14520 bytes (14.52 KB) in 22.4ms
+12:50AM INF no leaks found
+[2026-10-22 00:50:22] iter 7 done · exit=0 gate=green committed=True changed=11
+[2026-10-22 00:50:42] iter 8 start → iter-08-20261022-005042.log

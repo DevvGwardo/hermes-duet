@@ -43,7 +43,7 @@
   |---|---|
   | `request_approval` | Posts an Approve / Not now card, with an optional `draft` (the exact text to send) the user can edit before approving. The turn ends, and tapping resumes the same session; an edited draft comes back verbatim. |
   | `ask` | Asks a question with 2–4 tappable answers. |
-  | `post_brief` | Posts a brief: up to 5 decisions ranked high to low, each with an optional prepared draft and one-tap follow-up, plus a muted Watching list that never notifies. |
+  | `post_brief` | Posts a brief: up to 5 decisions ranked high to low, each with an optional prepared draft and one-tap follow-up, plus a muted Watching list that never notifies. A quiet morning brief may be Watching only, posted without a push. |
   | `post_card` | Posts a checklist, metrics or note, and can update it in place. |
   | `deliver_file` | Hands over a doc, sheet, deck or dashboard. HTML renders live but sandboxed. |
   | `start_task` / `update_task` | Starts background work and keeps the Tasks tab current. When the task is done, its result, files and up to three follow-ups come back as one handover card in the thread. A task that fails or stops gets the same card, muted, with its reason, any files so far, and a "Try again" button that restarts it from the same instructions. |

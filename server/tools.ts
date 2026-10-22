@@ -47,15 +47,16 @@ export const TOOLS = [
       'Post a brief: a short ranked list of decisions that need the user (used for the morning brief and check-ins), plus an optional Watching list. ' +
       'entries are decisions only, at most 5 (the server sorts them high to low and moves any extra to Watching); each is one line, a short detail, and the draft you already prepared if there is one. ' +
       'watching is for things you are keeping an eye on that need no decision yet; it is shown muted and never notifies. ' +
-      'It posts a card and notifies the user, so it needs at least one entry; if nothing needs a decision, do not call it.',
+      'It posts a card and notifies the user, so a check-in needs at least one entry; if nothing needs a decision, do not call it then. ' +
+      'The morning brief is the exception: on a quiet day, call it with no entries and a non-empty watching list; it posts without notifying.',
     inputSchema: {
       type: 'object',
       properties: {
-        title: { type: 'string', description: 'e.g. "Good morning. 3 things need you today." Count decisions only; the server corrects the number.' },
+        title: { type: 'string', description: 'e.g. "Good morning. 3 things need you today." Count decisions only; the server corrects the number (with none, it reads "Nothing needs you today").' },
         summary: { type: 'string', description: 'Optional one or two sentences of markdown above the list.' },
         entries: {
           type: 'array',
-          minItems: 1,
+          description: 'Decisions. At least one, except in the morning brief, which may send none if watching is non-empty.',
           items: {
             type: 'object',
             properties: {
@@ -79,7 +80,7 @@ export const TOOLS = [
           },
         },
       },
-      required: ['title', 'entries'],
+      required: ['title'],
     },
   },
   {

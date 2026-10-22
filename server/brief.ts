@@ -10,10 +10,15 @@ const RANK = { high: 0, medium: 1, low: 2 } as const;
 /**
  * Normalize post_brief's decisions and watching list. Decisions are sorted high to low (stable, so the model's
  * order holds within a priority) and capped at MAX_DECISIONS. Overflow is demoted to the front of Watching
- * instead of dropped, and `demoted` names it so the tool result can tell the model. A brief with no decisions
- * isn't a brief: it would still post a card and push "Heads up", so that is an error the model sees.
+ * instead of dropped, and `demoted` names it so the tool result can tell the model. A check-in with no decisions
+ * has no reason to exist (it would still post a card and push "Heads up"), so that is an error the model sees.
+ * The morning brief is the exception: on a quiet day it may post Watching alone, so the user still gets their
+ * brief instead of the free-text fallback push. It still needs something to show.
  */
-export function briefCard(raw: { entries?: unknown; watching?: unknown }): { entries: BriefEntry[]; watching: WatchEntry[]; demoted: string[] } {
+export function briefCard(
+  raw: { entries?: unknown; watching?: unknown },
+  opts: { morning?: boolean } = {},
+): { entries: BriefEntry[]; watching: WatchEntry[]; demoted: string[] } {
   const ranked = (Array.isArray(raw.entries) ? raw.entries : [])
     .slice(0, 10)
     .map((e: any): BriefEntry & { priority: keyof typeof RANK } => {
@@ -29,12 +34,14 @@ export function briefCard(raw: { entries?: unknown; watching?: unknown }): { ent
       };
     })
     .sort((a, b) => RANK[a.priority] - RANK[b.priority]);
-  if (!ranked.length) throw new Error('post_brief needs at least one entry. If nothing needs the user, do not call post_brief.');
-  const overflow = ranked.slice(MAX_DECISIONS);
   const watching = (Array.isArray(raw.watching) ? raw.watching : []).slice(0, 10).flatMap((w: any): WatchEntry[] => {
     const title = text(w?.title, 160);
     return title ? [{ title, detail: text(w?.detail, 400) || undefined }] : [];
   });
+  if (!ranked.length && !opts.morning) throw new Error('post_brief needs at least one entry. If nothing needs the user, do not call post_brief.');
+  if (!ranked.length && !watching.length)
+    throw new Error('post_brief needs at least one entry or, for the morning brief, at least one watching item.');
+  const overflow = ranked.slice(MAX_DECISIONS);
   return {
     entries: ranked.slice(0, MAX_DECISIONS),
     watching: [...overflow.map((e) => ({ title: e.title, detail: e.detail })), ...watching].slice(0, 12),
@@ -47,11 +54,14 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
 /**
  * The model titles a brief "N things need you" before the server ranks and caps it, and it may count watched
  * items too. Rewrite the first "<number> thing(s)/item(s)/decision(s) [need(s)]" to the real decision count,
- * keeping digits vs words, capitalization and verb agreement. Titles without a count are left alone.
+ * keeping digits vs words, capitalization and verb agreement. Titles without a count are left alone. With no
+ * decisions, "<count> things need" reads "Nothing needs", so a quiet morning says so instead of "0 things".
  */
 export function briefTitle(title: string, decisions: number): string {
   const re = new RegExp(`\\b(\\d+|${WORDS.join('|')})(\\s+)(thing|item|decision)s?\\b(\\s+needs?\\b)?`, 'i');
-  return title.replace(re, (_m, num: string, sp: string, noun: string, verb?: string) => {
+  return title.replace(re, (_m, num: string, sp: string, noun: string, verb: string | undefined, at: number) => {
+    // A digit says nothing about case, so "Nothing" is capitalized only where a sentence starts.
+    if (!decisions && verb) return `${/(^|[.!?]\s*)$/.test(title.slice(0, at)) ? 'N' : 'n'}othing needs`;
     let n = /\d/.test(num) ? String(decisions) : (WORDS[decisions] ?? String(decisions));
     if (num[0] !== num[0].toLowerCase()) n = n[0].toUpperCase() + n.slice(1);
     const one = decisions === 1;
