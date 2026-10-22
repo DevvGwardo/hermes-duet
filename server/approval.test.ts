@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import type { CardData, Item } from '../shared/types';
-import { approvalDecision, approvalPrompt } from './approval';
+import { approvalDecision, approvalPrompt, approvalPush } from './approval';
 
 const card = (extra: Partial<CardData> = {}): CardData => ({ type: 'approval', title: 'Send the reply to Dana', status: 'pending', ...extra });
 const item = (c: CardData): Item => ({ id: 'c1', kind: 'card', created_at: 0, updated_at: 0, card: c });
@@ -38,4 +38,15 @@ test('the resume prompt hands an edited draft back verbatim', () => {
   expect(approvalPrompt(item(card({ draft: 'Hi' })), true)).toContain('sending the draft exactly as it was');
   expect(approvalPrompt(item(card()), true)).not.toContain('draft');
   expect(approvalPrompt(item(card({ draft: 'Hi', edited: true })), false)).toStartWith('[approval c1] NOT NOW');
+});
+
+test('an approval push offers one-tap Approve only when there is no draft to read', () => {
+  const plain = approvalPush(item(card({ action_label: 'Send' })));
+  expect(plain).toMatchObject({ title: 'Needs your OK', body: 'Send the reply to Dana', card_id: 'c1', approval: true, action_label: 'Send', tag: 'c1', url: '/?card=c1' });
+  expect(plain.has_draft).toBeUndefined();
+  const drafted = approvalPush(item(card({ draft: 'Hi Dana,\nsee you at 3.' })));
+  expect(drafted.has_draft).toBe(true);
+  expect(drafted.body).toBe('Send the reply to Dana. Draft ready to read.');
+  // The draft text itself never goes into the push payload.
+  expect(JSON.stringify(drafted)).not.toContain('see you at 3');
 });

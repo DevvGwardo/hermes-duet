@@ -345,3 +345,28 @@ DONE: Recovery card says what was retried
 - briefPrompt step 4/5 (server/prompts.ts): skip post_brief only when there is nothing to decide and nothing to watch, and make the closing line say there was nothing today. Fixed the stale "service worker drops this" comment on the reply push (presence is checked in notify() since iteration 13).
 - Why it matters against Claude Duet: "goes quiet until something genuinely needs you". A morning with nothing in it no longer sends a push.
 - Verified: typecheck pass · test 64 pass / 0 fail · build pass
+
+## 2026-10-22T01:19:35Z — loop iteration 16
+- exit=0 gate=green committed=True files=6
+- gate: typecheck: exit 0
+- answer:
+```
+⚠ claude.ai connectors are disabled because ANTHROPIC_API_KEY or another auth source is set and takes precedence over your claude.ai login · Unset it to load your organization's connectors
+DONE: Morning brief with nothing at all still pushes free text
+- **What changed:** when the morning brief run posts no brief card, `finish()` in `server/runner.ts` no longer pushes its reply as "Your morning brief". The decision is in the new pure `morningOutcome` in `server/brief.ts`, with 3 new tests in `server/brief.test.ts`.
+- **What the user sees:** the brief's reply has already streamed into the thread as the agent's message, so it stays there without a push and is logged. If the run posted no card and also said nothing, the thread gets a short system line instead, so the user can see the brief ran.
+- **Prompt:** in `briefPrompt` (`server/prompts.ts`) the agent skips `post_brief` only when there's nothing to decide and nothing to watch, and its closing line has to say there was nothing today. I also fixed a stale comment on the reply push, and ticked the backlog item and added the journal entry.
+- typecheck: `tsc -p tsconfig.json --noEmit` → exit 0
+- test: `64 pass, 0 fail, 215 expect() calls` → exit 0
+- build: `✓ built in 97ms` → exit 0
+
+> CORRECTION: the backlog said to "post that reply as a quiet thread note", but brief runs aren't marked quiet, so the reply was already in the thread. The only change it needed was removing the push.
+```
+
+## 2026-10-22T05:21Z — Push approve skips the draft
+- What changed: new pure `approvalPush` in server/approval.ts (+1 test in approval.test.ts) builds the request_approval push. A card with a draft gets `has_draft` and the body "<title>. Draft ready to read." The draft text never goes into the payload. Used in server/runner.ts; `has_draft` was added to `PushPayload` (server/push.ts).
+- web/public/sw.js: when `has_draft` is set, the first action is "Read the draft" (`open`, which falls through to the existing open-the-card path) instead of Approve. "Not now" stays. Cards without a draft keep one-tap Approve.
+- Not changed: notifications already on screen from the old SW still have Approve until they're dismissed. The server still accepts a bare approve, because the app sends `value` only when the user edited the draft.
+- Found: Hermes-native "Allow once" pushes have the same problem with the command text. Added to the backlog.
+- Why it matters against Claude Duet: "waits for your ok when it matters, with the full draft in the card". An ok has to mean the user saw the draft.
+- Verified: typecheck pass · test 65 pass / 0 fail · build pass

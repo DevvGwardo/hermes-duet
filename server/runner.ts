@@ -1,7 +1,7 @@
 import { copyFileSync, mkdirSync, statSync } from 'node:fs';
 import { basename, extname, isAbsolute, join, resolve } from 'node:path';
 import type { AgentState, CardData, FileEntry, Item, Page, Task, TaskStep, ToolStep } from '../shared/types';
-import { DRAFT_MAX, approvalDecision } from './approval';
+import { DRAFT_MAX, approvalDecision, approvalPush } from './approval';
 import { briefCard, briefTitle, checkinOutcome, morningOutcome, useDraft } from './brief';
 import { broadcast } from './bus';
 import { localParts } from './clock';
@@ -1044,10 +1044,7 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
         o,
       );
       if (o.taskId) markTaskWaiting(o.taskId);
-      pushSafe(
-        { title: 'Needs your OK', body: item.card!.title, card_id: item.id, approval: true, action_label: item.card!.action_label, tag: item.id, url: `/?card=${item.id}` },
-        { ignoreQuiet: true },
-      );
+      pushSafe(approvalPush(item), { ignoreQuiet: true });
       return `Approval card ${item.id} is on the user's phone. They have NOT approved yet. Do not take the action now. Tell them in one short line what you're waiting on, then end your turn. You'll get "[approval ${item.id}] APPROVED" or "NOT NOW" as a new message.`;
     }
     case 'ask': {

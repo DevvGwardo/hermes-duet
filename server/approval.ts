@@ -2,6 +2,7 @@
 // Hermes. A Duet approval may carry `draft`: the exact text the agent will send. The user can edit it on the
 // card before approving; the edited text replaces the draft on the card and goes back to the agent verbatim.
 import type { CardData, Item } from '../shared/types';
+import type { PushPayload } from './push';
 
 export const DRAFT_MAX = 8000;
 
@@ -22,6 +23,26 @@ export function approvalDecision(card: CardData, action: string, value: unknown)
   if (!text) throw new Error('the draft is empty');
   if (text.length > DRAFT_MAX) throw new Error('the draft is too long');
   return { approved: true, draft: text };
+}
+
+/**
+ * The push for a Duet approval card. The notification shows only the title, so a card with a draft gets
+ * `has_draft`: the service worker then offers "Read the draft" (opens the card) instead of a one-tap Approve
+ * that would send text the user never saw.
+ */
+export function approvalPush(card: Item): PushPayload {
+  const c = card.card!;
+  const hasDraft = Boolean(c.draft);
+  return {
+    title: 'Needs your OK',
+    body: hasDraft ? `${c.title}. Draft ready to read.` : c.title,
+    card_id: card.id,
+    approval: true,
+    has_draft: hasDraft || undefined,
+    action_label: c.action_label,
+    tag: card.id,
+    url: `/?card=${card.id}`,
+  };
 }
 
 /** The message that resumes the agent's session after an approval decision. */
