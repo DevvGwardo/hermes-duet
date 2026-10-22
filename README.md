@@ -18,12 +18,24 @@
 
 ## What it does
 
+<!-- AI-generated feature illustration, not a captured app screen. -->
+<p align="center">
+  <img src="docs/brand/what-it-does.png" alt="Hermes Duet's six main features: one conversation for chat, tools, and cards; morning briefs, optional check-ins, and web push; sensitive-action approval cards; background tasks in separate Hermes sessions; steer or stop live work; and recovery prompts after a gateway restart. Approval cards guide the agent; they are not a security sandbox." width="100%">
+</p>
+
+View the [full-size infographic](docs/brand/what-it-does.png), or expand the details for quiet-hour exceptions, approval limits, and recovery behavior.
+
+<details>
+<summary>Feature details and behavior notes</summary>
+
 - **One thread.** Chat, tool activity and cards live in one conversation. **Tasks** tracks running and finished work, and **Make** collects every file it hands you. Settings → **What I can see** lists what the agent starts each turn with: your context sources, its Hermes skills and enabled tools, and connected MCP apps. A blank thread shows a one-line version.
 - **Comes to you.** It sends a morning brief at the time you pick, plus optional check-ins (3× a day or hourly) that stay quiet unless something needs you. Notifications arrive by web push, and quiet hours are respected: a question, interrupted work, finished task or agent `notify` that would have pushed during them is held, and comes back as one "While you were away" push when they end (skipped if the morning brief is due within the hour, since it lists what is waiting). Approvals and the brief itself still push during quiet hours. A device that has the app on screen gets no push (the app reports when it is visible), and the service worker shows every push it receives, because iOS revokes subscriptions that push silently. The app re-registers its subscription each time it opens, and takes the banner for an approval or question off the lock screen once that card is decided or expired. On a device where the app isn't open, the next push that arrives anyway does the same: each push lists the approvals and questions still waiting, and the service worker closes older ones that aren't on it (no push is ever sent just to clear a banner).
 - **Asks before it acts.** Sending messages as you, paying, deleting, posting and signing all go through an **Approve / Not now** card first. Quick decisions become tappable questions.
 - **Works in the background.** Bigger jobs (decks, dashboards, research) run as tasks in their own Hermes session, while you keep chatting.
 - **Steer or stop.** A message sent mid-run steers the live turn, and Stop interrupts it. One that arrives too late for the turn to use (Hermes returns it as `pending_steer`) goes out as the next turn.
 - **Survives restarts.** If the Hermes gateway restarts mid-run, Duet unpauses the session, retries what got blocked, and asks whether to pick up the interrupted work. A standing page's scheduled refresh is not asked about: it starts over once on its own, and a second interruption counts as a failed refresh. A morning brief that fails before posting leaves a "Run it now / Skip today" card and a push, so the day's brief isn't silently lost. A run that goes 45 minutes without a single event (a wedged tool or model call; `DUET_RUN_TIMEOUT_MS`) is stopped, unless it is waiting on a Hermes approval or question for you, so it can't hold the thread or a task slot forever; a long task that keeps reporting steps is never cut off. A chat turn that fails (a model error, or a stopped hung run) leaves a "Try … again?" card and a push. The card says why it stopped and what last finished. Sending a new message instead retires that card, since the conversation carries on.
+
+</details>
 
 <p align="center"><img src="docs/brand/phones.png" alt="Morning brief, approval card and tasks on a phone" width="100%"></p>
 <p align="center"><img src="docs/brand/desktop.png" alt="Desktop layout with sidebar, thread and context rail" width="100%"></p>
