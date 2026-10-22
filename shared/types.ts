@@ -18,11 +18,13 @@ export interface BriefEntry {
   title: string;
   detail?: string;
   priority?: 'high' | 'medium' | 'low';
-  /** Optional one-tap follow-up; tapping sends this text as a user message. */
+  /** Optional one-tap follow-up; tapping sends this text as a user message (unless the entry has a draft). */
   action_label?: string;
   action_message?: string;
   /** Markdown the agent already prepared for this decision (a reply, a plan); shown collapsed under the entry. */
   draft?: string;
+  /** The user tapped the entry's draft chip, which handed `draft` back to the agent to go ahead with as is. */
+  used?: boolean;
 }
 
 /** Something the agent is keeping an eye on that doesn't need a decision; listed muted under a brief, never pushed. */

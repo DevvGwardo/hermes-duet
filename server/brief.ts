@@ -49,6 +49,40 @@ export function briefCard(
   };
 }
 
+/** The chip on an entry with a draft, when the agent gave it no label of its own. */
+export const USE_DRAFT_LABEL = 'Send as drafted';
+
+/**
+ * Tapping an entry's draft chip. The draft comes from the stored card, never from the client, and goes back to
+ * the agent verbatim so it doesn't redraft from scratch; anything outward-facing then goes through
+ * request_approval, where the user sees and can edit the exact text. The entry is marked `used` so the chip
+ * stays spent across reloads and devices, and a second tap is refused. `shown` is the short line the thread
+ * shows as the user's message; `prompt` is what the agent receives in the main session. It names the card and
+ * restates the entry because a check-in brief was written in another session the main one hasn't seen.
+ */
+export function useDraft(
+  card: { entries?: BriefEntry[] },
+  cardId: string,
+  index: unknown,
+): { entries: BriefEntry[]; shown: string; prompt: string } {
+  const i = typeof index === 'string' && /^\d+$/.test(index) ? Number(index) : -1;
+  const entry = card.entries?.[i];
+  if (!entry?.draft) throw new Error('that entry has no draft');
+  if (entry.used) throw new Error('already sent to Hermes');
+  const label = entry.action_label || USE_DRAFT_LABEL;
+  const intent = entry.action_message ? `\nWhat the button was for: ${entry.action_message}` : '';
+  return {
+    entries: card.entries!.map((e, j) => (j === i ? { ...e, used: true } : e)),
+    shown: `${label}: ${entry.title}`,
+    prompt: `[brief ${cardId}] ${label}: "${entry.title}"
+The user tapped this on a brief entry${entry.detail ? ` (${entry.detail})` : ''}. Go ahead with the draft below, as drafted. Don't rewrite it.${intent}
+If carrying it out is sensitive or outward-facing (sending as the user, posting, paying), call request_approval now with exactly this text as draft and the recipient and channel in summary, then stop; the user reviews and can edit it there. If something in it is no longer right, still use it and say what in one line of the summary. Otherwise just do it.
+
+Draft:
+${entry.draft}`,
+  };
+}
+
 const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
 
 /**

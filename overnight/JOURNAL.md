@@ -158,3 +158,25 @@ DONE: Approvals carry an editable draft
 - `post_brief` schema drops `minItems`/required `entries` and its description explains the quiet-morning exception; `briefPrompt` step 4 tells the model to still call it on a quiet day. CardView skips the empty decision list. README row updated; 3 new tests in brief.test.ts.
 - Why it matters against Claude Duet: a quiet morning still gets a brief card (Watching only) instead of a push of free text, and it doesn't interrupt the user.
 - Verified: typecheck pass · test 36 pass / 0 fail · build pass
+
+## 2026-10-22T00:52:26Z — loop iteration 8
+- exit=0 gate=green committed=True files=9
+- gate: typecheck: exit 0
+- answer:
+```
+⚠ claude.ai connectors are disabled because ANTHROPIC_API_KEY or another auth source is set and takes precedence over your claude.ai login · Unset it to load your organization's connectors
+DONE: Morning brief with nothing to decide
+- On a quiet morning, the brief can now post with no decisions as long as it has at least one Watching item (`briefCard(raw, { morning })` in `server/brief.ts`). Check-ins still need at least one decision. A brief with no decisions and no Watching items is refused.
+- When there are no decisions, `briefTitle` rewrites "N things need you" to "Nothing needs you", capitalized only at the start of a sentence. `post_brief` in `server/runner.ts` posts that card without sending a push.
+- `server/tools.ts`: in the `post_brief` schema, `entries` is no longer required and can be empty, and the description explains that only the morning brief may skip decisions. `server/prompts.ts`: the morning brief prompt tells the agent to still post a brief on a quiet day. `web/src/components/CardView.tsx` no longer draws an empty decision list. README row updated, and 3 new tests in `server/brief.test.ts`.
+- New backlog item: if a morning has no decisions and nothing to watch, the agent's text reply is still pushed as "Your morning brief".
+- typecheck: `tsc -p tsconfig.json --noEmit` → exit 0
+- test: `36 pass, 0 fail, 134 expect() calls` → exit 0
+- build: `✓ built in 102ms` → exit 0
+```
+
+## 2026-10-22T04:55Z — Brief entries can become approvals in one tap
+- What changed: new pure `useDraft` in `server/brief.ts` (+4 tests in brief.test.ts) builds the hand-back from the stored card: the entry is marked `used` (new `BriefEntry.used`), the thread shows a short "<label>: <title>" line, and the agent gets "[brief <id>] …" with the entry's title/detail, the button's intent, and the draft verbatim, told to call request_approval with exactly that text if it goes out. `actOnCard(id, 'use_draft', index)` in `server/runner.ts` applies it; `submitUser` takes an optional agent `input` separate from the shown text.
+- Web: `BriefList` gives every entry with a draft a chip (`action_label` or "Send as drafted") that calls the card action, stays "On it" from `used` across reloads, and shows errors. `post_brief` tool description, `briefPrompt` and README row updated. Discovered: other follow-up chips keep "On it" only in memory (new backlog item).
+- Why it matters against Claude Duet: a brief decision with its draft ready goes to a one-tap approval card with that same draft, instead of the agent redrafting from a vague message.
+- Verified: typecheck pass · test 40 pass / 0 fail · build pass

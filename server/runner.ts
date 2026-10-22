@@ -2,7 +2,7 @@ import { copyFileSync, mkdirSync, statSync } from 'node:fs';
 import { basename, extname, isAbsolute, join, resolve } from 'node:path';
 import type { AgentState, CardData, FileEntry, Item, Task, TaskStep, ToolStep } from '../shared/types';
 import { DRAFT_MAX, approvalDecision } from './approval';
-import { briefCard, briefTitle, checkinOutcome } from './brief';
+import { briefCard, briefTitle, checkinOutcome, useDraft } from './brief';
 import { broadcast } from './bus';
 import { localParts } from './clock';
 import { config } from './config';
@@ -710,10 +710,12 @@ function markTaskWaiting(taskId: string) {
 // Public actions (HTTP API)
 // ---------------------------------------------------------------------------
 
-export function submitUser(text: string): Item {
-  const t = text.trim();
-  if (!t) throw new Error('empty message');
-  const item = put(newItem('user', { text: t }));
+/** `input` is what the agent receives when it differs from what the thread shows (a brief entry's draft chip). */
+export function submitUser(text: string, input?: string): Item {
+  const shown = text.trim();
+  if (!shown) throw new Error('empty message');
+  const t = input?.trim() || shown;
+  const item = put(newItem('user', { text: shown }));
   const m = mainLane();
   const active = m.active;
   // Mid-run messages steer the live turn (Hermes re-queues the steer as the next turn if it lands too late).
@@ -735,6 +737,12 @@ export function actOnCard(id: string, action: string, value?: string): Item {
   if (!item || item.kind !== 'card' || !item.card) throw new Error('card not found');
   const c = item.card;
   if (c.type === 'handover' && action === 'retry') return retryTask(item);
+  if (c.type === 'brief' && action === 'use_draft') {
+    const d = useDraft(c, item.id, value);
+    const updated = put({ ...item, card: { ...c, entries: d.entries } });
+    submitUser(d.shown, d.prompt);
+    return updated;
+  }
   if (c.status !== 'pending') throw new Error(`already ${c.status}`);
   let approved: boolean | undefined;
   let answer: string | undefined;

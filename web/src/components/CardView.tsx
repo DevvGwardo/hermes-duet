@@ -45,7 +45,7 @@ export function CardView({ item, onOpenFile }: { item: Item; onOpenFile: (id: st
       <h3 className="card-title">{card.title}</h3>
       {card.body && <Markdown text={card.body} className="card-body" />}
 
-      {card.type === 'brief' && card.entries?.length ? <BriefList card={card} /> : null}
+      {card.type === 'brief' && card.entries?.length ? <BriefList id={item.id} card={card} /> : null}
       {card.type === 'brief' && card.watching?.length ? <Watching list={card.watching} /> : null}
       {card.type === 'checklist' && card.checklist && <Checklist card={card} />}
       {card.type === 'metrics' && card.metrics && (
@@ -156,38 +156,58 @@ function DraftEditor({ original, value, onChange, disabled }: { original: string
   );
 }
 
-function BriefList({ card }: { card: CardData }) {
+function BriefList({ id, card }: { id: string; card: CardData }) {
   const [sent, setSent] = useState<Record<number, boolean>>({});
+  const [err, setErr] = useState<string | null>(null);
+  // An entry with a draft hands that draft back to the agent (server-side, from the stored card), which then asks
+  // for approval with it instead of redrafting. `used` comes back on the card, so the chip stays spent after reload.
+  async function handBack(i: number) {
+    setSent((s) => ({ ...s, [i]: true }));
+    setErr(null);
+    try {
+      await api.act(id, 'use_draft', String(i));
+    } catch (e: any) {
+      setSent((s) => ({ ...s, [i]: false }));
+      setErr(e.message ?? 'Failed');
+    }
+  }
   return (
-    <ol className="brief">
-      {card.entries!.map((e, i) => (
-        <li key={i} className={`brief-entry prio-${e.priority ?? 'medium'}`}>
-          <span className="prio-dot" aria-hidden="true" />
-          <div className="brief-main">
-            <div className="brief-title">{e.title}</div>
-            {e.detail && <div className="brief-detail">{e.detail}</div>}
-            {e.draft && (
-              <details className="brief-draft">
-                <summary>Draft ready</summary>
-                <Markdown text={e.draft} className="brief-draft-body" />
-              </details>
-            )}
-            {e.action_label && e.action_message && (
-              <button
-                className="chip"
-                disabled={sent[i]}
-                onClick={async () => {
-                  setSent((s) => ({ ...s, [i]: true }));
-                  await api.send(e.action_message!);
-                }}
-              >
-                {sent[i] ? 'On it' : e.action_label}
-              </button>
-            )}
-          </div>
-        </li>
-      ))}
-    </ol>
+    <>
+      <ol className="brief">
+        {card.entries!.map((e, i) => (
+          <li key={i} className={`brief-entry prio-${e.priority ?? 'medium'}`}>
+            <span className="prio-dot" aria-hidden="true" />
+            <div className="brief-main">
+              <div className="brief-title">{e.title}</div>
+              {e.detail && <div className="brief-detail">{e.detail}</div>}
+              {e.draft && (
+                <details className="brief-draft">
+                  <summary>Draft ready</summary>
+                  <Markdown text={e.draft} className="brief-draft-body" />
+                </details>
+              )}
+              {e.draft ? (
+                <button className="chip" disabled={sent[i] || e.used} onClick={() => handBack(i)}>
+                  {sent[i] || e.used ? 'On it' : e.action_label || 'Send as drafted'}
+                </button>
+              ) : e.action_label && e.action_message && (
+                <button
+                  className="chip"
+                  disabled={sent[i]}
+                  onClick={async () => {
+                    setSent((s) => ({ ...s, [i]: true }));
+                    await api.send(e.action_message!);
+                  }}
+                >
+                  {sent[i] ? 'On it' : e.action_label}
+                </button>
+              )}
+            </div>
+          </li>
+        ))}
+      </ol>
+      {err && <p className="card-error">{err}</p>}
+    </>
   );
 }
 

@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { briefCard, briefTitle, checkinOutcome } from './brief';
+import type { BriefEntry } from '../shared/types';
+import { USE_DRAFT_LABEL, briefCard, briefTitle, checkinOutcome, useDraft } from './brief';
 
 describe('check-ins stay silent unless a brief was posted', () => {
   test('free text never surfaces, NOOP or not', () => {
@@ -94,5 +95,43 @@ describe('brief = ranked decisions plus Watching', () => {
     expect(briefTitle('Good morning, 0 things need you', 0)).toBe('Good morning, nothing needs you');
     expect(briefTitle('Zero items need you', 0)).toBe('Nothing needs you');
     expect(briefTitle('Good morning. Nothing needs you today.', 0)).toBe('Good morning. Nothing needs you today.');
+  });
+});
+
+describe('a brief entry hands its draft back in one tap', () => {
+  const card: { entries: BriefEntry[] } = {
+    entries: [
+      { title: 'Reply to Dana about the lease', detail: 'Renewal due Friday', draft: 'Hi Dana,\n\nYes, we will renew.', action_label: 'Send it', action_message: 'Reply to Dana' },
+      { title: 'Book the dentist', action_label: 'Find a slot', action_message: 'Find me a dentist slot' },
+      { title: 'Pay the plumber', draft: '$180 via Venmo to @joe' },
+    ],
+  };
+
+  test('the stored draft goes to the agent verbatim, aimed at request_approval', () => {
+    const out = useDraft(card, 'c1', '0');
+    expect(out.shown).toBe('Send it: Reply to Dana about the lease');
+    expect(out.prompt.startsWith('[brief c1] Send it: "Reply to Dana about the lease"')).toBe(true);
+    expect(out.prompt).toContain('(Renewal due Friday)');
+    expect(out.prompt).toContain('request_approval');
+    expect(out.prompt).toContain('What the button was for: Reply to Dana');
+    expect(out.prompt.endsWith('Draft:\nHi Dana,\n\nYes, we will renew.')).toBe(true);
+  });
+
+  test('only the tapped entry is marked used, and the card is not mutated', () => {
+    const out = useDraft(card, 'c1', '2');
+    expect(out.entries.map((e) => !!e.used)).toEqual([false, false, true]);
+    expect(out.shown).toBe(`${USE_DRAFT_LABEL}: Pay the plumber`);
+    expect(out.prompt).not.toContain('What the button was for');
+    expect(card.entries.some((e) => e.used)).toBe(false);
+  });
+
+  test('a second tap, an entry without a draft, or a bad index is refused', () => {
+    expect(() => useDraft({ entries: useDraft(card, 'c1', '0').entries }, 'c1', '0')).toThrow(/already/);
+    expect(() => useDraft(card, 'c1', '1')).toThrow(/no draft/);
+    for (const bad of [undefined, '', '-1', '9', '0x0', '1.5']) expect(() => useDraft(card, 'c1', bad)).toThrow(/no draft/);
+  });
+
+  test('the model cannot pre-mark an entry as used', () => {
+    expect(briefCard({ entries: [{ title: 'x', draft: 'y', used: true }] }).entries[0].used).toBeUndefined();
   });
 });

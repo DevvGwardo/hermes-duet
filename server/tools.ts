@@ -63,9 +63,14 @@ export const TOOLS = [
               title: { type: 'string' },
               detail: { type: 'string' },
               priority: { type: 'string', enum: ['high', 'medium', 'low'] },
-              action_label: { type: 'string', description: 'Optional button, e.g. "Draft a reply".' },
-              action_message: { type: 'string', description: 'What tapping the button sends to you as the user, e.g. "Draft a reply to Dana about the lease".' },
-              draft: { type: 'string', description: 'Markdown you already prepared for this decision, e.g. the full reply to Dana. Shown collapsed under the entry. Nothing is sent.' },
+              action_label: { type: 'string', description: 'Optional button, e.g. "Draft a reply", or "Send it" on an entry with a draft.' },
+              action_message: { type: 'string', description: 'For an entry without a draft: what tapping the button sends to you as the user, e.g. "Draft a reply to Dana about the lease".' },
+              draft: {
+                type: 'string',
+                description:
+                  'Markdown you already prepared for this decision, e.g. the full reply to Dana. Shown collapsed under the entry. Nothing is sent. ' +
+                  'The entry then gets a button (action_label, default "Send as drafted") that hands this exact draft back to you to go ahead with; for anything outward-facing you then call request_approval with it.',
+              },
             },
             required: ['title'],
           },

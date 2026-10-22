@@ -65,7 +65,7 @@ export function briefPrompt(s: Settings, ctx: { pending: Item[]; tasks: Task[] }
 1. Gather: the context sources listed in your standing instructions; email, calendar and messages if you have tools for them; the Hermes Duet state below.
 2. Pick the decisions that actually need the user today: at most 5, ranked by priority. Be specific (names, amounts, deadlines). Where a next step is obvious, prepare it and put it in the entry's draft (the full reply, the plan), but don't send anything.
 3. Everything else worth knowing that needs no decision yet goes in watching, one line each. It's shown muted and never notifies, so don't pad the decisions with it.
-4. Call post_brief once. Title it like "Good morning. N things need you today.", counting decisions only. Give entries one-tap actions where useful (action_message is what tapping sends you). If nothing needs a decision today, still call it, with no entries and your watching list ("Good morning. Nothing needs you today."); it posts without notifying.
+4. Call post_brief once. Title it like "Good morning. N things need you today.", counting decisions only. Give entries one-tap actions where useful (action_message is what tapping sends you). An entry with a draft gets a button that hands the draft back to you as is; when that arrives, use it as drafted, through request_approval if it goes out. If nothing needs a decision today, still call it, with no entries and your watching list ("Good morning. Nothing needs you today."); it posts without notifying.
 5. Then reply with one short line, nothing more.
 
 Waiting on the user in Hermes Duet:
