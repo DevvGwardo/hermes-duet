@@ -1040,6 +1040,11 @@ code {
 .card-actions.wrap {
   flex-wrap: wrap;
 }
+.card-age {
+  margin: 12px 0 0;
+  font: 600 12px var(--mono);
+  color: var(--bronze);
+}
 .card-error {
   color: var(--danger);
   font-size: 13px;

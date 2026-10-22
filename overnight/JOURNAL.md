@@ -749,3 +749,28 @@ DONE: The brief's page line doesn't open the page
 - `raisedToday` labels skipped decisions for check-ins. The new pure `skippedLately` lists decisions skipped in briefs from the last `SKIP_MEMORY_DAYS` (7), judging each title by its newest brief. `runBrief` passes that list to `briefPrompt` (server/prompts.ts), which says not to raise those again unless something material changed. CardView adds "Skip" next to the chip, and a skipped entry shows struck through with "Undo" (styles.css). README updated. +6 tests.
 - Why it matters against Claude Duet: "judgment about what needs you". When the user says something doesn't need them, it should stop coming back.
 - Verified: typecheck pass · test 100 pass / 0 fail · build pass
+
+## 2026-10-22T02:11:08Z — loop iteration 33
+- exit=0 gate=green committed=True files=10
+- gate: typecheck: exit 0
+- answer:
+```
+
+
+> CORRECTION: there was no unchecked, unblocked item for this iteration, so I found and added this one myself instead of taking one from the list.
+
+- **What was wrong:** you could act on a brief decision but not dismiss it. Nothing recorded that you didn't care about it, so the same day's check-ins and the next morning's brief raised it again.
+- **Fix:** each decision you haven't acted on now has a "Skip" link, with Undo. Skipping only marks `skipped_at` on the stored entry (new `skipEntry` in `server/brief.ts`, `shared/types.ts`); it doesn't start an agent turn. `server/runner.ts` handles the `skip`/`unskip` actions. A skipped entry's chip is refused until you undo the skip.
+- **What the agent is told:** check-ins see the decision labelled as skipped (`raisedToday`). The morning brief gets the decisions skipped in the last 7 days (new `skippedLately`, wired in `runner.ts` and `server/prompts.ts`) and is told not to raise them again unless something material changed. This is an instruction to the model, not a guarantee.
+- **On the card:** `CardView.tsx` and `styles.css` show a skipped entry struck through, with "Skipped · won't come back unless it changes" and Undo.
+- **Also:** README line, 6 new tests in `server/brief.test.ts`, the backlog item added already ticked, and a journal entry. Not tried with a real model or on a phone.
+- typecheck: `tsc -p tsconfig.json --noEmit` → exit 0
+- test: `100 pass, 0 fail, 342 expect() calls` → exit 0
+- build: `✓ built in 106ms` → exit 0
+```
+
+## 2026-10-22T06:30Z — Old approvals are acted on as if fresh
+- What changed: the backlog had no open, unblocked items, so this iteration audited the approval resume path and added this item. Approving or answering a card resumed the agent with "do exactly what the card described" however old the card was. A draft saying "tomorrow" approved two days later went out as written, and an errand handled in the meantime could run twice.
+- New pure `askAge` (shared/age.ts) returns "yesterday at 9:14 PM" once a card crosses local midnight or `OLD_ASK_MS` (6h), otherwise null. `oldAskNote` (server/approval.ts) adds it to `approvalPrompt` and the answer prompt (`decisionPrompt`, server/prompts.ts); for an edited draft the note goes before the user's text, which stays last. The note tells the agent to stop and ask rather than edit anything itself. runner.ts passes the age in the user's timezone. A pending approval or question in CardView shows "Written … · check it still fits" / "Asked …" (styles.css `.card-age`). README updated. +4 tests in server/age.test.ts.
+- Why it matters against Claude Duet: "waits for your ok when it matters". An ok given days later must not send something that stopped being true.
+- Verified: typecheck pass · test 104 pass / 0 fail · build pass

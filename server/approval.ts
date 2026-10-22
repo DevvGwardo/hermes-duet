@@ -98,16 +98,32 @@ export function replaceRefusal(target: Item | null | undefined, type: 'approval'
   return null;
 }
 
-/** The message that resumes the agent's session after an approval decision. */
-export function approvalPrompt(card: Item, approved: boolean): string {
+/**
+ * What an approval or answer that arrives long after its card was posted must check first (`age` from askAge).
+ * The agent is told to stop and say so rather than adjust anything itself: the user approved the exact text, so a
+ * changed date or a done errand needs a fresh card, not a silent edit. An edited draft was rewritten by the user just
+ * now, so only "already done" applies to it.
+ */
+export function oldAskNote(age: string | null | undefined, kind: 'approval' | 'edited' | 'answer'): string {
+  if (!age) return '';
+  if (kind === 'answer') {
+    return ` This question was asked ${age}, not just now. If what has happened since makes the answer no longer fit, say so in one line before going on.`;
+  }
+  const dated = kind === 'approval' ? ' anything relative in it ("today", "tomorrow", "tonight") now points to a different day, a date or time in it has passed, or' : '';
+  return ` This card was posted ${age}, not just now. Before acting, check it still holds: don't go ahead if${dated} it was already done or overtaken since. In that case tell the user in one line what changed, and post a fresh request_approval if it should still happen.`;
+}
+
+/** The message that resumes the agent's session after an approval decision. `age` is set when the card is old (askAge). */
+export function approvalPrompt(card: Item, approved: boolean, age?: string | null): string {
   const c = card.card!;
   const tapped = c.action_label || 'Approve';
   if (!approved) {
     return `[approval ${card.id}] NOT NOW: "${c.title}". The user declined for now. Don't do it. Acknowledge in one short line, and offer an alternative only if there's an obvious one.`;
   }
   if (c.edited && c.draft) {
-    return `[approval ${card.id}] APPROVED with edits: "${c.title}". The user edited your draft, then tapped ${tapped}. Send exactly the text below, not your original draft, and otherwise do what the card described. Then confirm in one short line.\n\n${c.draft}`;
+    // The note goes before the draft: everything after the blank line is the text to send.
+    return `[approval ${card.id}] APPROVED with edits: "${c.title}". The user edited your draft, then tapped ${tapped}. Send exactly the text below, not your original draft, and otherwise do what the card described. Then confirm in one short line.${oldAskNote(age, 'edited')}\n\n${c.draft}`;
   }
   const asDrafted = c.draft ? ', sending the draft exactly as it was on the card' : '';
-  return `[approval ${card.id}] APPROVED: "${c.title}". The user tapped ${tapped}. Go ahead and do exactly what the card described${asDrafted}, then confirm in one short line.`;
+  return `[approval ${card.id}] APPROVED: "${c.title}". The user tapped ${tapped}. Go ahead and do exactly what the card described${asDrafted}, then confirm in one short line.${oldAskNote(age, 'approval')}`;
 }

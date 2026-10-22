@@ -1,5 +1,6 @@
 import { copyFileSync, mkdirSync, statSync } from 'node:fs';
 import { basename, extname, isAbsolute, join, resolve } from 'node:path';
+import { askAge } from '../shared/age';
 import type { AgentState, CardData, FileEntry, Item, Page, Task, TaskStep, ToolStep } from '../shared/types';
 import { DRAFT_MAX, PROMPT_ENDED, REPLACED, approvalDecision, approvalPush, deadPrompts, replaceRefusal } from './approval';
 import { BRIEF_RETRY, SKIP_MEMORY_DAYS, briefCard, briefFailure, briefTitle, checkinOutcome, morningOutcome, notifyRefusal, raisedToday, skipEntry, skippedLately, useAction, useDraft } from './brief';
@@ -955,7 +956,9 @@ export function actOnCard(id: string, action: string, value?: string): Item {
       const t = tasks.get(c.task_id);
       if (t && (t.status === 'waiting' || (c.resume && t.status === 'failed'))) putTask({ ...t, status: 'queued', progress: '' });
     }
-    enqueue({ kind: c.task_id ? 'task' : 'decision', sessionId, taskId: c.task_id ?? null, input: decisionPrompt(item, { approved, answer }) });
+    // A card answered long after it was posted resumes with a note to check it still holds before acting.
+    const age = askAge(item.created_at, Date.now(), settings.get().timezone);
+    enqueue({ kind: c.task_id ? 'task' : 'decision', sessionId, taskId: c.task_id ?? null, input: decisionPrompt(item, { approved, answer }, age) });
   }
   return item;
 }

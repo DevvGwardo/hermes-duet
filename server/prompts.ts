@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import type { Item, Page, Settings, Task } from '../shared/types';
-import { approvalPrompt } from './approval';
+import { approvalPrompt, oldAskNote } from './approval';
 import { friendlyNow } from './clock';
 import { config } from './config';
 
@@ -141,8 +141,9 @@ Rebuild it with today's data, write the new version to ${WORK_DIR}/page-${page.i
 When you mark the task done with update_task, also pass changed: one line on the single most important difference from the previous version, e.g. "Rent moved to Friday" or "No change since yesterday". It is pinned on the page in the Make tab and the morning brief calls it out.`;
 }
 
-export function decisionPrompt(card: Item, decision: { approved?: boolean; answer?: string }) {
+/** `age` is set when the card was posted long enough ago that it may no longer hold (askAge). */
+export function decisionPrompt(card: Item, decision: { approved?: boolean; answer?: string }, age?: string | null) {
   const c = card.card!;
-  if (c.type === 'approval') return approvalPrompt(card, !!decision.approved);
-  return `[answer ${card.id}] To "${c.title}" the user chose: "${decision.answer}". Continue accordingly.`;
+  if (c.type === 'approval') return approvalPrompt(card, !!decision.approved, age);
+  return `[answer ${card.id}] To "${c.title}" the user chose: "${decision.answer}". Continue accordingly.${oldAskNote(age, 'answer')}`;
 }

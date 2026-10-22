@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { askAge } from '../../../shared/age';
 import type { CardData, FollowUp, Item, WatchEntry } from '../../../shared/types';
 import { api } from '../api';
 import { useStore } from '../store';
@@ -22,6 +23,9 @@ export function CardView({ item, onOpenFile }: { item: Item; onOpenFile: (id: st
   const pending = card.status === 'pending';
   const [draft, setDraft] = useState(card.draft ?? '');
   const draftEdited = !!card.draft && draft.trim() !== card.draft.trim();
+  const tz = useStore((s) => s.settings?.timezone);
+  // An ask left waiting since yesterday may no longer hold ("tomorrow" in its draft, an errand already done).
+  const age = pending && (card.type === 'approval' || card.type === 'choice') ? askAge(item.created_at, Date.now(), tz) : null;
 
   async function act(action: string, value?: string) {
     // Busy marks the tapped button; an approval's value is the edited draft, not a button label.
@@ -80,6 +84,7 @@ export function CardView({ item, onOpenFile }: { item: Item; onOpenFile: (id: st
       ) : (
         <div className="approval-draft is-readonly">{card.draft}</div>
       ))}
+      {age && <p className="card-age">{card.type === 'choice' ? `Asked ${age}` : `Written ${age} · check it still fits`}</p>}
       {card.type === 'approval' &&
         (pending ? (
           <div className="card-actions">
