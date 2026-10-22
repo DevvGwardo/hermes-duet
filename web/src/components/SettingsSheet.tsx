@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { Settings } from '../../../shared/types';
 import { api, enablePush, isStandalone, pushSupported } from '../api';
 import { useStore } from '../store';
@@ -11,6 +11,12 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
   const agent = useStore((s) => s.agent);
   const [pushMsg, setPushMsg] = useState<string | null>(null);
   const [briefMsg, setBriefMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
 
   if (!settings) return null;
   const save = (patch: Partial<Settings>) => api.saveSettings(patch).catch(() => {});

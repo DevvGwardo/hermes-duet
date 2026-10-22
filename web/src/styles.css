@@ -383,10 +383,17 @@ code {
   margin-right: auto;
 }
 .content {
+  position: relative;
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+/* Content fades out under the header and composer instead of being cut off by a hard edge. */
+.thread,
+.pane {
+  -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 16px, #000 calc(100% - 16px), transparent);
+  mask-image: linear-gradient(180deg, transparent 0, #000 16px, #000 calc(100% - 16px), transparent);
 }
 
 .status-pill {
@@ -404,6 +411,9 @@ code {
   background: var(--ink-1);
   border: 1.5px solid var(--line-2);
   white-space: nowrap;
+}
+.status-pill.status-idle {
+  display: none; /* no news is good news; the pill shows up when Hermes is working or unreachable */
 }
 .status-dot {
   width: 8px;
@@ -481,7 +491,10 @@ code {
 .dock {
   display: flex;
   gap: 4px;
-  margin: 2px 12px calc(10px + env(safe-area-inset-bottom));
+  align-self: center;
+  width: calc(100% - 24px);
+  max-width: var(--col); /* same width as the composer above it */
+  margin: 2px 0 calc(10px + env(safe-area-inset-bottom));
   padding: 5px;
   border-radius: 12px;
   background: var(--ink-1);
@@ -496,7 +509,7 @@ code {
   gap: 3px;
   padding: 7px 0 5px;
   border-radius: 8px;
-  color: var(--faint);
+  color: var(--dim);
   font-family: var(--pixel);
   font-size: 10.5px;
   text-transform: uppercase;
@@ -620,6 +633,35 @@ code {
   box-shadow: 4px 4px 0 var(--amber);
 }
 
+.to-latest {
+  /* bottom-right of the chat column, where replies are shortest and it hides the least */
+  position: absolute;
+  right: max(16px, calc((100% - var(--col)) / 2));
+  bottom: 12px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 14px 0 11px;
+  border-radius: 17px;
+  font: 400 11px var(--pixel);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #111;
+  background: var(--paper);
+  border: 2px solid #000;
+  box-shadow: 3px 3px 0 #000;
+  animation: pop-in 0.2s var(--ease) both;
+}
+.to-latest.has-new {
+  background: var(--gold-band);
+  box-shadow: 3px 3px 0 var(--paper);
+}
+.to-latest:active {
+  transform: translate(2px, 2px);
+  box-shadow: 1px 1px 0 #000;
+}
 .load-older {
   align-self: center;
   font: 400 11px var(--pixel);
@@ -1561,7 +1603,7 @@ li.done .tick {
 .pane {
   flex: 1;
   overflow-y: auto;
-  padding: 10px max(16px, calc((100% - 820px) / 2)) 30px;
+  padding: 10px max(16px, calc((100% - var(--col)) / 2)) 30px;
 }
 .pane section {
   margin-bottom: 10px;
@@ -1604,13 +1646,19 @@ li.done .tick {
 }
 .row-title {
   font-weight: 600;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 .row-sub {
   font: 400 12px var(--mono);
   color: var(--faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .row svg {
   color: var(--faint);
@@ -1703,10 +1751,9 @@ li.done .tick {
 .starter {
   position: relative;
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 26px;
-  padding: 16px;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
   border-radius: 8px;
   background: linear-gradient(180deg, #191919, #131313);
   border: 2px solid var(--line-strong);
@@ -2256,6 +2303,15 @@ li.done .tick {
   .starters {
     grid-template-columns: repeat(4, 1fr);
   }
+  .starter {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 26px;
+    padding: 16px;
+  }
+  .status-pill {
+    display: none; /* the sidebar's status card says it */
+  }
   .sheet-backdrop {
     align-items: center;
     padding: 24px;
@@ -2409,6 +2465,30 @@ li.done .tick {
     to {
       transform: translateX(300%);
     }
+  }
+}
+
+@media (min-width: 1600px) {
+  :root {
+    --col: 820px;
+  }
+}
+
+/* Fingers need more room than the drawn size of text buttons and chips. */
+@media (pointer: coarse) {
+  .link,
+  .chip,
+  .activity-head,
+  .load-older {
+    position: relative;
+  }
+  .link::after,
+  .chip::after,
+  .activity-head::after,
+  .load-older::after {
+    content: '';
+    position: absolute;
+    inset: -8px -6px;
   }
 }
 

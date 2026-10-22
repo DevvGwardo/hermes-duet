@@ -86,6 +86,7 @@ export const Icon = {
     </>,
   ),
   send: svg(<path d="M12 19V5M5.5 11.5 12 5l6.5 6.5" />),
+  down: svg(<path d="M12 5v14M5.5 12.5 12 19l6.5-6.5" />),
   stop: svg(<rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" stroke="none" />),
   mic: svg(
     <>

@@ -1,8 +1,11 @@
 import { useStore } from '../store';
 import { Icon, fileIcon, relLabel } from '../ui';
 
-/** Desktop-only context rail: what needs you, what's running, what just landed. */
-export function Rail({ onJump, onOpenFile, onShowTasks }: { onJump: (id: string) => void; onOpenFile: (id: string) => void; onShowTasks: () => void }) {
+/**
+ * Desktop-only context rail: what needs you, what's running, what just landed.
+ * Sections the main view already shows in full are left out (Tasks lists pending and running work; Make lists files).
+ */
+export function Rail({ tab, onJump, onOpenFile, onShowTasks }: { tab: string; onJump: (id: string) => void; onOpenFile: (id: string) => void; onShowTasks: () => void }) {
   const pending = useStore((s) => s.pending);
   const tasks = useStore((s) => s.tasks);
   const files = useStore((s) => s.files);
@@ -10,7 +13,7 @@ export function Rail({ onJump, onOpenFile, onShowTasks }: { onJump: (id: string)
 
   return (
     <aside className="rail">
-      <section className="rail-section">
+      <section className="rail-section" hidden={tab === 'tasks'}>
         <h2 className="eyebrow">
           Needs you {pending.length > 0 && <span className="count warm">{pending.length}</span>}
         </h2>
@@ -35,7 +38,7 @@ export function Rail({ onJump, onOpenFile, onShowTasks }: { onJump: (id: string)
         )}
       </section>
 
-      <section className="rail-section">
+      <section className="rail-section" hidden={tab === 'tasks'}>
         <h2 className="eyebrow">
           Working on {active.length > 0 && <span className="count">{active.length}</span>}
         </h2>
@@ -65,7 +68,7 @@ export function Rail({ onJump, onOpenFile, onShowTasks }: { onJump: (id: string)
         )}
       </section>
 
-      <section className="rail-section">
+      <section className="rail-section" hidden={tab === 'make'}>
         <h2 className="eyebrow">Recent files</h2>
         {files.length === 0 ? (
           <p className="rail-empty">Docs, decks and dashboards land here.</p>

@@ -5,11 +5,12 @@ import { Icon } from '../ui';
 
 export interface ComposerHandle {
   prefill: (text: string) => void;
+  focus: () => void;
 }
 
 const SpeechRecognition: any = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
-export const Composer = forwardRef<ComposerHandle>(function Composer(_, ref) {
+export const Composer = forwardRef<ComposerHandle, { onSent?: () => void }>(function Composer({ onSent }, ref) {
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [listening, setListening] = useState(false);
@@ -29,6 +30,9 @@ export const Composer = forwardRef<ComposerHandle>(function Composer(_, ref) {
         ta.current?.setSelectionRange(t.length, t.length);
       });
     },
+    focus() {
+      ta.current?.focus();
+    },
   }));
 
   useEffect(() => {
@@ -44,6 +48,7 @@ export const Composer = forwardRef<ComposerHandle>(function Composer(_, ref) {
     rec.current?.stop();
     setSending(true);
     setErr(null);
+    onSent?.();
     try {
       await api.send(t);
       setText('');

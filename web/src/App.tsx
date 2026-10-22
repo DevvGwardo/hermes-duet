@@ -55,6 +55,7 @@ function Shell() {
   const [settings, setSettings] = useState(false);
   const [jump, setJump] = useState<string | null>(null);
   const [briefNote, setBriefNote] = useState<string | null>(null);
+  const [sent, setSent] = useState(0);
   const composer = useRef<ComposerHandle>(null);
   const agent = useStore((s) => s.agent);
   const pushEnabled = useStore((s) => s.pushEnabled);
@@ -99,6 +100,19 @@ function Shell() {
     }
     return () => navigator.serviceWorker?.removeEventListener('message', onMsg);
   }, []);
+
+  useEffect(() => {
+    // "/" jumps to the composer from anywhere, unless you're already typing or a sheet is open.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey || settings || fileId) return;
+      if ((e.target as HTMLElement).closest?.('input, textarea, select, [contenteditable="true"]')) return;
+      e.preventDefault();
+      setTab('chat');
+      requestAnimationFrame(() => composer.current?.focus());
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [settings, fileId]);
 
   const jumpTo = (id: string) => {
     setTab('chat');
@@ -209,12 +223,12 @@ function Shell() {
         )}
 
         <main className="content">
-          {tab === 'chat' && <Thread onOpenFile={setFileId} scrollToId={jump} onSuggest={startPrompt} />}
+          {tab === 'chat' && <Thread onOpenFile={setFileId} scrollToId={jump} onSuggest={startPrompt} followKey={sent} />}
           {tab === 'tasks' && <TasksView onJump={jumpTo} onOpenFile={setFileId} />}
           {tab === 'make' && <MakeView onOpenFile={setFileId} onStart={startPrompt} />}
         </main>
 
-        {tab === 'chat' && <Composer ref={composer} />}
+        {tab === 'chat' && <Composer ref={composer} onSent={() => setSent((n) => n + 1)} />}
 
         <nav className="dock" role="tablist">
           {(Object.keys(TAB_META) as Tab[]).map((t) => {
@@ -232,7 +246,7 @@ function Shell() {
         </nav>
       </div>
 
-      <Rail onJump={jumpTo} onOpenFile={setFileId} onShowTasks={() => setTab('tasks')} />
+      <Rail tab={tab} onJump={jumpTo} onOpenFile={setFileId} onShowTasks={() => setTab('tasks')} />
 
       {fileId && <Viewer fileId={fileId} onClose={() => setFileId(null)} />}
       {settings && <SettingsSheet onClose={() => setSettings(false)} />}
