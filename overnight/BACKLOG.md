@@ -35,6 +35,8 @@ File:line references are to commit 83f3417.
 
 - [x] **Follow-up chips forget they were tapped** — brief `action_message` chips and handover follow-up chips keep "On it" only in React state (`web/src/components/CardView.tsx` `BriefList`, `FollowUps`), so after a reload or on another device they can be tapped again and re-send the request. Fix: route them through a card action like `use_draft` that marks the entry/follow-up `used` on the stored card. (files: server/runner.ts, shared/types.ts, web/src/components/CardView.tsx)
 
+- [x] **Check-ins re-raise this morning's decisions** — brief cards are `info`, not pending, so `checkinPrompt`'s "already waiting" list never includes them, and the check-in runs in its own daily session that never saw the morning brief; a check-in can push "Heads up" about a decision the user already read. Fix: pass today's brief decisions (with `used`) and watching titles to `checkinPrompt` as already raised, via a pure `raisedToday` and an `items.briefsSince` query. Found by iteration 21 after the backlog ran out. (files: server/brief.ts, server/db.ts, server/prompts.ts, server/runner.ts, server/brief.test.ts)
+
 Dropped as already done (verified in code):
 - Readable agent activity — `Activity` in `web/src/components/Thread.tsx` is collapsed by default to a one-line label and expands on tap.
 - Never push when the thread is open — handled in `web/public/sw.js` (but see "Push that survives iOS" for the cost of how).

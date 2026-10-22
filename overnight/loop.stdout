@@ -152,3 +152,10 @@
 1:24AM INF no leaks found
 [2026-10-22 01:24:41] iter 19 done · exit=0 gate=green committed=True changed=3
 [2026-10-22 01:25:01] iter 20 start → iter-20-20261022-012501.log
+[2026-10-22 01:27:25] iter 20 commit=ok · [overnight/claude-duet-20261022 748e20d] overnight(iter 20): DONE: Follow-up chips forget they were tapped
+ 10 files changed, 175 insertions(+), 43 deletions(-)
+1:27AM INF 0 commits scanned.
+1:27AM INF scanned ~10992 bytes (10.99 KB) in 22.9ms
+1:27AM INF no leaks found
+[2026-10-22 01:27:25] iter 20 done · exit=0 gate=green committed=True changed=9
+[2026-10-22 01:27:45] iter 21 start → iter-21-20261022-012745.log

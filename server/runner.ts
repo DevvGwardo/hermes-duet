@@ -2,7 +2,7 @@ import { copyFileSync, mkdirSync, statSync } from 'node:fs';
 import { basename, extname, isAbsolute, join, resolve } from 'node:path';
 import type { AgentState, CardData, FileEntry, Item, Page, Task, TaskStep, ToolStep } from '../shared/types';
 import { DRAFT_MAX, approvalDecision, approvalPush } from './approval';
-import { briefCard, briefTitle, checkinOutcome, morningOutcome, useAction, useDraft } from './brief';
+import { briefCard, briefTitle, checkinOutcome, morningOutcome, raisedToday, useAction, useDraft } from './brief';
 import { broadcast } from './bus';
 import { localParts } from './clock';
 import { config } from './config';
@@ -990,8 +990,11 @@ export function runBrief(source: 'scheduled' | 'manual') {
 
 export function runCheckin() {
   const s = settings.get();
-  const today = localParts(s.timezone).date;
+  const now = localParts(s.timezone);
+  const today = now.date;
   const sid = `duet-checkin-${today}`;
+  // Local midnight, give or take the current minute's seconds: today's briefs are what the user has already seen.
+  const midnight = Date.now() - (now.minutes + 1) * 60_000;
   const l = lane(sid);
   if (l.active || l.queue.length) return;
   const since = kv.get<string>('checkin_since_label', '') || `this morning's brief (${s.brief_time})`;
@@ -1000,7 +1003,12 @@ export function runCheckin() {
     kind: 'checkin',
     sessionId: sid,
     quiet: true,
-    input: checkinPrompt(s, { since, pending: items.pendingCards(), tasks: tasks.recent().filter((t) => ['running', 'waiting', 'failed'].includes(t.status)) }),
+    input: checkinPrompt(s, {
+      since,
+      pending: items.pendingCards(),
+      tasks: tasks.recent().filter((t) => ['running', 'waiting', 'failed'].includes(t.status)),
+      raised: raisedToday(items.briefsSince(midnight)),
+    }),
   });
 }
 

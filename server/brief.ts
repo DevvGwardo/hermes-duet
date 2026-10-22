@@ -1,5 +1,5 @@
 // Pure rules for briefs and check-ins, kept out of runner.ts so they can be tested without a database or Hermes.
-import type { BriefEntry, WatchEntry } from '../shared/types';
+import type { BriefEntry, Item, WatchEntry } from '../shared/types';
 
 const text = (v: unknown, max: number) => (typeof v === 'string' ? v.slice(0, max).trim() : '');
 
@@ -128,6 +128,31 @@ export function checkinOutcome(run: { briefs: number; text: string }): { surface
   const surfaced = run.briefs > 0;
   const t = run.text.trim();
   return { surfaced, stray: !surfaced && t && !/^\W*NOOP\b/i.test(t) ? t : null };
+}
+
+/** How many already-raised lines of each kind a check-in prompt carries. */
+const RAISED_MAX = 15;
+
+/**
+ * What today's briefs already put in front of the user, as prompt lines for a check-in. Brief cards are `info`,
+ * not pending, so they never reach the check-in's "already waiting" list, and the check-in runs in its own
+ * session that never saw the morning brief: without this it can push "Heads up" about a decision the user read
+ * at breakfast. Titles are deduplicated case-insensitively (a later check-in may restate a morning decision),
+ * a title raised as a decision is not repeated under watching, and an entry whose chip was tapped says so.
+ */
+export function raisedToday(briefs: Item[]): { decisions: string[]; watching: string[] } {
+  const seen = new Set<string>();
+  const decisions: string[] = [];
+  const watching: string[] = [];
+  const add = (list: string[], title: string, line: string) => {
+    const key = title.toLowerCase();
+    if (seen.has(key) || list.length >= RAISED_MAX) return;
+    seen.add(key);
+    list.push(line);
+  };
+  for (const b of briefs) for (const e of b.card?.entries ?? []) add(decisions, e.title, `- [brief ${b.id}] ${e.title}${e.used ? ' (the user already acted on it)' : ''}`);
+  for (const b of briefs) for (const w of b.card?.watching ?? []) add(watching, w.title, `- ${w.title}`);
+  return { decisions, watching };
 }
 
 /** The thread line for a morning brief that ended with no card and said nothing either. */

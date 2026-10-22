@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import type { BriefEntry } from '../shared/types';
-import { EMPTY_MORNING_NOTE, USE_DRAFT_LABEL, briefCard, briefTitle, checkinOutcome, morningOutcome, useAction, useDraft } from './brief';
+import type { BriefEntry, Item } from '../shared/types';
+import { EMPTY_MORNING_NOTE, USE_DRAFT_LABEL, briefCard, briefTitle, checkinOutcome, morningOutcome, raisedToday, useAction, useDraft } from './brief';
 
 describe('check-ins stay silent unless a brief was posted', () => {
   test('free text never surfaces, NOOP or not', () => {
@@ -171,5 +171,29 @@ describe('a brief entry without a draft sends its message in one tap', () => {
     expect(() => useAction(card, '0')).toThrow(/no button/);
     expect(() => useAction(card, '2')).toThrow(/no button/);
     for (const bad of [undefined, '', '-1', '9', '1.0']) expect(() => useAction(card, bad)).toThrow(/no button/);
+  });
+});
+
+describe('check-ins see what today\'s briefs already raised', () => {
+  const brief = (id: string, entries: BriefEntry[], watching: { title: string }[] = []): Item =>
+    ({ id, kind: 'card', created_at: 0, updated_at: 0, card: { type: 'brief', title: 'Brief', status: 'info', entries, watching } }) as Item;
+
+  test('decisions carry their card id and whether the user already acted', () => {
+    const r = raisedToday([brief('b1', [{ title: 'Reply to Dana' }, { title: 'Pay rent', used: true }], [{ title: 'Package Thursday' }])]);
+    expect(r.decisions).toEqual(['- [brief b1] Reply to Dana', '- [brief b1] Pay rent (the user already acted on it)']);
+    expect(r.watching).toEqual(['- Package Thursday']);
+  });
+
+  test('a restated title is listed once, and a decision is not repeated under watching', () => {
+    const r = raisedToday([
+      brief('b1', [{ title: 'Reply to Dana' }], [{ title: 'Rent due Friday' }]),
+      brief('b2', [{ title: 'reply to dana' }, { title: 'Rent due Friday' }]),
+    ]);
+    expect(r.decisions).toEqual(['- [brief b1] Reply to Dana', '- [brief b2] Rent due Friday']);
+    expect(r.watching).toEqual([]);
+  });
+
+  test('no briefs today means nothing raised', () => {
+    expect(raisedToday([])).toEqual({ decisions: [], watching: [] });
   });
 });

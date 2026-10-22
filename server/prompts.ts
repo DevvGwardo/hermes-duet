@@ -83,7 +83,14 @@ Hermes Duet tasks (active, or finished in the last day):
 ${taskLines(ctx.tasks)}${pages}`;
 }
 
-export function checkinPrompt(s: Settings, ctx: { since: string; pending: Item[]; tasks: Task[] }) {
+/** `raised` is what today's briefs already showed the user (raisedToday). */
+export function checkinPrompt(s: Settings, ctx: { since: string; pending: Item[]; tasks: Task[]; raised: { decisions: string[]; watching: string[] } }) {
+  const raised = ctx.raised.decisions.length
+    ? `\n\nAlready raised today in a brief (don't raise these again; only if something material changed, such as a deadline moving up, raise it with what changed in the title):\n${ctx.raised.decisions.join('\n')}`
+    : '';
+  const watched = ctx.raised.watching.length
+    ? `\n\nOn today's watching list (raise one only if it now needs a decision soon):\n${ctx.raised.watching.join('\n')}`
+    : '';
   return `[check-in] Quiet check for anything new since ${ctx.since} that needs the user soon: an urgent email or message, a deadline today, a failed task, a meeting starting within the hour. Use the same sources as the morning brief, but look only at what's new.
 
 Your text reply is never shown to the user. The only way to reach them is post_brief.
@@ -91,7 +98,7 @@ If nothing needs them, reply with exactly NOOP and nothing else. Don't call any 
 If something does, call post_brief with just those decisions (at least one; title like "Heads up: 2 things"; put any draft you prepared in the entry's draft), then reply with one short line. Something that only needs watching is not a reason to check in.
 
 Already waiting on the user (don't repeat these):
-${pendingLines(ctx.pending)}
+${pendingLines(ctx.pending)}${raised}${watched}
 
 Hermes Duet tasks:
 ${taskLines(ctx.tasks)}`;

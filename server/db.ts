@@ -75,6 +75,9 @@ const itemsBefore = db.query<{ json: string }, [number, number, string, number]>
 const itemsPending = db.query<{ json: string }, []>(
   `SELECT json FROM items WHERE kind = 'card' AND json_extract(json, '$.card.status') = 'pending' ORDER BY created_at`,
 );
+const itemsBriefsSince = db.query<{ json: string }, [number]>(
+  `SELECT json FROM items WHERE kind = 'card' AND json_extract(json, '$.card.type') = 'brief' AND created_at >= ? ORDER BY created_at`,
+);
 
 export const items = {
   save(item: Item) {
@@ -105,6 +108,10 @@ export const items = {
   },
   pendingCards(): Item[] {
     return itemsPending.all().map((r) => JSON.parse(r.json) as Item);
+  },
+  /** Brief cards (morning and check-in) posted at or after `since`, oldest first. */
+  briefsSince(since: number): Item[] {
+    return itemsBriefsSince.all(since).map((r) => JSON.parse(r.json) as Item);
   },
 };
 

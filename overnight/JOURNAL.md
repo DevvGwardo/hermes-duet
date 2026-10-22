@@ -440,3 +440,27 @@ DONE: Interrupted tasks push twice
 - `handoverCard` takes the previous card, so `handOver` refreshing a card in place keeps chips that were already tapped spent. web/src/components/CardView.tsx: both chip kinds go through a shared `useChips` hook, read "On it" from `used`, and show errors. They no longer call `api.send` directly. +6 tests (brief.test.ts, handover.test.ts).
 - Why it matters against Claude Duet: one tap means one request. A reload or a second device can no longer send the same follow-up twice.
 - Verified: typecheck pass · test 72 pass / 0 fail · build pass
+
+## 2026-10-22T01:27:25Z — loop iteration 20
+- exit=0 gate=green committed=True files=9
+- gate: typecheck: exit 0
+- answer:
+```
+d your organization's connectors
+DONE: Follow-up chips forget they were tapped
+- **Server:** `actOnCard` in `server/runner.ts` takes two new actions. `send_action` is for brief entries without a draft, and `follow_up` is for the chips on a finished task's card. Each one reads the message from the saved card, not from the phone, marks that chip `used`, and sends the message as the user. A second tap is refused with "already sent to Hermes". The rules are in new functions in `server/brief.ts` (`useAction`, `chipIndex`) and `server/handover.ts` (`useFollowUp`). `FollowUp.used` is added in `shared/types.ts`.
+- **Card refresh:** `handoverCard` now takes the previous card. Before, refreshing a finished-task card in place would turn chips the user had already tapped back on.
+- **Web:** in `web/src/components/CardView.tsx`, both kinds of chip go through a shared `useChips` hook. They show "On it" based on `used` from the saved card, so it holds after a reload and on other devices, and errors are shown. The chips no longer call `api.send` directly.
+- **Tests:** 6 new, in `server/brief.test.ts` and `server/handover.test.ts`. Backlog item ticked and journal entry added.
+- typecheck: `tsc -p tsconfig.json --noEmit` → exit 0
+- test: `72 pass, 0 fail, 246 expect() calls` → exit 0
+- build: `✓ built in 103ms` → exit 0
+
+> CORRECTION: the item lists `server/brief.ts`, `server/handover.ts` and both test files only implicitly. The check logic lives there, not in `runner.ts`, so it can be tested.
+```
+
+## 2026-10-22T05:31Z — Check-ins re-raise this morning's decisions
+- What changed: the backlog had no open, unblocked items, so this iteration audited check-ins against Claude Duet and added this item. Brief cards are `info`, so they never appear in the check-in's "already waiting" list, and the check-in session never saw the morning brief. New pure `raisedToday` (server/brief.ts, +3 tests) turns today's brief cards into prompt lines: decisions tagged with their card id and "already acted on" when the chip was used, plus watching titles, deduplicated by title and capped at 15 each.
+- New `items.briefsSince` query (server/db.ts). `runCheckin` (server/runner.ts) passes the briefs since local midnight. `checkinPrompt` (server/prompts.ts) tells the agent not to raise those decisions again unless something material changed, and to raise a watching item only once it needs a decision.
+- Why it matters against Claude Duet: "goes quiet until something genuinely needs you". A decision raised at breakfast shouldn't come back as an 11 AM "Heads up".
+- Verified: typecheck pass · test 75 pass / 0 fail · build pass
