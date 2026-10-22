@@ -947,3 +947,19 @@ DONE: A queued brief reports a stale world
 - Limit: a Duet restart forgets `hermesBackAt` (the startup unknown→ok doesn't count as coming back), and specs persisted before this change have no `scheduled` flag, so they never wait. Not tried against a live Hermes.
 - Why it matters against Claude Duet: the standing page "refreshes on a schedule before the brief", so the brief should report its change, not "still running".
 - Verified: typecheck pass · test 118 pass / 0 fail · build pass
+
+## 2026-10-22T02:37:19Z — loop iteration 41
+- exit=0 gate=green committed=True files=6
+- gate: typecheck: exit 0
+- answer:
+```
+fore the page refreshes
+- **Problem:** if the scheduler queued the brief while Hermes was down, it started the moment Hermes came back, alongside the page refreshes queued before it. So it reported "today's refresh is still running".
+- **Fix:** a new rule, `briefWait` in `server/pages.ts`, with 1 new test in `server/pages.test.ts`. A scheduled brief waits while any page refresh is queued or running, for at most `BRIEF_HOLD_MIN` (30 minutes) after Hermes comes back. At any other time the scheduler has already held the brief once, so it doesn't wait a second time.
+- **Wiring in `server/runner.ts`:** `setHermesStatus` records when Hermes comes back. `pumpAll` leaves a held brief in the queue, but chat messages queued behind it still go out. A timer checks again when the 30 minutes run out, and a finished refresh triggers the same check through `finish()`.
+- **"Run it now" never waits:** the new `RunSpec.scheduled` flag marks briefs the scheduler queued. Tapping "Run it now" while a scheduled brief is waiting clears the flag, so that brief starts at once.
+- **Limits:** if Duet itself restarts, it forgets when Hermes came back. Queue entries saved before this change have no `scheduled` flag, so they never wait. Not tried against a live Hermes.
+- README line, backlog tick and journal entry updated. No open, unblocked backlog items remain.
+- typecheck: `tsc -p tsconfig.json --noEmit` → exit 0
+- test: `118 pass, 0 fail, 407 expect() calls` → exit 0 · build: `✓ built in 97ms` → exit 0
+```

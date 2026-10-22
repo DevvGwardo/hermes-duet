@@ -154,9 +154,14 @@ export const tasks = {
 const fileInsert = db.query('INSERT INTO files(id, path, created_at, json) VALUES (?, ?, ?, ?)');
 const fileGet = db.query<{ json: string; path: string }, [string]>('SELECT json, path FROM files WHERE id = ?');
 const filesAll = db.query<{ json: string }, []>('SELECT json FROM files ORDER BY created_at DESC LIMIT 200');
+const fileUpdate = db.query('UPDATE files SET json = ? WHERE id = ?');
 export const files = {
   add(entry: FileEntry, path: string) {
     fileInsert.run(entry.id, path, entry.created_at, JSON.stringify(entry));
+    return entry;
+  },
+  update(entry: FileEntry) {
+    fileUpdate.run(JSON.stringify(entry), entry.id);
     return entry;
   },
   get(id: string): { entry: FileEntry; path: string } | null {

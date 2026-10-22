@@ -101,7 +101,10 @@ export function applyEvent(ev: ServerEvent) {
       setState((s) => ({ tasks: upsert(s.tasks, ev.task, byUpdatedDesc) }));
       break;
     case 'file':
-      setState((s) => ({ files: [ev.file, ...s.files.filter((f) => f.id !== ev.file.id)] }));
+      // A known file is updated in place (save_page marks one as a page version), so newest-first order holds.
+      setState((s) => ({
+        files: s.files.some((f) => f.id === ev.file.id) ? s.files.map((f) => (f.id === ev.file.id ? ev.file : f)) : [ev.file, ...s.files],
+      }));
       break;
     case 'page':
       setState((s) => ({ pages: upsert(s.pages, ev.page, byCreated) }));

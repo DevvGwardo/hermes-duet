@@ -844,13 +844,25 @@ async function savePage(args: Record<string, unknown>, callerTask?: string | nul
   const at = refreshTime(s.brief_time);
   if (existing) {
     putPage({ ...existing, ...input });
+    markVersion(input.file_id, existing.id);
     return `Page ${existing.id} ("${input.title}") updated. It still refreshes every day at ${at}.`;
   }
   if (pages.all().length >= MAX_PAGES) throw new Error(`there are already ${MAX_PAGES} standing pages; update or remove one first`);
   const now = Date.now();
   // The first version was just built, so today counts as refreshed.
   const page = putPage({ id: newId(), ...input, refreshed_on: localParts(s.timezone).date, refreshed_at: now, created_at: now, updated_at: now });
+  markVersion(input.file_id, page.id);
   return `Saved standing page ${page.id} ("${page.title}"). It refreshes every day at ${at}, 30 minutes before the morning brief, as a background task that delivers the new version in its place. Use page_id="${page.id}" to change it later, or with remove: true to stop it.`;
+}
+
+/**
+ * The file save_page named was delivered before the page existed (usually from chat), so deliverFile couldn't mark it
+ * as a version of the page; mark it now, so Make lists it once instead of next to every later refresh.
+ */
+function markVersion(fileId: string, pageId: string) {
+  const f = files.get(fileId);
+  if (!f || f.entry.page_id === pageId) return;
+  broadcast({ type: 'file', file: files.update({ ...f.entry, page_id: pageId }) });
 }
 
 /** Post the task's handover card, or refresh it in place if this task already handed over once. */
@@ -1437,22 +1449,25 @@ function deliverFile(a: { path: string; title: string; summary?: string }, o: Or
   mkdirSync(dir, { recursive: true });
   const dest = join(dir, name);
   copyFileSync(src, dest);
-  const entry: FileEntry = {
-    id,
-    title: a.title,
-    name,
-    mime: MIME[extname(name).toLowerCase()] ?? 'application/octet-stream',
-    size: st.size,
-    task_id: o.taskId,
-    created_at: Date.now(),
-  };
-  files.add(entry, dest);
-  broadcast({ type: 'file', file: entry });
+  const mime = MIME[extname(name).toLowerCase()] ?? 'application/octet-stream';
   // A page refresh's file replaces the page's current version, but only if it's the same kind of file, so a
   // stray screenshot or CSV from the same run can't take the dashboard's place.
   const page = pageOf(o.taskId);
   const current = page ? files.get(page.file_id) : null;
-  if (page && (!current || current.entry.mime === entry.mime)) putPage({ ...page, file_id: id, refreshed_at: entry.created_at });
+  const version = page && (!current || current.entry.mime === mime) ? page : null;
+  const entry: FileEntry = {
+    id,
+    title: a.title,
+    name,
+    mime,
+    size: st.size,
+    task_id: o.taskId,
+    ...(version && { page_id: version.id }),
+    created_at: Date.now(),
+  };
+  files.add(entry, dest);
+  broadcast({ type: 'file', file: entry });
+  if (version) putPage({ ...version, file_id: id, refreshed_at: entry.created_at });
   // A background task's files arrive together on its handover card instead of one card each mid-run.
   if (!backgroundTask(o.taskId)) postCard({ type: 'file', title: a.title, body: a.summary || undefined, file_id: id, status: 'info' }, o);
   return entry;

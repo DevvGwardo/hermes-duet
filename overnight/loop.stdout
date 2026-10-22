@@ -307,3 +307,10 @@
 2:34AM INF no leaks found
 [2026-10-22 02:34:52] iter 40 done · exit=0 gate=green committed=True changed=3
 [2026-10-22 02:35:12] iter 41 start → iter-41-20261022-023512.log
+[2026-10-22 02:37:19] iter 41 commit=ok · [overnight/claude-duet-20261022 32d937e] overnight(iter 41): DONE: After a Hermes outage the brief starts before the page refreshes
+ 7 files changed, 95 insertions(+), 9 deletions(-)
+2:37AM INF 0 commits scanned.
+2:37AM INF scanned ~8077 bytes (8.08 KB) in 22.6ms
+2:37AM INF no leaks found
+[2026-10-22 02:37:19] iter 41 done · exit=0 gate=green committed=True changed=6
+[2026-10-22 02:37:39] iter 42 start → iter-42-20261022-023739.log

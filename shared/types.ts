@@ -188,6 +188,8 @@ export interface FileEntry {
   mime: string;
   size: number;
   task_id?: string | null;
+  /** Set when this file became a version of that standing page; lists show only a page's newest version. */
+  page_id?: string;
   created_at: number;
 }
 
