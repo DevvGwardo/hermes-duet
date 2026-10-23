@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { cardOf, isSettledAsk } from '../../shared/links';
 import { api, clearSettledNotifications, connect, isStandalone, pushSupported } from './api';
 import { Composer, type ComposerHandle } from './components/Composer';
+import { BrowserView } from './components/BrowserView';
 import { MakeView } from './components/MakeView';
 import { BrandBadge, MangaBackdrop, Mascot, SpeechBubble, Wordmark } from './components/Manga';
 import { Rail } from './components/Rail';
@@ -53,6 +54,7 @@ function Shell() {
   const [tab, setTab] = useState<Tab>('chat');
   const [fileId, setFileId] = useState<string | null>(null);
   const [settings, setSettings] = useState(false);
+  const [browserOpen, setBrowserOpen] = useState(false);
   const [jump, setJump] = useState<string | null>(null);
   const [briefNote, setBriefNote] = useState<string | null>(null);
   const [sent, setSent] = useState(0);
@@ -196,6 +198,9 @@ function Shell() {
             <span className="status-dot" />
             <span className="status-text">{status.text}</span>
           </div>
+          <button className="icon-btn top-gear" onClick={() => setBrowserOpen(true)} aria-label="Live browser">
+            <Icon.globe size={20} />
+          </button>
           <button className="icon-btn top-gear" onClick={() => setSettings(true)} aria-label="Settings">
             <Icon.gear size={20} />
           </button>
@@ -249,6 +254,7 @@ function Shell() {
       <Rail tab={tab} onJump={jumpTo} onOpenFile={setFileId} onShowTasks={() => setTab('tasks')} />
 
       {fileId && <Viewer fileId={fileId} onClose={() => setFileId(null)} />}
+      {browserOpen && <BrowserView onClose={() => setBrowserOpen(false)} />}
       {settings && <SettingsSheet onClose={() => setSettings(false)} />}
     </div>
   );

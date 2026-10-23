@@ -130,8 +130,24 @@ All settings are optional. Put them in `.env`; see [`.env.example`](.env.example
 | `DUET_CONTEXT_FILE` | `./context.local.md` | |
 | `DUET_USER_NAME` | (none) | How the agent refers to you. |
 | `DUET_MAX_BACKGROUND` | `2` | Number of background tasks allowed to run at once. |
+| `DUET_CHROME_BIN` | Chrome in `/Applications` | Browser to drive for the live pane. |
+| `DUET_CHROME_PORT` | `9333` | DevTools port Duet launches Chrome on. |
+| `DUET_CHROME_PROFILE` | `$HERMES_HOME/duet-chrome` | Persistent profile, so your logins survive restarts. |
+| `DUET_CHROME_WIDTH` / `_QUALITY` / `_FPS_GAP` | `760` / `45` / `110` | Frame size, JPEG quality, and minimum ms between frames. Lower them on a bad connection. |
+| `DUET_CHROME_DEBUG` | (unset) | Log CDP connection and reconnect events. |
 
 Brief time, check-ins and quiet hours are set in the app.
+
+### Live browser
+
+The globe button opens the Chrome instance the agent is driving: a live low-bandwidth view plus
+your own taps and typing. It exists for the case where the agent stalls on a human check —
+a login, a CAPTCHA, a consent dialog — so you can clear it from your phone instead of killing the task.
+
+Duet launches Chrome with remote debugging on a dedicated profile; it does not attach to your
+normal browser, so nothing you do in the pane touches your everyday cookies. Input events are
+dispatched over CDP, which Chrome treats as trusted, and every route sits behind the paired-device
+check — but it is still full control of the page while the pane is open.
 
 ## Security
 

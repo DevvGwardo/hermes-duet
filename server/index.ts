@@ -47,8 +47,10 @@ const APP_CSP = [
   "frame-ancestors 'none'",
 ].join('; ');
 
+import * as browser from './browser';
+
 // ---------- public app server (the tunnel points here) ----------
-async function handleApp(req: Request): Promise<Response> {
+async function handleApp(req: Request, server?: any): Promise<Response> {
   const url = new URL(req.url);
   const path = url.pathname;
 
@@ -87,6 +89,21 @@ async function handleApp(req: Request): Promise<Response> {
     }
     if (path === '/api/events' && req.method === 'GET') return sseResponse(req);
     if (path === '/api/capabilities' && req.method === 'GET') return json(await capabilities());
+
+    // ---- live browser pane (see server/browser.ts) ----
+    if (path === '/api/browser/ws' && req.method === 'GET') {
+      if (!sameOrigin(req)) return err(403, 'bad origin');
+      if (!server) return err(500, 'no websocket server');
+      return server.upgrade(req, { data: { kind: 'browser' } }) ? (undefined as any) : err(400, 'upgrade failed');
+    }
+    if (path === '/api/browser/status' && req.method === 'GET') return json(browser.status());
+    if (path === '/api/browser/tabs' && req.method === 'GET') return json({ tabs: await browser.buildTabs() });
+    if (path === '/api/browser/open' && req.method === 'POST') return json({ tabs: await browser.open() });
+    if (path === '/api/browser/input' && req.method === 'POST') {
+      const evt = await body<Record<string, unknown>>(req);
+      await browser.input(evt as any);
+      return json({ ok: true });
+    }
 
     if (path === '/api/messages' && req.method === 'POST') {
       const { text } = await body<{ text?: string }>(req);
@@ -271,7 +288,77 @@ async function handleInternal(req: Request): Promise<Response> {
   }
 }
 
-Bun.serve({ hostname: config.host, port: config.port, fetch: handleApp, idleTimeout: 0 });
+/**
+ * The live browser pane rides one websocket per phone: binary JPEG frames out (with a small
+ * JSON header), pointer/keyboard events in. Frames are dropped rather than queued when a phone
+ * can't keep up, so a slow link degrades the picture instead of lagging behind reality.
+ */
+Bun.serve({
+  hostname: config.host,
+  port: config.port,
+  fetch: (req, srv) => handleApp(req, srv),
+  websocket: {
+    open(ws: any) {
+      if (process.env.DUET_CHROME_DEBUG) console.error('[ws] open', JSON.stringify(ws.data));
+      if (ws.data?.kind !== 'browser') return;
+      const stopFrame = browser.onFrame((f) => {
+        // A phone on a bad link must never make the server buffer megabytes of stale frames:
+        // drop the frame instead of queueing it behind a stalled socket.
+        const buffered = typeof (ws as any).getBufferedAmount === 'function' ? (ws as any).getBufferedAmount() : 0;
+        if (buffered > 1_500_000) return;
+        const meta = new TextEncoder().encode(
+          JSON.stringify({ w: f.width, h: f.height, tab: f.tabId }),
+        );
+        const buf = new Uint8Array(4 + meta.length + f.jpeg.length);
+        new DataView(buf.buffer).setUint32(0, meta.length, true);
+        buf.set(meta, 4);
+        buf.set(f.jpeg, 4 + meta.length);
+        try {
+          ws.send(buf);
+        } catch (e: any) {
+          console.error('[ws] frame send failed', e?.message);
+        }
+      });
+      const stopTabs = browser.onTabs((tabs) => {
+        try {
+          ws.send(JSON.stringify({ type: 'tabs', tabs }));
+        } catch (e: any) {
+          console.error('[ws] tabs send failed', e?.message);
+        }
+      });
+      ws.data.stop = () => {
+        stopFrame();
+        stopTabs();
+      };
+      browser.open().catch((e: Error) => {
+        try {
+          ws.send(JSON.stringify({ type: 'error', message: e.message }));
+        } catch {}
+      });
+    },
+    async message(ws: any, raw: any) {
+      if (ws.data?.kind !== 'browser') return;
+      let evt: any;
+      try {
+        evt = JSON.parse(typeof raw === 'string' ? raw : new TextDecoder().decode(raw));
+      } catch {
+        return;
+      }
+      if (!evt?.type) return;
+      try {
+        await browser.input(evt);
+      } catch (e: any) {
+        try {
+          ws.send(JSON.stringify({ type: 'error', message: e?.message ?? 'input failed' }));
+        } catch {}
+      }
+    },
+    close(ws: any) {
+      ws.data?.stop?.();
+    },
+  },
+  idleTimeout: 0,
+});
 Bun.serve({ hostname: '127.0.0.1', port: config.internalPort, fetch: handleInternal, idleTimeout: 120 });
 
 recoverOrphans();

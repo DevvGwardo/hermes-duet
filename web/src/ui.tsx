@@ -94,6 +94,12 @@ export const Icon = {
       <path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" />
     </>,
   ),
+  globe: svg(
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M3 12h18M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18" />
+    </>,
+  ),
   gear: svg(
     <>
       <circle cx="12" cy="12" r="3" />
