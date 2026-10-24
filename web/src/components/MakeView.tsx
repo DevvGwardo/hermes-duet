@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { shelf } from '../../../shared/shelf';
 import type { FileEntry, Page, Task } from '../../../shared/types';
 import { api } from '../api';
 import { useStore } from '../store';
@@ -15,6 +16,7 @@ export function MakeView({ onStart, onOpenFile }: { onStart: (prompt: string) =>
   const files = useStore((s) => s.files);
   const pages = useStore((s) => s.pages);
   const tasks = useStore((s) => s.tasks);
+  const shown = shelf(files, pages.map((p) => p.id));
   return (
     <div className="pane make-pane">
       {pages.length > 0 && (
@@ -42,11 +44,11 @@ export function MakeView({ onStart, onOpenFile }: { onStart: (prompt: string) =>
       </section>
       <section>
         <h2 className="section-title">Your files</h2>
-        {files.length === 0 ? (
+        {shown.length === 0 ? (
           <p className="muted pad">Docs, sheets, decks and dashboards I finish for you land here.</p>
         ) : (
           <ul className="list">
-            {files.map((f) => {
+            {shown.map((f) => {
               const FIcon = fileIcon(f.mime, f.name);
               return (
                 <li key={f.id}>

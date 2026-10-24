@@ -1,5 +1,6 @@
 import { copyFileSync, mkdirSync, statSync } from 'node:fs';
-import { basename, extname, isAbsolute, join, resolve } from 'node:path';
+import { basename, extname, join } from 'node:path';
+import { deliverySource } from './delivery';
 import { askAge } from '../shared/age';
 import type { AgentState, CardData, FileEntry, Item, Page, Task, TaskStep, ToolStep } from '../shared/types';
 import { DRAFT_MAX, PROMPT_ENDED, REPLACED, WITHDRAWN, approvalDecision, approvalPush, deadPrompts, replaceRefusal, turnNote, withdrawRefusal } from './approval';
@@ -1434,8 +1435,6 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
   }
 }
 
-// Paths the agent may never hand to the phone, even by accident.
-const DENY = /(^|\/)(\.ssh|\.gnupg|\.aws|\.config\/gcloud|Keychains)(\/|$)|(^|\/)\.env(\.|$)|auth\.json$|credentials|\.pem$|\.p12$|\.key$|id_(rsa|ed25519|ecdsa)|internal\.token$|duet\.db/i;
 const MIME: Record<string, string> = {
   '.html': 'text/html',
   '.htm': 'text/html',
@@ -1460,14 +1459,12 @@ const MIME: Record<string, string> = {
 };
 
 function deliverFile(a: { path: string; title: string; summary?: string }, o: Origin): FileEntry {
-  if (!isAbsolute(a.path)) throw new Error('path must be absolute');
-  const src = resolve(a.path);
-  if (DENY.test(src)) throw new Error('that path looks like secrets; refusing to deliver it');
+  const src = deliverySource(a.path);
   const st = statSync(src);
   if (!st.isFile()) throw new Error('not a file');
   if (st.size > 50 * 1024 * 1024) throw new Error('file is over 50 MB');
   const id = newId();
-  const name = basename(src);
+  const name = basename(a.path);
   const dir = join(config.dataDir, 'files', id);
   mkdirSync(dir, { recursive: true });
   const dest = join(dir, name);

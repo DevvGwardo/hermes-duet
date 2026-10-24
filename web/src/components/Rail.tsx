@@ -1,5 +1,6 @@
 import { useStore } from '../store';
 import { Icon, fileIcon, relLabel } from '../ui';
+import { shelf } from '../../../shared/shelf';
 
 /**
  * Desktop-only context rail: what needs you, what's running, what just landed.
@@ -9,6 +10,8 @@ export function Rail({ tab, onJump, onOpenFile, onShowTasks }: { tab: string; on
   const pending = useStore((s) => s.pending);
   const tasks = useStore((s) => s.tasks);
   const files = useStore((s) => s.files);
+  const pages = useStore((s) => s.pages);
+  const recent = shelf(files, pages.map((p) => p.id)).slice(0, 6);
   const active = tasks.filter((t) => ['running', 'queued', 'waiting'].includes(t.status));
 
   return (
@@ -70,11 +73,11 @@ export function Rail({ tab, onJump, onOpenFile, onShowTasks }: { tab: string; on
 
       <section className="rail-section" hidden={tab === 'make'}>
         <h2 className="eyebrow">Recent files</h2>
-        {files.length === 0 ? (
+        {recent.length === 0 ? (
           <p className="rail-empty">Docs, decks and dashboards land here.</p>
         ) : (
           <ul className="rail-list">
-            {files.slice(0, 6).map((f) => {
+            {recent.map((f) => {
               const FIcon = fileIcon(f.mime, f.name);
               return (
                 <li key={f.id}>

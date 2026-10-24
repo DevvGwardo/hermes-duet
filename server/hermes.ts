@@ -54,6 +54,25 @@ export interface RunEvent {
   [k: string]: any;
 }
 
+export interface SseFrame {
+  data: string;
+  id?: number;
+  name?: string;
+}
+
+export function parseSseFrame(frame: string): SseFrame | null {
+  const data: string[] = [];
+  let id: number | undefined;
+  let name: string | undefined;
+  for (const line of frame.split(/\r?\n/)) {
+    if (line.startsWith('data:')) data.push(line.slice(5).replace(/^ /, ''));
+    else if (line.startsWith('id:')) id = Number(line.slice(3).trim());
+    else if (line.startsWith('event:')) name = line.slice(6).trim();
+  }
+  if (data.length === 0) return null;
+  return { data: data.join('\n'), id, name };
+}
+
 export const hermes = {
   hasKey: () => !!key,
 
@@ -135,15 +154,9 @@ export const hermes = {
       while ((sep = buf.search(/\r?\n\r?\n/)) !== -1) {
         const frame = buf.slice(0, sep);
         buf = buf.slice(sep).replace(/^\r?\n\r?\n/, '');
-        let data = '';
-        let id: number | undefined;
-        let name: string | undefined;
-        for (const line of frame.split(/\r?\n/)) {
-          if (line.startsWith('data:')) data += line.slice(5).replace(/^ /, '');
-          else if (line.startsWith('id:')) id = Number(line.slice(3).trim());
-          else if (line.startsWith('event:')) name = line.slice(6).trim();
-        }
-        if (!data) continue;
+        const parsed = parseSseFrame(frame);
+        if (!parsed) continue;
+        const { data, id, name } = parsed;
         try {
           const ev = JSON.parse(data) as RunEvent;
           if (!ev.event && name) ev.event = name;

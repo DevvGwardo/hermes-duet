@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { cardOf, isSettledAsk } from '../../shared/links';
 import { api, clearSettledNotifications, connect, isStandalone, pushSupported } from './api';
+import { isIOS } from './platform';
 import { Composer, type ComposerHandle } from './components/Composer';
 import { BrowserView } from './components/BrowserView';
 import { MakeView } from './components/MakeView';
@@ -134,7 +135,7 @@ function Shell() {
       () => setBriefNote('Could not start a brief'),
     );
 
-  const showInstall = !hideInstall && !isStandalone() && /iPhone|iPad/.test(navigator.userAgent);
+  const showInstall = !hideInstall && !isStandalone() && isIOS(navigator);
   const showPushNudge = !showInstall && !pushEnabled && pushSupported() && isStandalone();
   const badges: Record<Tab, number> = { chat: pending, tasks: working, make: 0 };
   const today = new Date().toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
@@ -177,6 +178,10 @@ function Shell() {
               <div className="status-sub">Hermes · {agent.hermes === 'ok' ? 'connected' : agent.hermes}</div>
             </div>
           </div>
+          <button className="side-tab" onClick={() => setBrowserOpen(true)}>
+            <Icon.globe size={19} />
+            <span className="side-tab-label">Live browser</span>
+          </button>
           <button className="side-tab" onClick={() => setSettings(true)}>
             <Icon.gear size={19} />
             <span className="side-tab-label">Settings</span>

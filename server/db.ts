@@ -3,10 +3,13 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FileEntry, Item, Page, Settings, Task } from '../shared/types';
 import { config } from './config';
+import { lockDownDataDir } from './permissions';
 
 mkdirSync(config.dataDir, { recursive: true });
+lockDownDataDir(config.dataDir);
 export const db = new Database(join(config.dataDir, 'duet.db'), { create: true });
 db.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;');
+lockDownDataDir(config.dataDir);
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS items (

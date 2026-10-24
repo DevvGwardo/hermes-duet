@@ -54,7 +54,12 @@ export function BrowserView({ onClose }: { onClose: () => void }) {
               const active = (msg.tabs ?? []).find((t: Tab) => t.active);
               if (active) setUrl(active.url);
             }
-            if (msg.type === 'error') setNotice(msg.message);
+            if (msg.type === 'error') {
+              setNotice(msg.message);
+              // Input errors can leave a perfectly good last frame on screen; only
+              // replace it when Chrome never produced a frame in the first place.
+              if (drawn === 0) setStatus('error');
+            }
           } catch {}
           return;
         }
