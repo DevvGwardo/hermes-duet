@@ -50,6 +50,8 @@ interface ActiveRun {
   activity: Item | null;
   assistant: Item | null; // current text segment
   text: string; // all text across segments
+  segText: string; // text of the segment still being streamed
+  lastText: string; // the last segment that closed with something in it
   pendingWs: string;
   steps: ToolStep[];
   lastSeq: number;
@@ -250,6 +252,8 @@ async function launch(l: Lane, spec: RunSpec) {
     activity: null,
     assistant: null,
     text: '',
+    segText: '',
+    lastText: '',
     pendingWs: '',
     steps: [],
     lastSeq: 0,
@@ -536,6 +540,7 @@ function saveActivity(run: ActiveRun) {
 
 function appendText(run: ActiveRun, delta: string) {
   run.text += delta;
+  run.segText += delta;
   // Background task runs keep their text out of the thread: the handover card carries the result.
   if (run.spec.quiet || run.spec.kind === 'task') return;
   if (!run.assistant) {
@@ -565,6 +570,8 @@ const stripMedia = (text: string) => text.replace(MEDIA_RE, '').replace(/\n{3,}/
 
 function closeSegment(run: ActiveRun) {
   run.pendingWs = '';
+  if (run.segText.trim()) run.lastText = run.segText;
+  run.segText = '';
   const a = run.assistant;
   if (!a) return;
   run.assistant = null;
@@ -622,7 +629,7 @@ function finish(l: Lane, run: ActiveRun, status: 'done' | 'error' | 'stopped', o
     if (t && t.status === 'running') {
       const outcome: Task['status'] = status === 'done' ? 'done' : status === 'stopped' ? 'cancelled' : 'failed';
       const waiting = run.cards > 0 && items.pendingCards().some((c) => c.run_id === run.id);
-      putTask({ ...t, status: outcome, progress: '', result: waiting ? 'Waiting on your answer in Chat.' : status === 'done' ? firstLine(run.text, 300) || 'Done.' : error ?? 'Stopped.' });
+      putTask({ ...t, status: outcome, progress: '', result: waiting ? 'Waiting on your answer in Chat.' : status === 'done' ? firstLine(run.lastText || run.text, 300) || 'Done.' : error ?? 'Stopped.' });
     }
   }
 
@@ -748,7 +755,7 @@ function onTaskRunEnd(taskId: string, run: ActiveRun, status: 'done' | 'error' |
     putTask({ ...t, status: 'waiting', progress: 'Waiting on you' });
     return;
   } else {
-    const result = t.result || firstLine(stripMedia(run.text), 300) || 'Finished.';
+    const result = t.result || firstLine(stripMedia(run.lastText || run.text), 300) || 'Finished.';
     if (t.status === 'running' || t.status === 'queued' || t.status === 'waiting') {
       putTask({ ...t, status: 'done', result, progress: t.progress?.startsWith('· ') ? '' : t.progress, steps: t.steps.map((s) => ({ ...s, done: true })) });
     }
@@ -1556,6 +1563,8 @@ export function recoverOrphans() {
       activity,
       assistant: null,
       text: '',
+      segText: '',
+      lastText: '',
       pendingWs: '',
       // Seeded from the saved activity so a run Hermes no longer knows still shows (and reports) its steps;
       // a replay that does arrive matches them by tool_call_id instead of adding duplicates.
