@@ -68,6 +68,7 @@ pre.cmd { background: var(--kpi-bg); color: var(--kpi-ink); font: 13px/1.6 var(-
   <p>Blueprint</p>
   <ol>
     <li><a href="#status">Status</a></li>
+    <li><a href="#phone-polish">Phone polish</a></li>
     <li><a href="#new">New: polish</a></li>
     <li><a href="#roadmap-done">Roadmap, finished</a></li>
     <li><a href="#tour">Tour</a></li>
@@ -81,15 +82,15 @@ pre.cmd { background: var(--kpi-bg); color: var(--kpi-ink); font: 13px/1.6 var(-
 </nav>
 <main>
 <header class="top" id="status">
-  <p class="eyebrow">Hermes Duet · blueprint · roadmap complete · <!--bp:generated-->2026-10-29 · 05dc95e<!--/bp:generated--></p>
+  <p class="eyebrow">Hermes Duet · blueprint · roadmap complete · <!--bp:generated-->2026-10-29 · 2b90aa3<!--/bp:generated--></p>
   <h1>Your agent, in duet — on your phone.</h1>
   <p class="lede">Hermes Duet is a PWA front end for a Hermes agent: one thread for chat and approval cards, a morning brief, background tasks, standing pages, and a live view of the browser the agent drives. This page captures every screen and modal, driven in real Chrome against a seeded demo server.</p>
   <p class="muted">Everything below came from a local run in real Chrome on this Mac. Screenshots are real captures by the harness in <code>tools/blueprint/</code>; the demo server (<code>bun scripts/demo.ts --reset</code>) holds seeded content, the scheduler off. Nothing is estimated.</p>
   <div class="kpis" role="list">
-    <div class="kpi" role="listitem"><b><!--bp:checks-->64 / 64<!--/bp:checks--></b><span>browser checks passed</span></div>
-    <div class="kpi" role="listitem"><b>274/274</b><span>unit tests (<code>bun test</code>, 31 files)</span></div>
-    <div class="kpi" role="listitem"><b><!--bp:console-errors-->5<!--/bp:console-errors--></b><span>console errors, all five the expected logged-out /api/state 401 probe (one per script)</span></div>
-    <div class="kpi" role="listitem"><b><!--bp:shots-->25<!--/bp:shots--></b><span>screenshots captured &amp; reviewed</span></div>
+    <div class="kpi" role="listitem"><b><!--bp:checks-->72 / 72<!--/bp:checks--></b><span>browser checks passed</span></div>
+    <div class="kpi" role="listitem"><b>348/348</b><span>unit tests (<code>bun test</code>, 43 files)</span></div>
+    <div class="kpi" role="listitem"><b><!--bp:console-errors-->7<!--/bp:console-errors--></b><span>console errors, each the expected logged-out /api/state 401 probe (one per harness context that opens the pair screen)</span></div>
+    <div class="kpi" role="listitem"><b><!--bp:shots-->30<!--/bp:shots--></b><span>screenshots captured &amp; reviewed</span></div>
     <div class="kpi" role="listitem"><b>119&nbsp;ms</b><span>first render of the pair screen</span></div>
   </div>
 </header>
@@ -128,6 +129,29 @@ pre.cmd { background: var(--kpi-bg); color: var(--kpi-ink); font: 13px/1.6 var(-
   <p class="intro"><code>tools/blueprint/a11y.mjs</code> tab-walks the app (named, visible, focus-indicated stops; <code>/</code> focuses the composer) and computes WCAG contrast from computed styles. 10/10 — after one fix: timestamps sat at 4.25:1, so <code>--faint</code> lifted one step (<code>#7a746a → #8b857a</code>, same hue); body text ≥8.3, timestamps now 5.37.</p>
   <h3>Limits</h3>
   <ul class="clean"><li>Push delivery to a physical device is untested — it needs the user's paired iPhone (blocked on user hardware, not attempted).</li><li>Pairing-lockout behavior untested by design (would poison the shared seed).</li><li>Long-press/scroll/text through the live pane go through the same tested <code>input()</code> path but only tap is asserted end to end.</li></ul>
+</section>
+
+<section id="phone-polish">
+  <h2>New in this pass: phone polish</h2>
+  <p class="intro">A fresh-eyes audit of every tour screen at desktop and 390px widths (empty thread in a new channel, long topic bar, viewer/settings/search sheets on a small viewport, measured in-page: scroll widths, computed fonts, matchMedia). Three defects ranked by user impact, each with a failing-before harness check in <code>tools/blueprint/polish.mjs</code> that goes green after the fix. No roadmap deltas: the roadmap stays finished; this pass only fixes and proves.</p>
+
+  <h3>Status pill no longer truncates on phones</h3>
+  <p class="intro">At 390px the pill (<code>.status-pill .status-text</code>, max-width 92px) read “Hermes of…” — measured <code>scrollWidth=112 vs clientWidth=92</code>, 20px clipped — and the pill is the only status surface on phones (the sidebar is hidden). The demo idles in exactly that state (dead Hermes port), so every phone user saw the clipped warn state. The pill now renders a short label (<code>Offline</code>: <code>sw=54 cw=54</code>); the sidebar keeps the full text. Shorts cover every truncating state, measured: Reconnecting 103→Retrying, Writing your brief 143→Working, N in background 127→N running.</p>
+  <figure><img src="media/status-before-after.jpg" alt="Status pill before (truncated Hermes offline) and after (full Offline)" loading="lazy"><figcaption>Before: “Hermes of…” clipped at 92px. After: the full short label fits. Sidebar text unchanged; desktop pill stays hidden. <code>App.tsx</code> (<code>useStatus</code> gains <code>short</code>); asserted by <code>polish.mjs</code> (<code>sw &lt;= cw</code> at 390px).</figcaption></figure>
+  <ul class="clean"><li>Limits: the 92px cap still exists — a future longer label would clip again, and the harness would fail loudly rather than drift.</li></ul>
+
+  <h3>Search footer hints hidden on touch</h3>
+  <p class="intro">The results sheet ended in “↑↓ move · ↵ open · esc close” on phones too (measured <code>display=flex h=35</code> with <code>matchMedia("(pointer: coarse)") === true</code>): 35px of chrome for a keyboard that isn't there. The footer now hides under <code>(pointer: coarse)</code> — higher-specificity selector (<code>.sheet.search-sheet .search-foot</code>), since the base rule sits later in the file — and still shows on desktop with hits (<code>h=35</code>).</p>
+  <figure><img src="media/search-foot-before-after.jpg" alt="Search results bottom before (keyboard hints) and after (hints gone on touch)" loading="lazy"><figcaption>Before: hint bar under the hits on a touch viewport. After: hits end the sheet; desktop keeps the hints. <code>styles.css</code>; asserted both ways by <code>polish.mjs</code>.</figcaption></figure>
+  <ul class="clean"><li>Limits: hybrid laptops with touchscreens report coarse+fine inconsistently — desktop Chrome keeps the hints, which is the safe direction.</li></ul>
+
+  <h3>Editable inputs stop inviting iOS zoom</h3>
+  <p class="intro">The codebase already holds the ≥16px rule (composer textarea, approval draft, both commented “stops iOS zoom-on-focus”), but three editable inputs sat below it: brief/quiet time inputs at 13px, channel name/topic at 15px, live-pane URL bar at 13px. On iPhones every focus zoomed and the user had to pinch back. All three are 16px now; readonly display fields (webhook URL 11.5px mono) untouched.</p>
+  <figure><img src="media/inputs-before-after.jpg" alt="Settings sheet before and after: time inputs at readable size" loading="lazy"><figcaption>Before/after in the settings sheet (desktop capture; the rule is global so phones inherit it). Channel form and live-pane URL bar likewise 16px. <code>styles.css</code>; <code>polish.mjs</code> asserts each computed font-size.</figcaption></figure>
+  <ul class="clean"><li>Limits: only proven by computed style, not on a physical iPhone (blocked on user hardware — same standing limit as push delivery).</li></ul>
+
+  <h3>How it was verified</h3>
+  <ul class="clean"><li>New harness <code>tools/blueprint/polish.mjs</code> (patterned on <code>sweep.mjs</code>): 8 checks, 5 captures. First run on a fresh seed failed the 4 defect checks and passed the 3 desktop controls; after the fixes the same script passes 8/8 on a fresh seed.</li><li>Full final sequence on one fresh seed: sweep 24/24, live 6/6, channels 6/6, pairing 7/7, a11y 10/10, approvals 7/7, recovery 4/4, polish 8/8 — 72/72, no new console errors, <code>bun run typecheck</code> and <code>bun test</code> (348 pass) clean.</li><li>Audit-only findings that were not defects: search-hit contrast re-measured with proper alpha blending (active row 4.52, rest ≥5.16 — passes); empty-channel topic truncates by design with ellipsis; viewer/settings sheets fit at 390px with no page-level sideways scroll.</li></ul>
 </section>
 
 <section id="new">
@@ -200,12 +224,12 @@ flowchart LR
 
 <section id="tests">
   <h2>Test results</h2>
-  <p class="intro">The harness drives the real app in real Chrome with a disposable paired context per viewport and every non-local request aborted. Unit tests: <code>bun test</code>, 274 pass / 0 fail across 31 files. Build: <code>bun run build</code> clean.</p>
+  <p class="intro">The harness drives the real app in real Chrome with a disposable paired context per viewport and every non-local request aborted. Unit tests: <code>bun test</code>, 348 pass / 0 fail across 43 files. Build: <code>bun run build</code> clean.</p>
   <div class="table-box"><table>
     <thead><tr><th>Run</th><th>Check</th><th>Measured</th><th>Result</th></tr></thead>
     <tbody><!--bp:checks-rows-->
 <tr><td>sweep</td><td>Pair screen asks for a code</td><td>inputs=1</td><td><span class="pill ok">pass</span></td></tr>
-<tr><td>sweep</td><td>Pairing with a real code lands in the thread</td><td>code S2… accepted</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>sweep</td><td>Pairing with a real code lands in the thread</td><td>code 22… accepted</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>sweep</td><td>Thread shows the morning brief</td><td>6 cards</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>sweep</td><td>Thread shows a pending approval</td><td></td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>sweep</td><td>Thread shows a pending question</td><td></td><td><span class="pill ok">pass</span></td></tr>
@@ -232,12 +256,12 @@ flowchart LR
 <tr><td>live</td><td>Live pane toolbar renders</td><td></td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>live</td><td>Non-black frames flow from the driven Chrome</td><td></td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>live</td><td>URL-bar navigation lands on the fixture</td><td>127.0.0.1:7499</td><td><span class="pill ok">pass</span></td></tr>
-<tr><td>live</td><td>A tap through the pane repaints the driven page</td><td>mean abs diff=70.3</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>live</td><td>A tap through the pane repaints the driven page</td><td>mean abs diff=99.9</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>live</td><td>No unexpected console errors</td><td>clean</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>channels</td><td>Channel sheet creates #taxes and the topic bar follows</td><td>taxes Deductions and receipts</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>channels</td><td>General stays first in the strip</td><td>general</td><td><span class="pill ok">pass</span></td></tr>
-<tr><td>channels</td><td>Message posted in #taxes appears in its thread</td><td>Receipts to gather 99280</td><td><span class="pill ok">pass</span></td></tr>
-<tr><td>channels</td><td>Search finds the #taxes message</td><td>hits=2</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>channels</td><td>Message posted in #taxes appears in its thread</td><td>Receipts to gather 50833</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>channels</td><td>Search finds the #taxes message</td><td>hits=1</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>channels</td><td>Jump lands on the message</td><td>visible</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>channels</td><td>No unexpected console errors</td><td>clean</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>pairing</td><td>Wrong code is refused with words, not a blank shake</td><td>That code didn’t work. Codes expire after 10 minutes.</td><td><span class="pill ok">pass</span></td></tr>
@@ -259,25 +283,33 @@ flowchart LR
 <tr><td>a11y</td><td>No unexpected console errors</td><td>clean</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>approvals</td><td>Seed holds a pending approval and a pending question</td><td>approvals=1 choices=1</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>approvals</td><td>Rail badge counts what needs you</td><td>badges=2,1</td><td><span class="pill ok">pass</span></td></tr>
-<tr><td>approvals</td><td>Approval decides and says what happened</td><td>SENT · 11:34 AM</td><td><span class="pill ok">pass</span></td></tr>
-<tr><td>approvals</td><td>Choice decides and names the chosen answer</td><td>YOU CHOSE “YES, MOVE IT” · 11:34 AM</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>approvals</td><td>Approval decides and says what happened</td><td>SENT · 1:46 PM</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>approvals</td><td>Choice decides and names the chosen answer</td><td>YOU CHOSE “YES, MOVE IT” · 1:46 PM</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>approvals</td><td>Nothing stays pending</td><td>pending=0</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>approvals</td><td>Needs-you badge clears, running-task badge stays</td><td>chat=0 tasks=1</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>approvals</td><td>No unexpected console errors</td><td>clean</td><td><span class="pill ok">pass</span></td></tr>
-<tr><td>recovery</td><td>Hermes-down surfaces as a status, not a spinner</td><td>Hermes offline / Hermes offline</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>recovery</td><td>Hermes-down surfaces as a status, not a spinner</td><td>Hermes offline / Offline</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>recovery</td><td>Dropped connection shows Reconnecting</td><td></td><td><span class="pill ok">pass</span></td></tr>
-<tr><td>recovery</td><td>Thread resyncs without duplicating cards</td><td>before=13 after=14 dupes=0</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>recovery</td><td>Thread resyncs without duplicating cards</td><td>before=12 after=13 dupes=0</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>recovery</td><td>No page errors across the outage</td><td>clean</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>polish</td><td>Settings time inputs are &gt;=16px (no iOS zoom)</td><td>time=16px</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>polish</td><td>Channel form inputs are &gt;=16px (no iOS zoom)</td><td>16px,16px</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>polish</td><td>Search footer hints show on desktop</td><td>h=35</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>polish</td><td>Live pane URL bar is &gt;=16px (no iOS zoom)</td><td>16px</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>polish</td><td>Status pill fits at 390px</td><td>Offline sw=54 cw=54</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>polish</td><td>Search footer hints hidden on touch</td><td>display=none h=0</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>polish</td><td>No sideways scroll at 390px</td><td></td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>polish</td><td>No unexpected console errors</td><td>clean</td><td><span class="pill ok">pass</span></td></tr>
 <!--/bp:checks-rows--></tbody>
   </table></div>
   <h3>Performance</h3>
   <div class="table-box"><table>
     <thead><tr><th>Measure</th><th>Value</th></tr></thead>
     <tbody><!--bp:perf-rows-->
-<tr><td><code>sweep.jsHeapMB</code></td><td>6.4</td></tr>
+<tr><td><code>sweep.jsHeapMB</code></td><td>6.1</td></tr>
 <tr><td><code>sweep.screenshots</code></td><td>12</td></tr>
-<tr><td><code>sweep.firstRenderMs</code></td><td>117</td></tr>
-<tr><td><code>live.tapRepaintDiff</code></td><td>70.3</td></tr>
+<tr><td><code>sweep.firstRenderMs</code></td><td>83</td></tr>
+<tr><td><code>live.tapRepaintDiff</code></td><td>99.9</td></tr>
 <tr><td><code>live.screenshots</code></td><td>3</td></tr>
 <tr><td><code>channels.screenshots</code></td><td>3</td></tr>
 <tr><td><code>pairing.screenshots</code></td><td>1</td></tr>
@@ -296,6 +328,9 @@ flowchart LR
   <div class="table-box"><table>
     <thead><tr><th>Issue</th><th>Cause</th><th>Fix</th></tr></thead>
     <tbody>
+      <tr><td>Status pill truncated the warn state on phones</td><td><code>.status-text</code> capped at 92px under 420px; “Hermes offline” measured <code>sw=112 cw=92</code> — and the pill is the only status surface when the sidebar is hidden.</td><td>Short pill labels (<code>Offline</code>, <code>Retrying</code>, <code>Working…→Working</code>, <code>N running</code>) via <code>useStatus().short</code>; sidebar keeps full text (<code>App.tsx</code>); harness asserts <code>sw&lt;=cw</code> at 390px.</td></tr>
+      <tr><td>Search footer showed keyboard hints on touch phones</td><td>“↑↓ move · ↵ open · esc close” rendered (<code>display=flex h=35</code>) with <code>(pointer: coarse) === true</code>.</td><td>Hidden under <code>(pointer: coarse)</code> with a higher-specificity selector (<code>styles.css</code>); desktop keeps the hints; asserted both ways.</td></tr>
+      <tr><td>Three editable inputs sat below the 16px iOS no-zoom rule</td><td>Settings time inputs 13px, channel form 15px, live-pane URL bar 13px — the composer and approval draft already documented ≥16px.</td><td>Bumped to 16px (<code>styles.css</code>); readonly webhook field untouched; harness asserts each computed size.</td></tr>
       <tr><td>Channels sheet buried under the rail on wide screens</td><td>Rendered inside <code>.main</code> (stacking context z-index 1); rail z-index 2 painted over it — Create unclickable, proven by <code>elementFromPoint</code>.</td><td>Renders at app level like every other modal (<code>App.tsx</code>, <code>Channels.tsx</code>); <code>channels.mjs</code> clicks Create for real.</td></tr>
       <tr><td>New channel dethroned general</td><td>List ordered by recent activity; every <code>channels[0]</code> assumption pointed at #taxes after creating it.</td><td>General first in SQL (<code>db.ts</code>) and the live-update path (<code>store.ts</code>); harness asserts strip order.</td></tr>
       <tr><td>Timestamps at 4.25:1 contrast</td><td><code>--faint</code> too dark for 11px text on the card surface (computed in-page).</td><td><code>#7a746a → #8b857a</code>, same hue; <code>a11y.mjs</code> asserts ≥4.5 everywhere incl. secondary text.</td></tr>

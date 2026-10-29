@@ -45,11 +45,11 @@ export function App() {
 function useStatus() {
   const agent = useStore((s) => s.agent);
   const connected = useStore((s) => s.connected);
-  if (!connected) return { cls: 'off', text: 'Reconnecting' };
-  if (agent.hermes === 'down') return { cls: 'warn', text: 'Hermes offline' };
-  if (agent.busy) return { cls: 'busy', text: agent.current_run?.kind === 'brief' ? 'Writing your brief' : 'Working' };
-  if (agent.background_running) return { cls: 'busy', text: `${agent.background_running} in background` };
-  return { cls: 'idle', text: 'Ready' };
+  if (!connected) return { cls: 'off', text: 'Reconnecting', short: 'Retrying' };
+  if (agent.hermes === 'down') return { cls: 'warn', text: 'Hermes offline', short: 'Offline' };
+  if (agent.busy) return { cls: 'busy', text: agent.current_run?.kind === 'brief' ? 'Writing your brief' : 'Working', short: 'Working' };
+  if (agent.background_running) return { cls: 'busy', text: `${agent.background_running} in background`, short: `${agent.background_running} running` };
+  return { cls: 'idle', text: 'Ready', short: 'Ready' };
 }
 
 function Shell() {
@@ -221,7 +221,7 @@ function Shell() {
           </div>
           <div className={`status-pill status-${status.cls}`}>
             <span className="status-dot" />
-            <span className="status-text">{status.text}</span>
+            <span className="status-text">{status.short}</span>
           </div>
           <button className="icon-btn top-gear" onClick={() => setSearch(true)} aria-label="Search everything">
             <Icon.search size={20} />
