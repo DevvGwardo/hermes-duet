@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Connector, Settings } from '../../../shared/types';
 import { api, enablePush, isStandalone, pushSupported } from '../api';
 import { useStore } from '../store';
+import { useDialogTrap } from '../hooks/useDialogTrap';
 import { Icon } from '../ui';
 import { WhatICanSee } from './WhatICanSee';
 
@@ -16,6 +17,8 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
   const [connErr, setConnErr] = useState<string | null>(null);
   const [trig, setTrig] = useState<{ webhook_url: string; watch_dir: string | null; meeting_lead_minutes: number; triggers: { id: string; kind: string; last_triggered_at: number | null }[] } | null>(null);
   const [copied, setCopied] = useState(false);
+  const dialog = useRef<HTMLDivElement | null>(null);
+  useDialogTrap(dialog);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
@@ -60,7 +63,7 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="sheet-backdrop" onClick={onClose}>
-      <div className="sheet settings" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+      <div ref={dialog} className="sheet settings" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
         <header className="sheet-head">
           <div className="sheet-title">
             <strong>Settings</strong>

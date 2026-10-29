@@ -22,6 +22,8 @@ override with `BP_OUT=/path`, the app with `APP_URL=...`).
 | `a11y.mjs` | `/` focus, tab-walk names/visibility/focus, WCAG contrast from computed styles |
 | `approvals.mjs` | approve + answer through the real buttons, decision lines, badge counts (fresh seed) |
 | `recovery.mjs` | dead-Hermes status, Reconnecting, restart resync without dupes |
+| `dialogs.mjs` | focus trap + opener return in all five dialogs, long-draft height, empty-search contrast guards (self-seeds a long draft) |
+| `wheel.mjs` | wheel scroll sends scroll input, fresh pane lists tabs, 5+ tabs at 390px without overflow |
 
 Run it (never in parallel with another sweep; perf numbers skew):
 

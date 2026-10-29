@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { useStore } from '../store';
+import { useDialogTrap } from '../hooks/useDialogTrap';
 import { Icon, Markdown, bytesLabel } from '../ui';
 
 /**
@@ -18,6 +19,8 @@ export function Viewer({ fileId, compareId, onClose }: { fileId: string; compare
   const [split, setSplit] = useState(50);
   const [note, setNote] = useState<string | null>(null);
   const frame = useRef<HTMLIFrameElement | null>(null);
+  const dialog = useRef<HTMLDivElement | null>(null);
+  useDialogTrap(dialog);
   const src = `/api/files/${encodeURIComponent(fileId)}`;
   const kind = !file
     ? 'none'
@@ -98,7 +101,7 @@ export function Viewer({ fileId, compareId, onClose }: { fileId: string; compare
 
   return (
     <div className="sheet-backdrop" onClick={onClose}>
-      <div className="sheet viewer" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+      <div ref={dialog} className="sheet viewer" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
         <header className="sheet-head">
           <div className="sheet-title">
             <strong>{file?.title ?? 'File'}</strong>

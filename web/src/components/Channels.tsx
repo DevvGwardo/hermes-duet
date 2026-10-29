@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { SearchHit } from '../../../shared/types';
 import { openChannel, api } from '../api';
 import { setChannel, useStore } from '../store';
+import { useDialogTrap } from '../hooks/useDialogTrap';
 import { Icon } from '../ui';
 
 /**
@@ -45,6 +46,8 @@ export function ChannelsSheet({ onClose }: { onClose: () => void }) {
   const [topic, setTopic] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const dialog = useRef<HTMLDivElement | null>(null);
+  useDialogTrap(dialog);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
@@ -87,7 +90,7 @@ export function ChannelsSheet({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="sheet-backdrop" onClick={onClose}>
-      <div className="sheet channels-sheet" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+      <div ref={dialog} className="sheet channels-sheet" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
         <header className="sheet-head">
           <div className="sheet-title">
             <strong>Channels</strong>
@@ -165,6 +168,8 @@ export function SearchOverlay({
   // Keyboard cursor over the hits: arrows move it, Enter opens it, hovering syncs it.
   const [active, setActive] = useState(0);
   const seq = useRef(0);
+  const dialog = useRef<HTMLDivElement | null>(null);
+  useDialogTrap(dialog);
   const pages = useStore((s) => s.pages);
   const items = useStore((s) => s.items);
   const findChannel = (id: string) => items.find((i) => i.id === id)?.channel_id;
@@ -243,7 +248,7 @@ export function SearchOverlay({
 
   return (
     <div className="sheet-backdrop" onClick={onClose}>
-      <div className="sheet search-sheet" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+      <div ref={dialog} className="sheet search-sheet" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
         <header className="sheet-head search-head">
           <Icon.search size={18} />
           <input

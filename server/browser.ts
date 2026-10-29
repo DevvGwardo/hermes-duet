@@ -331,6 +331,9 @@ export async function open(): Promise<Tab[]> {
   }
   for (const t of tabs) if (!sessions.has(t.id)) await attach(t.id).catch(() => {});
   if (!active && tabs[0]) await startScreencast(tabs[0].id);
+  // A newly opened pane needs the current list immediately: without this it
+  // shows "no tab" until the next target event arrives.
+  emitTabs();
   return buildTabs();
 }
 

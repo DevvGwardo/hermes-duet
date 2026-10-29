@@ -3,19 +3,53 @@
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Blueprint tap fixture</title>
 <style>
-  html,body{margin:0;height:100%}
-  #tap{position:fixed;inset:0;border:0;width:100%;height:100%;font:700 72px system-ui,sans-serif;background:#ffbf00;color:#111;cursor:pointer}
+  html,body{margin:0;height:100%;background:#ffbf00}
+  /* Top strip holds the text field + scroll counter; the tap button keeps the
+     center of the page (and the gold look live.mjs asserts) below it. */
+  #bar{position:fixed;bottom:0;left:0;right:0;height:15%;display:flex;align-items:center;gap:12px;padding:0 16px;background:#ffbf00;border-top:4px solid #111}
+  #field{flex:1;min-width:0;height:56px;font:400 28px system-ui,sans-serif;padding:0 12px;border:4px solid #111;border-radius:8px;background:#fff;color:#111}
+  #scrolln{font:700 28px system-ui,sans-serif;color:#111;white-space:nowrap}
+  #tap{position:fixed;left:0;right:0;top:0;bottom:15%;border:0;width:100%;font:700 72px system-ui,sans-serif;background:#ffbf00;color:#111;cursor:pointer}
+  /* Typed echo: empty until the pane's text path lands characters. */
+  #typed{position:fixed;left:0;right:0;bottom:21%;text-align:center;font:700 64px system-ui,sans-serif;color:#111;pointer-events:none}
 </style>
 </head>
 <body>
+<div id="bar"><input id="field" placeholder="type here" autocomplete="off"><span id="scrolln">scroll:0</span></div>
 <button id="tap">TAP ME</button>
+<div id="typed"></div>
 <script>
   const b = document.getElementById('tap');
+  let heldAt = 0, holdTimer = 0;
+  b.addEventListener('pointerdown', () => {
+    clearTimeout(holdTimer);
+    holdTimer = setTimeout(() => {
+      heldAt = Date.now();
+      b.textContent = 'HELD';
+      b.style.background = '#7fb4ff';
+      document.title = 'HELD';
+    }, 650);
+  });
+  b.addEventListener('pointerup', () => clearTimeout(holdTimer));
   b.addEventListener('click', () => {
+    // A real long-press shouldn't also count as a tap.
+    if (Date.now() - heldAt < 800) return;
     b.textContent = 'TAPPED';
     b.style.background = '#8fe39a';
     document.title = 'TAPPED';
   });
+  let n = 0;
+  window.addEventListener('wheel', () => {
+    n++;
+    document.getElementById('scrolln').textContent = 'scroll:' + n;
+    // Solid color flip, like the tap path: filter-based shifts do not
+    // reliably produce a screencast frame under SwiftShader.
+    b.style.background = '#b48cff';
+    b.textContent = 'SCROLLED';
+    document.title = 'SCROLLED';
+  }, { passive: true });
+  const f = document.getElementById('field'), t = document.getElementById('typed');
+  f.addEventListener('input', () => { t.textContent = f.value; });
 </script>
 </body>
 </html>

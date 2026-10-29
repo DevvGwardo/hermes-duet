@@ -68,6 +68,7 @@ pre.cmd { background: var(--kpi-bg); color: var(--kpi-ink); font: 13px/1.6 var(-
   <p>Blueprint</p>
   <ol>
     <li><a href="#status">Status</a></li>
+    <li><a href="#round-two">Round two</a></li>
     <li><a href="#phone-polish">Phone polish</a></li>
     <li><a href="#new">New: polish</a></li>
     <li><a href="#roadmap-done">Roadmap, finished</a></li>
@@ -82,15 +83,15 @@ pre.cmd { background: var(--kpi-bg); color: var(--kpi-ink); font: 13px/1.6 var(-
 </nav>
 <main>
 <header class="top" id="status">
-  <p class="eyebrow">Hermes Duet · blueprint · roadmap complete · <!--bp:generated-->2026-10-29 · 2b90aa3<!--/bp:generated--></p>
+  <p class="eyebrow">Hermes Duet · blueprint · roadmap complete · <!--bp:generated-->2026-10-29 · 7746236<!--/bp:generated--></p>
   <h1>Your agent, in duet — on your phone.</h1>
   <p class="lede">Hermes Duet is a PWA front end for a Hermes agent: one thread for chat and approval cards, a morning brief, background tasks, standing pages, and a live view of the browser the agent drives. This page captures every screen and modal, driven in real Chrome against a seeded demo server.</p>
   <p class="muted">Everything below came from a local run in real Chrome on this Mac. Screenshots are real captures by the harness in <code>tools/blueprint/</code>; the demo server (<code>bun scripts/demo.ts --reset</code>) holds seeded content, the scheduler off. Nothing is estimated.</p>
   <div class="kpis" role="list">
-    <div class="kpi" role="listitem"><b><!--bp:checks-->72 / 72<!--/bp:checks--></b><span>browser checks passed</span></div>
+    <div class="kpi" role="listitem"><b><!--bp:checks-->99 / 99<!--/bp:checks--></b><span>browser checks passed</span></div>
     <div class="kpi" role="listitem"><b>348/348</b><span>unit tests (<code>bun test</code>, 43 files)</span></div>
-    <div class="kpi" role="listitem"><b><!--bp:console-errors-->7<!--/bp:console-errors--></b><span>console errors, each the expected logged-out /api/state 401 probe (one per harness context that opens the pair screen)</span></div>
-    <div class="kpi" role="listitem"><b><!--bp:shots-->30<!--/bp:shots--></b><span>screenshots captured &amp; reviewed</span></div>
+    <div class="kpi" role="listitem"><b><!--bp:console-errors-->11<!--/bp:console-errors--></b><span>console errors, each the expected logged-out /api/state 401 probe (one per harness context that opens the pair screen)</span></div>
+    <div class="kpi" role="listitem"><b><!--bp:shots-->37<!--/bp:shots--></b><span>screenshots captured &amp; reviewed</span></div>
     <div class="kpi" role="listitem"><b>119&nbsp;ms</b><span>first render of the pair screen</span></div>
   </div>
 </header>
@@ -129,6 +130,33 @@ pre.cmd { background: var(--kpi-bg); color: var(--kpi-ink); font: 13px/1.6 var(-
   <p class="intro"><code>tools/blueprint/a11y.mjs</code> tab-walks the app (named, visible, focus-indicated stops; <code>/</code> focuses the composer) and computes WCAG contrast from computed styles. 10/10 — after one fix: timestamps sat at 4.25:1, so <code>--faint</code> lifted one step (<code>#7a746a → #8b857a</code>, same hue); body text ≥8.3, timestamps now 5.37.</p>
   <h3>Limits</h3>
   <ul class="clean"><li>Push delivery to a physical device is untested — it needs the user's paired iPhone (blocked on user hardware, not attempted).</li><li>Pairing-lockout behavior untested by design (would poison the shared seed).</li><li>Long-press/scroll/text through the live pane go through the same tested <code>input()</code> path but only tap is asserted end to end.</li></ul>
+</section>
+
+<section id="round-two">
+  <h2>Round two: dialogs, drafts, live-pane inputs</h2>
+  <p class="intro">A second fresh-eyes pass over never-covered areas: modal focus containment, empty/failed states, long content, compare mode, the live pane's full input surface, landscape, and marginal contrast. Two new harness scripts (<code>tools/blueprint/dialogs.mjs</code>, <code>tools/blueprint/wheel.mjs</code>) in the sweep pattern. Four fixes, each red-before/green-after on a fresh seed. No roadmap deltas.</p>
+
+  <h3>Focus stays inside dialogs</h3>
+  <p class="intro">Tab-walking every dialog (viewer, search, settings, channels, live pane) escaped to the page behind within 0–2 stops — measured: viewer → sidebar Chat, search → BODY, settings/channels → background pills, live pane → sidebar. Keyboard users could not tell a modal was open and tabbed through an inert-looking page. A shared <code>useDialogTrap</code> hook now moves focus inside on open, wraps Tab at the edges (both directions), and hands focus back to the opener on close; openers are tracked from real pointer/keyboard events outside dialogs (SVG icons count — <code>instanceof HTMLElement</code> skipped them, so icon-button openers were lost).</p>
+  <figure><img src="media/focus-before-after.jpg" alt="Settings sheet open before and after: identical pixels, different behavior" loading="lazy"><figcaption>The pixels barely change — the difference is behavioral: 80/80 Tab stops stay inside every dialog (was: escape at stop 0–2) and focus returns to the opener on close. <code>web/src/hooks/useDialogTrap.ts</code> + one-line wiring in five components; asserted per dialog in <code>dialogs.mjs</code> (15/15 focus checks).</figcaption></figure>
+  <ul class="clean"><li>Limits: once focus enters the viewer iframe, Tab stays there (browser-level; the header Close button still closes the viewer). Hybrid touch/keyboard devices keep desktop hints.</li></ul>
+
+  <h3>Long approval drafts render whole</h3>
+  <p class="intro">A 700-character draft rendered as a 92px three-line scrollbox (<code>rows</code> derived from newline count; a single paragraph gets 3 rows) on desktop (<code>scrollHeight</code> 368) and at 390px (<code>scrollHeight</code> 971) — the exact text to send, reviewed through a keyhole. <code>DraftEditor</code> now auto-sizes like the composer (capped at 320px so card actions stay in view): 298px fully expanded on desktop, 320px at 390px.</p>
+  <figure><img src="media/draft-before-after.jpg" alt="Approval draft before (short scrollbox) and after (full text visible)" loading="lazy"><figcaption>Before: a 3-line window with internal scroll. After: the whole draft reads without scrolling on desktop. <code>CardView.tsx</code>; asserted both widths in <code>dialogs.mjs</code> (desktop <code>h=298, sh-h=0</code>; 390px <code>h=320</code> cap).</figcaption></figure>
+  <ul class="clean"><li>Limits: the 320px cap means very long drafts still scroll internally on phones — a deliberate trade so Send / Not now never scrolls away.</li></ul>
+
+  <h3>Mouse wheels scroll the live pane</h3>
+  <p class="intro">The pane handled touch drags but had no wheel path: on desktop, scrolling the mouse wheel over the canvas sent nothing (verified: zero scroll messages on the pane socket pre-fix). An <code>onWheel</code> handler now feeds the same throttled CDP scroll path as the drag (deltaMode-normalized; the accidental multi-touch pinch path is untouched).</p>
+  <ul class="clean"><li>How it was verified: the harness asserts a well-formed scroll message (<code>x=600 y=459 dy=600</code>-class payloads) leaves the pane; the end-to-end effect was verified through the real path during the pass (CDP ground truth: fixture <code>scroll:0 → 1</code>). The canvas-repaint assertion was deliberately left out of the harness: in this SwiftShader setup the screencast intermittently stops delivering frames while the page itself keeps responding (CDP ground truth kept changing), which also flipped live.mjs's proven tap check red/green on identical runs — so repaint coverage stays with live.mjs's tap over the same dispatch path.</li></ul>
+
+  <h3>Fresh panes list the current tabs</h3>
+  <p class="intro">Opening the pane showed “no tab” with an empty tabs sheet until the next target event fired — <code>open()</code> never emitted the list it already had (measured: 0 real tabs on a fresh pane with the fixture open). One line in <code>server/browser.ts</code> emits the tabs on open; fresh panes now list the tab and pill immediately.</p>
+  <figure><img src="media/tabs-before-after.jpg" alt="Tabs dropdown before (empty) and after (seven tabs listed)" loading="lazy"><figcaption>Before: an empty dropdown on a pane that just opened. After: the current tabs, and the strip holds 7 tabs at 390px without overflow (dropdown scrolls, <code>h=388 ≤ max 388.24px</code>). Asserted in <code>wheel.mjs</code>.</figcaption></figure>
+  <ul class="clean"><li>Limits: none found; the 390px bar fits with room (overflow 0px).</li></ul>
+
+  <h3>How it was verified</h3>
+  <ul class="clean"><li>New harnesses <code>dialogs.mjs</code> (21 checks: 5× open/focus-in/80-stop containment/return-focus, draft heights both widths, empty-state and search-kind contrast guards) and <code>wheel.mjs</code> (6 checks: scroll-message shape, fresh-pane tab list, 5+ tabs at 390px, no overflow, scrolling dropdown). Pre-fix runs failed exactly the defect checks (focus escapes, draft <code>h=92</code>, no scroll message, 0 tabs); post-fix runs pass 21/21 and 6/6 on fresh seeds.</li><li>Full final sequence on one fresh seed: sweep 24/24, live 6/6, channels 6/6, pairing 7/7, a11y 10/10, approvals 7/7, recovery 4/4, polish 8/8, dialogs 21/21, wheel 6/6 — 99/99, no new console errors, <code>bun run typecheck</code> and <code>bun test</code> (348 pass) clean.</li><li>Audited without changes (all measured ≥ bar): empty “Nothing running” text at 5.37:1; search-kind on the active gold row at 4.52:1; compare slider fits desktop + 390px; long titles clamp, long file names ellipsis; 18-item checklist opens without page scroll at 390px; landscape search sheet stays within 310px max-height.</li></ul>
 </section>
 
 <section id="phone-polish">
@@ -229,7 +257,7 @@ flowchart LR
     <thead><tr><th>Run</th><th>Check</th><th>Measured</th><th>Result</th></tr></thead>
     <tbody><!--bp:checks-rows-->
 <tr><td>sweep</td><td>Pair screen asks for a code</td><td>inputs=1</td><td><span class="pill ok">pass</span></td></tr>
-<tr><td>sweep</td><td>Pairing with a real code lands in the thread</td><td>code 22… accepted</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>sweep</td><td>Pairing with a real code lands in the thread</td><td>code JD… accepted</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>sweep</td><td>Thread shows the morning brief</td><td>6 cards</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>sweep</td><td>Thread shows a pending approval</td><td></td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>sweep</td><td>Thread shows a pending question</td><td></td><td><span class="pill ok">pass</span></td></tr>
@@ -256,11 +284,11 @@ flowchart LR
 <tr><td>live</td><td>Live pane toolbar renders</td><td></td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>live</td><td>Non-black frames flow from the driven Chrome</td><td></td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>live</td><td>URL-bar navigation lands on the fixture</td><td>127.0.0.1:7499</td><td><span class="pill ok">pass</span></td></tr>
-<tr><td>live</td><td>A tap through the pane repaints the driven page</td><td>mean abs diff=99.9</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>live</td><td>A tap through the pane repaints the driven page</td><td>mean abs diff=75.6</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>live</td><td>No unexpected console errors</td><td>clean</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>channels</td><td>Channel sheet creates #taxes and the topic bar follows</td><td>taxes Deductions and receipts</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>channels</td><td>General stays first in the strip</td><td>general</td><td><span class="pill ok">pass</span></td></tr>
-<tr><td>channels</td><td>Message posted in #taxes appears in its thread</td><td>Receipts to gather 50833</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>channels</td><td>Message posted in #taxes appears in its thread</td><td>Receipts to gather 13131</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>channels</td><td>Search finds the #taxes message</td><td>hits=1</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>channels</td><td>Jump lands on the message</td><td>visible</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>channels</td><td>No unexpected console errors</td><td>clean</td><td><span class="pill ok">pass</span></td></tr>
@@ -283,8 +311,8 @@ flowchart LR
 <tr><td>a11y</td><td>No unexpected console errors</td><td>clean</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>approvals</td><td>Seed holds a pending approval and a pending question</td><td>approvals=1 choices=1</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>approvals</td><td>Rail badge counts what needs you</td><td>badges=2,1</td><td><span class="pill ok">pass</span></td></tr>
-<tr><td>approvals</td><td>Approval decides and says what happened</td><td>SENT · 1:46 PM</td><td><span class="pill ok">pass</span></td></tr>
-<tr><td>approvals</td><td>Choice decides and names the chosen answer</td><td>YOU CHOSE “YES, MOVE IT” · 1:46 PM</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>approvals</td><td>Approval decides and says what happened</td><td>SENT · 6:22 PM</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>approvals</td><td>Choice decides and names the chosen answer</td><td>YOU CHOSE “YES, MOVE IT” · 6:22 PM</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>approvals</td><td>Nothing stays pending</td><td>pending=0</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>approvals</td><td>Needs-you badge clears, running-task badge stays</td><td>chat=0 tasks=1</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>approvals</td><td>No unexpected console errors</td><td>clean</td><td><span class="pill ok">pass</span></td></tr>
@@ -300,16 +328,43 @@ flowchart LR
 <tr><td>polish</td><td>Search footer hints hidden on touch</td><td>display=none h=0</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>polish</td><td>No sideways scroll at 390px</td><td></td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>polish</td><td>No unexpected console errors</td><td>clean</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>dialogs</td><td>viewer: focus moves inside on open</td><td>BUTTON.btn btn-ghost small</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>dialogs</td><td>viewer: Tab stays inside (80 stops)</td><td>wrapped, 3 unique</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>dialogs</td><td>viewer: focus returns to the opener on close</td><td>Weekly metrics dashboardweekly-dashboard (want Weekly metrics dashboard)</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>dialogs</td><td>search: focus moves inside on open</td><td>INPUT.</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>dialogs</td><td>search: Tab stays inside (80 stops)</td><td>wrapped, 2 unique</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>dialogs</td><td>search: focus returns to the opener on close</td><td>Search everything (want Search everything)</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>dialogs</td><td>settings: focus moves inside on open</td><td>BUTTON.icon-btn</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>dialogs</td><td>settings: Tab stays inside (80 stops)</td><td>wrapped, 9 unique</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>dialogs</td><td>settings: focus returns to the opener on close</td><td>Settings (want Settings)</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>dialogs</td><td>channels: focus moves inside on open</td><td>BUTTON.icon-btn</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>dialogs</td><td>channels: Tab stays inside (80 stops)</td><td>wrapped, 6 unique</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>dialogs</td><td>channels: focus returns to the opener on close</td><td>New channel or manage channels (want New channel or manage channels)</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>dialogs</td><td>live pane: focus moves inside on open</td><td>BUTTON.icon-btn</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>dialogs</td><td>live pane: Tab stays inside (80 stops)</td><td>wrapped, 8 unique</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>dialogs</td><td>live pane: focus returns to the opener on close</td><td>Live browser (want Live browser)</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>dialogs</td><td>Long draft renders tall on desktop</td><td>h=298 scrollH=298 rows=3</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>dialogs</td><td>Empty-tasks text contrast &gt;= 4.5</td><td>5.37:1 15px &quot;Nothing running. Ask for something big and I&#x27;ll track it her&quot;</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>dialogs</td><td>Search-kind contrast &gt;= 4.5 on the active row</td><td>4.52:1 10.5px</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>dialogs</td><td>Long draft renders tall at 390px</td><td>h=320 scrollH=785</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>dialogs</td><td>No sideways scroll at 390px</td><td></td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>dialogs</td><td>No unexpected console errors</td><td>clean</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>wheel</td><td>Wheel over the stage sends scroll input</td><td>x=600 y=459 dy=300</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>wheel</td><td>Fresh pane lists current tabs</td><td>real=1 pill=127.0.0.1:7499/tap.html?run=1-1793313772</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>wheel</td><td>Tab strip holds 5+ tabs at 390px</td><td>6 tabs</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>wheel</td><td>Toolbar never overflows at 390px</td><td>overflow=0px</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>wheel</td><td>Tab dropdown scrolls instead of growing</td><td>h=388 max=388.24px scroll=58</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>wheel</td><td>No unexpected console errors</td><td>clean</td><td><span class="pill ok">pass</span></td></tr>
 <!--/bp:checks-rows--></tbody>
   </table></div>
   <h3>Performance</h3>
   <div class="table-box"><table>
     <thead><tr><th>Measure</th><th>Value</th></tr></thead>
     <tbody><!--bp:perf-rows-->
-<tr><td><code>sweep.jsHeapMB</code></td><td>6.1</td></tr>
+<tr><td><code>sweep.jsHeapMB</code></td><td>6</td></tr>
 <tr><td><code>sweep.screenshots</code></td><td>12</td></tr>
-<tr><td><code>sweep.firstRenderMs</code></td><td>83</td></tr>
-<tr><td><code>live.tapRepaintDiff</code></td><td>99.9</td></tr>
+<tr><td><code>sweep.firstRenderMs</code></td><td>103</td></tr>
+<tr><td><code>live.tapRepaintDiff</code></td><td>75.6</td></tr>
 <tr><td><code>live.screenshots</code></td><td>3</td></tr>
 <tr><td><code>channels.screenshots</code></td><td>3</td></tr>
 <tr><td><code>pairing.screenshots</code></td><td>1</td></tr>
@@ -317,6 +372,7 @@ flowchart LR
 <tr><td><code>a11y.stops</code></td><td>8</td></tr>
 <tr><td><code>approvals.screenshots</code></td><td>2</td></tr>
 <tr><td><code>recovery.screenshots</code></td><td>3</td></tr>
+<tr><td><code>wheel.wheelScrollEvents</code></td><td>1</td></tr>
 <!--/bp:perf-rows--></tbody>
   </table></div>
   <p class="muted">Measured in-page: first render is navigation-to-pair-screen on a cold demo server; JS heap after pairing and a full thread render. No perf budget is enforced yet.</p>
@@ -328,6 +384,10 @@ flowchart LR
   <div class="table-box"><table>
     <thead><tr><th>Issue</th><th>Cause</th><th>Fix</th></tr></thead>
     <tbody>
+      <tr><td>Tab never stayed inside a dialog</td><td>No focus trap: Tab escaped to the page behind within 0–2 stops on all five dialogs (measured per modal), and closing left focus on <code>body</code> instead of the opener (SVG icon targets never registered as openers).</td><td>Shared <code>useDialogTrap</code> hook (initial focus, wrap, opener return) wired into all five dialogs (<code>Viewer</code>, <code>SearchOverlay</code>, <code>SettingsSheet</code>, <code>ChannelsSheet</code>, <code>BrowserView</code>); <code>dialogs.mjs</code> asserts 80 contained stops + opener return per dialog.</td></tr>
+      <tr><td>Long approval draft squeezed into 3 lines</td><td><code>rows</code> derived from newline count: a 700-char single paragraph got <code>rows=3</code>, <code>h=92</code> against <code>scrollHeight</code> 368 (desktop) / 971 (390px).</td><td>Auto-size like the composer, capped at 320px (<code>CardView.tsx</code>); desktop <code>h=298</code> fully expanded, 390px at the cap.</td></tr>
+      <tr><td>Mouse wheel did nothing in the live pane</td><td>No wheel path: touch drags sent scroll input, desktop wheels sent nothing (zero scroll messages captured pre-fix).</td><td><code>onWheel</code> feeds the same throttled CDP scroll path (<code>BrowserView.tsx</code>); harness asserts the scroll message shape; end-to-end repaint verified via CDP ground truth during the pass.</td></tr>
+      <tr><td>Fresh pane showed “no tab” with an empty list</td><td><code>open()</code> never emitted the tab list it already had; the pane waited for the next target event (<code>real=0</code> measured on open).</td><td>One-line <code>emitTabs()</code> on open (<code>server/browser.ts</code>); fresh panes list current tabs immediately; asserted in <code>wheel.mjs</code>.</td></tr>
       <tr><td>Status pill truncated the warn state on phones</td><td><code>.status-text</code> capped at 92px under 420px; “Hermes offline” measured <code>sw=112 cw=92</code> — and the pill is the only status surface when the sidebar is hidden.</td><td>Short pill labels (<code>Offline</code>, <code>Retrying</code>, <code>Working…→Working</code>, <code>N running</code>) via <code>useStatus().short</code>; sidebar keeps full text (<code>App.tsx</code>); harness asserts <code>sw&lt;=cw</code> at 390px.</td></tr>
       <tr><td>Search footer showed keyboard hints on touch phones</td><td>“↑↓ move · ↵ open · esc close” rendered (<code>display=flex h=35</code>) with <code>(pointer: coarse) === true</code>.</td><td>Hidden under <code>(pointer: coarse)</code> with a higher-specificity selector (<code>styles.css</code>); desktop keeps the hints; asserted both ways.</td></tr>
       <tr><td>Three editable inputs sat below the 16px iOS no-zoom rule</td><td>Settings time inputs 13px, channel form 15px, live-pane URL bar 13px — the composer and approval draft already documented ≥16px.</td><td>Bumped to 16px (<code>styles.css</code>); readonly webhook field untouched; harness asserts each computed size.</td></tr>

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { askAge } from '../../../shared/age';
 import type { CardData, FollowUp, Item, PaymentItem, WatchEntry } from '../../../shared/types';
 import { api } from '../api';
@@ -271,6 +271,15 @@ function Decision({ card }: { card: CardData }) {
 /** The exact text an approval will send, editable until the user decides. Approving sends their version back. */
 function DraftEditor({ original, value, onChange, disabled }: { original: string; value: string; onChange: (v: string) => void; disabled: boolean }) {
   const edited = value.trim() !== original.trim();
+  const ta = useRef<HTMLTextAreaElement | null>(null);
+  // A long draft should read whole, not through a 3-line keyhole: grow with the
+  // content like the composer does, capped so the card actions stay in view.
+  useLayoutEffect(() => {
+    const el = ta.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 320)}px`;
+  }, [value]);
   return (
     <div className="approval-draft">
       <div className="approval-draft-head">
@@ -282,10 +291,11 @@ function DraftEditor({ original, value, onChange, disabled }: { original: string
         )}
       </div>
       <textarea
+        ref={ta}
         aria-label="Draft to send"
         value={value}
         disabled={disabled}
-        rows={Math.min(14, Math.max(3, value.split('\n').length + 1))}
+        rows={3}
         onChange={(e) => onChange(e.target.value)}
       />
       {edited && !value.trim() && <p className="card-error">The draft is empty.</p>}

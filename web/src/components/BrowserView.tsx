@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api';
+import { useDialogTrap } from '../hooks/useDialogTrap';
 import { Icon } from '../ui';
 
 type Tab = { id: string; title: string; url: string; active: boolean };
@@ -19,6 +20,8 @@ export function BrowserView({ onClose }: { onClose: () => void }) {
   const lastValue = useRef('');
   const lastScroll = useRef(0);
   const gesture = useRef<{ x: number; y: number; at: number; moved: boolean } | null>(null);
+  const dialog = useRef<HTMLDivElement | null>(null);
+  useDialogTrap(dialog);
 
   const [status, setStatus] = useState<'connecting' | 'live' | 'idle' | 'error'>('connecting');
   const [notice, setNotice] = useState<string | null>(null);
@@ -188,6 +191,18 @@ export function BrowserView({ onClose }: { onClose: () => void }) {
     }
   };
 
+  const onWheel = (e: React.WheelEvent) => {
+    // Desktop mice and trackpads scroll with a wheel, not a drag: feed it
+    // through the same throttled CDP scroll path as the touch drag above.
+    const now = Date.now();
+    if (now - (lastScroll.current || 0) < 40) return;
+    lastScroll.current = now;
+    const p = toPage(e.clientX, e.clientY);
+    // deltaMode 1 (lines) and 2 (pages) report in coarser units than pixels.
+    const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY;
+    if (dy) send({ type: 'scroll', x: p.x, y: p.y, dy });
+  };
+
   const onPointerUp = (e: React.PointerEvent) => {
     const g = gesture.current;
     gesture.current = null;
@@ -229,7 +244,7 @@ export function BrowserView({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <div className="browser-pane" role="dialog" aria-label="Live browser">
+    <div ref={dialog} className="browser-pane" role="dialog" aria-label="Live browser">
       <div className="browser-bar">
         <button className="icon-btn" aria-label="Back" onClick={() => send({ type: 'back' })}>
           <span style={{ display: 'inline-flex', transform: 'rotate(180deg)' }}>
@@ -320,6 +335,7 @@ export function BrowserView({ onClose }: { onClose: () => void }) {
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
+          onWheel={onWheel}
           onPointerCancel={() => (gesture.current = null)}
         />
         {status !== 'live' && (

@@ -4,6 +4,7 @@ import { api, clearSettledNotifications, connect, isStandalone, openChannel, pus
 import { isIOS } from './platform';
 import { ChannelsStrip, ChannelBar, ChannelsSheet, SearchOverlay } from './components/Channels';
 import { Composer, type ComposerHandle } from './components/Composer';
+import { trackDialogOpeners } from './hooks/useDialogTrap';
 import { BrowserView } from './components/BrowserView';
 import { MakeView } from './components/MakeView';
 import { BrandBadge, Decode, MangaBackdrop, Mascot, SpeechBubble, Wordmark } from './components/Manga';
@@ -30,6 +31,8 @@ export function App() {
   useEffect(() => {
     connect();
   }, []);
+
+  useEffect(() => trackDialogOpeners(), []);
 
   if (authed === false) return <Pair />;
   if (!ready)
