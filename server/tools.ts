@@ -32,6 +32,40 @@ export const TOOLS = [
     },
   },
   {
+    name: 'request_payment',
+    description:
+      'Ask the user to approve spending money BEFORE you buy anything: tickets, supplies, food, an invoice. ' +
+      'It posts an itemized Payment card with the exact total and a hard per-transaction cap, and returns immediately. ' +
+      'The items must add up to amount_cents, and the total must be under the user\'s configured limit, or nothing is posted. ' +
+      'After calling it, do not pay: tell the user in one short line what you are waiting on and end your turn. ' +
+      'When they decide you get a new message starting with "[payment <card_id>]" saying APPROVED (with the total) or DECLINED. ' +
+      'Approved with a card provider configured means a single-use virtual card limited to that total is typed into your live browser; ' +
+      'otherwise it is the user\'s authorization to spend exactly that total yourself.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        merchant: { type: 'string', description: 'Vendor or store name, e.g. "Amtrak".' },
+        amount_cents: { type: 'number', description: 'Total in cents (2450 for $24.50). Must equal the items.' },
+        currency: { type: 'string', description: 'Three-letter code. Default USD.' },
+        items: {
+          type: 'array',
+          description: 'The receipt: one line per thing being bought.',
+          items: {
+            type: 'object',
+            properties: {
+              title: { type: 'string' },
+              price_cents: { type: 'number', description: 'Unit price in cents.' },
+              quantity: { type: 'number', description: 'How many. Default 1.' },
+            },
+            required: ['title', 'price_cents'],
+          },
+        },
+        task_id: taskId,
+      },
+      required: ['merchant', 'amount_cents', 'items'],
+    },
+  },
+  {
     name: 'ask',
     description:
       'Ask the user a quick question with 2-4 tappable answers when you need a decision to continue. Returns immediately; end your turn after asking. ' +

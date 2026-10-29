@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { Settings } from '../shared/types';
-import { briefSlot, hourlySlots, inQuietHours, localParts, toMinutes } from './clock';
+import { briefSlot, friendlyNow, hourlySlots, inQuietHours, localParts, toMinutes } from './clock';
 
 const base: Settings = { brief_enabled: true, brief_time: '07:30', checkins: 'off', quiet_start: '21:30', quiet_end: '07:00', timezone: 'America/New_York' };
 // 2026-10-21 is EDT (UTC-4).
@@ -57,5 +57,14 @@ describe('clock', () => {
     const pm = { ...base, brief_time: '14:00' };
     expect(briefSlot(pm, { date: d, minutes: 14 * 60 }, y)).toBe('due');
     expect(briefSlot(pm, { date: d, minutes: 14 * 60 + 1 }, y)).toBe('missed');
+  });
+
+  test('friendlyNow names the day and time the brief leads with', () => {
+    const s = friendlyNow('UTC');
+    expect(s).toMatch(/^[A-Za-z]+, [A-Za-z]+ \d{1,2}, \d{4} at \d{1,2}:\d{2} [AP]M$/);
+  });
+
+  test('friendlyNow fails fast on a bad timezone instead of posting a wrong time', () => {
+    expect(() => friendlyNow('Not/AZone')).toThrow(RangeError);
   });
 });

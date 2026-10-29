@@ -34,6 +34,12 @@ View the [full-size infographic](docs/brand/what-it-does.png), or expand the det
 - **Works in the background.** Bigger jobs (decks, dashboards, research) run as tasks in their own Hermes session, while you keep chatting.
 - **Steer or stop.** A message sent mid-run steers the live turn, and Stop interrupts it. One that arrives too late for the turn to use (Hermes returns it as `pending_steer`) goes out as the next turn.
 - **Survives restarts.** If the Hermes gateway restarts mid-run, Duet unpauses the session, retries what got blocked, and asks whether to pick up the interrupted work. A standing page's scheduled refresh is not asked about: it starts over once on its own, and a second interruption counts as a failed refresh. A morning brief that fails before posting leaves a "Run it now / Skip today" card and a push, so the day's brief isn't silently lost. A run that goes 45 minutes without a single event (a wedged tool or model call; `DUET_RUN_TIMEOUT_MS`) is stopped, unless it is waiting on a Hermes approval or question for you, so it can't hold the thread or a task slot forever; a long task that keeps reporting steps is never cut off. A chat turn that fails (a model error, or a stopped hung run) leaves a "Try … again?" card and a push. The card says why it stopped and what last finished. Sending a new message instead retires that card, since the conversation carries on.
+- **Talk, photograph, or type.** Tap the mic to record a voice memo — transcribed on your machine by whisper.cpp, so it works offline — or take a photo / attach a PDF of a receipt, a whiteboard or a form. Attachments are stored under `data/uploads` and handed to the agent as file paths, so a vision model can read them. Every brief has a **Listen** button that reads it aloud (macOS `say`, Piper, or any OpenAI-compatible TTS) with a lock-screen player.
+- **Channels.** Long projects get their own thread (`#taxes`, `#home`, `#launch`) with its own Hermes session, while memory and files are shared. The general channel keeps briefs, check-ins and task results. Everything — every channel, task, delivered file and standing page — is indexed in SQLite FTS5 and searchable from the magnifier (⌘K).
+- **Spending needs a receipt.** `request_payment` posts an itemized payment card with a total that must add up and sit under `DUET_MAX_TRANSACTION_LIMIT`. Approving it can issue a single-use virtual card from Privacy.com, Stripe Issuing or Revolut, capped at exactly that total for one hour, and type it into the agent's browser. The card number never reaches the model, the database or a log line.
+- **Event-driven, not just scheduled.** A webhook URL (GitHub, Stripe, Zapier, `curl`) wakes the agent with the payload; a new receipt in `~/Downloads` gets looked at; a meeting entering the next 15 minutes gets a prep card. Quiet hours still apply.
+- **Deliverables that answer back.** HTML the agent builds gets a `window.Duet.sendAction()` / `requestApproval()` bridge, so a dashboard's buttons reach it. Standing pages get a **Compare** slider that wipes between yesterday's version and today's.
+- **Lighter logins.** The live pane can autofill a saved login through the 1Password or Bitwarden CLI instead of you typing a password on a phone keyboard, and can render the page at 390×844 so mobile sites behave.
 
 </details>
 
@@ -54,6 +60,7 @@ View the [full-size infographic](docs/brand/what-it-does.png), or expand the det
   | Tool | What it does |
   |---|---|
   | `request_approval` | Posts an Approve / Not now card, with an optional `draft` (the exact text to send) the user can edit before approving. The turn ends, and tapping resumes the same session; an edited draft comes back verbatim. A redraft asked for in chat passes `replaces`, which withdraws the earlier card so its old version can't be approved. A card still waiting from yesterday (or for over six hours) says when it was written, and approving it tells the agent to check the draft still holds (relative dates, already done) and to ask again rather than act if it doesn't. |
+  | `request_payment` | The money gate: a merchant, an itemized receipt and a total in cents. The items must add up to the total and the total must be under `DUET_MAX_TRANSACTION_LIMIT` (default $500), or nothing is posted. Approving issues a single-use virtual card capped at exactly that total (Privacy.com, Stripe Issuing or Revolut; `DUET_CARD_PROVIDER`/`DUET_CARD_KEY`) and types it into the live browser, or — with no provider — authorizes exactly that spend. Card numbers stay in memory and are never written down. |
   | `ask` | Asks a question with 2–4 tappable answers, optionally replacing an earlier question still waiting. |
   | `withdraw_card` | Takes down one of the agent's own approvals or questions that the user settled in chat instead of tapping ("don't send that", "the second one"), or that stopped applying. It leaves "Needs you" and can no longer be tapped. Each chat message sent while such cards are waiting reminds the agent which ones they are, including one that steers a turn already running. A yes in chat is not an approval: the card's button still is. |
   | `post_brief` | Posts a brief: up to 5 decisions ranked high to low, each with an optional prepared draft and one-tap follow-up (on an entry with a draft, the tap hands that draft back to the agent, which asks for approval with it instead of redrafting), plus a muted Watching list that never notifies. A quiet morning brief may be Watching only, posted without a push. "Skip" on a decision marks it as not needing you (no agent turn); the day's check-ins and the next week's morning briefs are told not to raise it again unless something material changed. |
@@ -66,7 +73,7 @@ View the [full-size infographic](docs/brand/what-it-does.png), or expand the det
 ## Quick start
 
 You need:
-- macOS, for the launchd service. The server itself runs anywhere Bun does.
+- macOS for the launchd service and the native connectors (Calendar, Reminders, Mail). The server itself runs anywhere Bun does — see [docs/DEPLOY.md](docs/DEPLOY.md) for Linux (`hermes-duet install-systemd`) and Docker.
 - [Bun](https://bun.sh) 1.2 or newer.
 - A running [Hermes agent](https://github.com/NousResearch/hermes-agent) gateway with its API server enabled (`API_SERVER_ENABLED=true` and `API_SERVER_KEY` in `~/.hermes/.env`).
 
@@ -135,6 +142,15 @@ All settings are optional. Put them in `.env`; see [`.env.example`](.env.example
 | `DUET_CHROME_PROFILE` | `$HERMES_HOME/duet-chrome` | Persistent profile, so your logins survive restarts. |
 | `DUET_CHROME_WIDTH` / `_QUALITY` / `_FPS_GAP` | `760` / `45` / `110` | Frame size, JPEG quality, and minimum ms between frames. Lower them on a bad connection. |
 | `DUET_CHROME_DEBUG` | (unset) | Log CDP connection and reconnect events. |
+| `DUET_MAX_TRANSACTION_LIMIT` | `500` | Dollars per `request_payment`; `_CENTS` for an exact amount. |
+| `DUET_CARD_PROVIDER` / `DUET_CARD_KEY` / `DUET_CARD_URL` | (none) | Virtual-card provider for approved payments. |
+| `DUET_STT_URL` / `DUET_STT_CMD` | whisper.cpp on `PATH` | Local speech-to-text for voice memos. |
+| `DUET_TTS_URL` / `DUET_TTS_CMD` | `say` on macOS | Spoken briefs. |
+| `DUET_WATCH_DIR` / `DUET_WATCH_DOWNLOADS` | `~/Downloads` / on | The folder trigger. |
+| `DUET_MEETING_LEAD_MIN` | `15` | How early a calendar event gets a prep card; `0` off. |
+| `DUET_OP_CMD` / `DUET_BW_CMD` | `op` / `bw` | Login autofill in the live pane. |
+
+The full table, including speech setup and container variables, is in [docs/DEPLOY.md](docs/DEPLOY.md).
 
 Brief time, check-ins and quiet hours are set in the app.
 
@@ -156,9 +172,12 @@ Hermes Duet controls an agent that can run commands on your computer. Treat the 
 - **Nothing is public by default.** The server binds to `127.0.0.1`. Reach it over Tailscale (tailnet-only), or put real authentication in front if you expose it any other way. Don't publish it with Tailscale Funnel or a public tunnel and rely on pairing alone.
 - **Pairing**: devices pair with a single-use code that expires after 10 minutes, and wrong guesses are rate-limited. A paired device gets an HttpOnly, SameSite cookie, and only the token's hash is stored. State-changing requests must be same-origin.
 - **The internal API** (MCP shim and CLI) listens on loopback with its own bearer token and refuses proxied requests.
-- **Deliverables**: HTML files are served with `Content-Security-Policy: sandbox`, so they can run scripts but can't read your session or call the API. `deliver_file` refuses paths that look like secrets (`.ssh`, `.env`, keys, credentials).
+- **Deliverables**: HTML files are served with `Content-Security-Policy: sandbox`, so they can run scripts but can't read your session or call the API. `deliver_file` refuses paths that look like secrets (`.ssh`, `.env`, keys, credentials). The postMessage bridge they get is one-way into a validator: a button becomes a chat turn, and `requestApproval` becomes a normal approval card — never a direct action.
+- **Spending**: `request_payment` enforces a per-transaction ceiling, requires the receipt to add up, and (with a provider configured) issues a single-use card capped at the approved total for at most an hour. Card numbers are never put on a card, in SQLite, in the prompt or in a log; only the last four digits are reported.
+- **Uploads** are written under `data/uploads` with a server-generated name and `0600`, accepted only for a fixed list of image/PDF/text/audio types, and served with `nosniff` and a sandbox CSP. Phones pair with a cookie; the camera images never leave the machine.
+- **Webhooks** are gated by an unguessable token in the URL (Settings → Triggers), rate-limited, and only ever create a chat turn — the payload is passed to the agent as text, not executed.
 - **Approvals are an instruction, not a sandbox.** The approval gate is a tool the model is told to use. For hard guarantees, also turn on Hermes's own `approvals.mode`. Its prompts show up as Duet cards too.
-- **Your data** (`data/`: thread, device tokens, push keys) and `.env` are gitignored.
+- **Your data** (`data/`: thread, device tokens, push keys, uploads) and `.env` are gitignored.
 
 ## Development
 

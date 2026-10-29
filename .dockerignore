@@ -1,0 +1,12 @@
+.git
+.github
+node_modules
+web/dist
+data
+overnight
+.codegraph
+.env
+context.local.md
+docs
+*.log
+.DS_Store

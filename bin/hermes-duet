@@ -3,11 +3,41 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+
+# The server reads .env; this script has to as well, or a custom port or data dir set there sends `pair`, `status`
+# and `doctor` at the wrong listener. Values already in the real environment still win, as in server/config.ts.
+# Parsed rather than sourced: .env is dotenv syntax, not shell, and is not code we should run.
+if [ -f "$ROOT/.env" ]; then
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    case "$line" in ''|'#'*) continue ;; esac
+    line="${line#export }"
+    key="${line%%=*}"
+    [ "$key" = "$line" ] && continue
+    value="${line#*=}"
+    value="${value%"${value##*[![:space:]]}"}"
+    case "$value" in
+      \"*\") value="${value#\"}"; value="${value%\"}" ;;
+      \'*\') value="${value#\'}"; value="${value%\'}" ;;
+      *) value="${value%%[[:space:]]#*}" ;;
+    esac
+    key="${key%"${key##*[![:space:]]}"}"
+    case "$key" in ''|[0-9]*|*[!A-Za-z0-9_]*) continue ;; esac
+    printenv "$key" >/dev/null 2>&1 || export "$key=$value"
+  done < "$ROOT/.env"
+fi
+
 DATA="${DUET_DATA_DIR:-$ROOT/data}"
 PORT="${DUET_INTERNAL_PORT:-7457}"
 LABEL="${DUET_LAUNCHD_LABEL:-dev.hermes-duet.server}"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 LOGDIR="$HOME/Library/Logs/hermes-duet"
+# Linux headless (Ubuntu/Debian homelab, a VPS) runs the same server under a user unit instead of launchd.
+UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+UNIT="$UNIT_DIR/hermes-duet.service"
+
+is_linux() { [ "$(uname -s)" = "Linux" ]; }
+has_unit() { is_linux && [ -f "$UNIT" ]; }
 
 internal() { # method path [json]
   local tok
@@ -35,11 +65,21 @@ case "${1:-help}" in
     shift; [ $# -gt 0 ] || { echo "usage: hermes-duet say <message>" >&2; exit 1; }
     payload="$(TEXT="$*" bun -e 'console.log(JSON.stringify({text: process.env.TEXT}))')"
     internal POST /internal/message "$payload" >/dev/null && echo "Sent." ;;
+  devices)
+    internal GET /internal/devices | (command -v jq >/dev/null && jq -r '.devices[] | "\(.id)  \(.name // "device")  paired \(.created_at/1000 | todate)  last seen \(.last_seen/1000 | todate)"' || cat)
+    ;;
+  unpair)
+    shift; [ $# -gt 0 ] || { echo "usage: hermes-duet unpair <device-id>   (ids: hermes-duet devices)" >&2; exit 1; }
+    internal POST "/internal/devices/$1/revoke" >/dev/null && echo "Unpaired $1. That device has to pair again to reconnect."
+    ;;
   doctor)
-    if launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1; then echo "  ✓ background service ($LABEL)"; else echo "  ✗ background service: run hermes-duet install"; fi
+    if has_unit; then
+      if systemctl --user is-active --quiet hermes-duet.service; then echo "  ✓ background service (hermes-duet.service)"; else echo "  ✗ background service: run hermes-duet install-systemd"; fi
+    elif launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1; then echo "  ✓ background service ($LABEL)"; else echo "  ✗ background service: run hermes-duet install"; fi
     out="$(internal GET /internal/doctor)" || exit 1
     printf '%s' "$out" | bun -e 'const d = JSON.parse(await Bun.stdin.text()); for (const c of d.checks) console.log(`  ${c.ok ? "✓" : c.info ? "·" : "✗"} ${c.name}: ${c.detail}`)'
     if command -v tailscale >/dev/null && tailscale serve status 2>/dev/null | grep -q "127.0.0.1:${DUET_PORT:-7456}"; then echo "  ✓ tailscale serve forwards to :${DUET_PORT:-7456}"; else echo "  · tailscale serve not pointing at :${DUET_PORT:-7456} (only needed for phone access)"; fi
+    echo "  · speech: $(command -v whisper-cli >/dev/null && echo 'whisper.cpp found' || echo 'no local transcriber (set DUET_STT_CMD or DUET_STT_URL)')"
     ;;
   install)
     BUN="$(command -v bun)" || { echo "bun not found on PATH" >&2; exit 1; }
@@ -52,14 +92,55 @@ case "${1:-help}" in
   uninstall)
     launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
     rm -f "$PLIST" && echo "Removed $LABEL" ;;
+  install-systemd)
+    is_linux || { echo "install-systemd is for Linux; on macOS use: hermes-duet install" >&2; exit 1; }
+    command -v systemctl >/dev/null || { echo "systemd not found on this system" >&2; exit 1; }
+    BUN="$(command -v bun)" || { echo "bun not found on PATH" >&2; exit 1; }
+    AGENT_PATH="$HOME/.local/bin:$(dirname "$BUN"):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+    mkdir -p "$UNIT_DIR" "$LOGDIR"
+    cat > "$UNIT" <<UNITFILE
+[Unit]
+Description=Hermes Duet (your Hermes agent, in duet)
+Documentation=file://$ROOT/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=$ROOT
+ExecStart=$BUN $ROOT/server/index.ts
+Restart=always
+RestartSec=3
+Environment=PATH=$AGENT_PATH
+StandardOutput=append:$LOGDIR/server.log
+StandardError=append:$LOGDIR/server.log
+
+[Install]
+WantedBy=default.target
+UNITFILE
+    systemctl --user daemon-reload
+    systemctl --user enable --now hermes-duet.service
+    echo "Installed and started hermes-duet.service ($UNIT)"
+    echo "Run without logging in: loginctl enable-linger $USER"
+    ;;
+  uninstall-systemd)
+    is_linux || { echo "uninstall-systemd is for Linux" >&2; exit 1; }
+    systemctl --user disable --now hermes-duet.service 2>/dev/null || true
+    rm -f "$UNIT" && systemctl --user daemon-reload 2>/dev/null || true
+    echo "Removed hermes-duet.service"
+    ;;
   start)
-    launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null || launchctl kickstart -k "gui/$(id -u)/$LABEL"; echo "Started $LABEL" ;;
+    if has_unit; then systemctl --user start hermes-duet.service && echo "Started hermes-duet.service";
+    else launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null || launchctl kickstart -k "gui/$(id -u)/$LABEL"; echo "Started $LABEL"; fi ;;
   stop)
-    launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null && echo "Stopped $LABEL" || echo "Not running" ;;
+    if has_unit; then systemctl --user stop hermes-duet.service && echo "Stopped hermes-duet.service";
+    else launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null && echo "Stopped $LABEL" || echo "Not running"; fi ;;
   restart)
-    launchctl kickstart -k "gui/$(id -u)/$LABEL" && echo "Restarted $LABEL" ;;
+    if has_unit; then systemctl --user restart hermes-duet.service && echo "Restarted hermes-duet.service";
+    else launchctl kickstart -k "gui/$(id -u)/$LABEL" && echo "Restarted $LABEL"; fi ;;
   logs)
-    tail -n "${2:-80}" -f "$LOGDIR/server.log" ;;
+    if has_unit; then journalctl --user -u hermes-duet.service -n "${2:-80}" -f;
+    else tail -n "${2:-80}" -f "$LOGDIR/server.log"; fi ;;
   *)
     cat <<USAGE
 hermes-duet pair                  one-time code to pair a phone or browser
@@ -68,7 +149,11 @@ hermes-duet doctor                check the setup (Hermes, key, tools, push, ser
 hermes-duet brief                 run the morning brief now
 hermes-duet checkin               run a check-in now
 hermes-duet say <msg>             send a message into the thread as you
-hermes-duet install | uninstall   background service (launchd label: $LABEL)
+hermes-duet devices               list paired devices
+hermes-duet unpair <device-id>    forget a device (e.g. a lost phone); it must pair again
+hermes-duet install | uninstall   background service (macOS launchd label: $LABEL)
+hermes-duet install-systemd       background service (Linux systemd user unit)
+hermes-duet uninstall-systemd
 hermes-duet start | stop | restart | logs
 USAGE
     ;;

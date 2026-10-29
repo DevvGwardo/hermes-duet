@@ -1,0 +1,14 @@
+{
+  "task": "harden hermes-duet without regressions",
+  "gate": "bun test exits 0 AND bun run typecheck exits 0",
+  "score": {
+    "command": "bash tools/hillclimb/score.sh",
+    "direction": "higher",
+    "epsilon": 1e-09,
+    "scorerHash": "883a19c6b92f",
+    "scorer": "score.sh"
+  },
+  "budget": 20,
+  "plateau": 3,
+  "created": "2026-10-29T17:06:40+00:00"
+}

@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import type { CardData, Item } from '../shared/types';
-import { OPEN_ASKS_MAX, approvalDecision, approvalPrompt, approvalPush, askMarks, deadPrompts, replaceRefusal, turnNote, waitingNote, withdrawRefusal } from './approval';
+import { OPEN_ASKS_MAX, approvalDecision, approvalPrompt, approvalPush, askMarks, deadPrompts, oldAskNote, replaceRefusal, turnNote, waitingNote, withdrawRefusal } from './approval';
 
 const card = (extra: Partial<CardData> = {}): CardData => ({ type: 'approval', title: 'Send the reply to Dana', status: 'pending', ...extra });
 const item = (c: CardData): Item => ({ id: 'c1', kind: 'card', created_at: 0, updated_at: 0, card: c });
@@ -147,4 +147,28 @@ test('every push lists the open asks, and marks itself an ask only for a pending
   // Too many to fit in a push: no list, so the service worker closes nothing.
   const many = Array.from({ length: OPEN_ASKS_MAX + 1 }, (_, i) => at(`a${i}`, card()));
   expect(askMarks({ card_id: 'a0' }, many, 5)).toEqual({ ask: true, sent_at: 5 });
+});
+
+test('a fresh card carries no staleness warning', () => {
+  expect(oldAskNote(null, 'approval')).toBe('');
+  expect(oldAskNote(undefined, 'answer')).toBe('');
+  expect(oldAskNote('', 'edited')).toBe('');
+});
+
+test('an old approval warns that relative dates may have shifted', () => {
+  const note = oldAskNote('yesterday', 'approval');
+  expect(note).toContain('yesterday');
+  expect(note).toContain('still holds');
+  expect(note).toContain('"today"');
+  // An edited draft is the user's own fresh text: no relative-date lecture.
+  expect(oldAskNote('yesterday', 'edited')).toContain('still holds');
+  expect(oldAskNote('yesterday', 'edited')).not.toContain('"today"');
+  // An answered question warns the answer itself may no longer fit.
+  expect(oldAskNote('last week', 'answer')).toContain('no longer fit');
+});
+
+test('the resume prompt carries the age warning when the card is old', () => {
+  const fresh = approvalPrompt(item(card({ draft: 'Hi' })), true);
+  expect(fresh).not.toContain('still holds');
+  expect(approvalPrompt(item(card({ draft: 'Hi' })), true, 'yesterday')).toContain('still holds');
 });

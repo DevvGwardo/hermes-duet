@@ -1,0 +1,4 @@
+[test]
+# Every test runs against a throwaway data directory, so importing the database layer never touches the real
+# install's duet.db (or its uploads). See scripts/test-setup.ts.
+preload = ["./scripts/test-setup.ts"]

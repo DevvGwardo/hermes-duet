@@ -157,12 +157,17 @@ export const hermes = {
         const parsed = parseSseFrame(frame);
         if (!parsed) continue;
         const { data, id, name } = parsed;
+        let ev: RunEvent;
         try {
-          const ev = JSON.parse(data) as RunEvent;
-          if (!ev.event && name) ev.event = name;
-          if (ev.seq === undefined && id !== undefined && !Number.isNaN(id)) ev.seq = id;
-          onEvent(ev);
-        } catch {}
+          ev = JSON.parse(data) as RunEvent;
+        } catch {
+          continue; // a malformed frame is not a reason to drop the rest of the stream
+        }
+        if (!ev.event && name) ev.event = name;
+        if (ev.seq === undefined && id !== undefined && !Number.isNaN(id)) ev.seq = id;
+        // Deliberately outside the parse try: a throwing handler used to be swallowed while `lastSeq` had already
+        // advanced, so the event was lost with no trace. It still surfaces to `consume`, which reconnects.
+        onEvent(ev);
       }
     }
   },

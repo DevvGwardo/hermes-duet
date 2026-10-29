@@ -1,0 +1,361 @@
+<meta charset="utf-8">
+<title>Hermes Duet Blueprint</title>
+<!--
+  Bootstrap product blueprint for Hermes Duet (05dc95e): every screen and modal,
+  driven against a throwaway demo server with seeded content. Counts are filled
+  by scripts/tally.py --fill from blueprint-out/data/report-sweep-7011e31b.json.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root {
+  --ground: #0b0b0b; --surface: #161616; --ink: #f3eee3; --muted: #a39c8d; --line: #2b2b26;
+  --accent: #ffbf00; --accent-ink: #1a1405; --accent-soft: #2a230f; --ok: #8fe39a; --warn: #f0b75c; --warn-soft: #2b2110; --bad: #ff8a80;
+  --kpi-bg: #000000; --kpi-ink: #ffbf00; --kpi-sub: #a39c8d;
+  --display: "Silkscreen", "IBM Plex Sans", system-ui, sans-serif; --body: "IBM Plex Sans", system-ui, sans-serif; --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) { color-scheme: light; --ground: #f6f2e8; --surface: #fffdf7; --ink: #1d1b16; --muted: #6b6558; --line: #e2dccb; --accent: #b98a00; --accent-ink: #fff8e6; --accent-soft: #f7ecd0; --ok: #2f6b2c; --warn: #9a5b00; --warn-soft: #fbefd9; --bad: #b3261e; --kpi-bg: #141310; --kpi-ink: #ffbf00; }
+}
+* { box-sizing: border-box; }
+body { background: var(--ground); color: var(--ink); font: 16px/1.6 var(--body); padding-inline: 16px; padding-block: 0 80px; margin: 0; }
+.wrap { max-width: 1180px; margin: 0 auto; display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 48px; }
+nav.toc { position: sticky; top: 24px; align-self: start; padding-top: 40px; font-size: 14px; }
+nav.toc p { font: 600 12px/1 var(--body); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 0 12px; }
+nav.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+nav.toc a { color: var(--muted); text-decoration: none; } nav.toc a:hover { color: var(--accent); }
+main { min-width: 0; }
+header.top { padding-block: 40px 8px; }
+.eyebrow { font: 600 12px/1 var(--body); letter-spacing: .1em; text-transform: uppercase; color: var(--accent); margin: 0 0 14px; }
+h1 { font: 700 clamp(28px, 4.6vw, 46px)/1.15 var(--display); margin: 0 0 18px; text-wrap: balance; }
+h2 { font: 700 24px/1.2 var(--display); margin: 0 0 10px; text-wrap: balance; }
+h3 { font: 600 18px/1.3 var(--body); margin: 28px 0 8px; }
+.lede { font-size: 19px; max-width: 64ch; margin: 0 0 12px; }
+p { max-width: 68ch; margin: 0 0 12px; }
+.muted { color: var(--muted); }
+code { font: .86em var(--mono); background: var(--accent-soft); padding: 1px 5px; border-radius: 4px; }
+section { padding-top: 56px; scroll-margin-top: 16px; }
+section > .intro { color: var(--muted); max-width: 68ch; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin: 26px 0 8px; }
+.kpi { background: var(--kpi-bg); color: var(--kpi-ink); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px 10px; }
+.kpi b { display: block; font: 600 28px/1 var(--mono); font-variant-numeric: tabular-nums; }
+.kpi span { display: block; font-size: 12px; line-height: 1.35; color: var(--kpi-sub); margin-top: 6px; }
+figure { margin: 18px 0 0; }
+figure img, video { display: block; width: 100%; height: auto; border-radius: 8px; border: 1px solid var(--line); background: #111; }
+figcaption { font-size: 14px; color: var(--muted); margin-top: 8px; max-width: 80ch; }
+.two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font: 600 12px/1.3 var(--body); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+td.num { font: 13px var(--mono); font-variant-numeric: tabular-nums; }
+.table-box { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; margin-top: 16px; }
+.pill { display: inline-block; font: 600 11px/1 var(--body); letter-spacing: .05em; text-transform: uppercase; padding: 4px 7px; border-radius: 99px; }
+.pill.ok { background: rgba(143, 227, 154, .16); color: var(--ok); }
+.pill.bad { background: rgba(255, 138, 128, .16); color: var(--bad); }
+.arch, .module { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+.arch { padding: 16px; margin-top: 16px; overflow-x: auto; }
+.modules { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin-top: 16px; }
+.module { padding: 14px 16px; } .module h4 { margin: 0 0 4px; font-size: 15px; } .module p { font-size: 14px; color: var(--muted); margin: 6px 0 0; }
+.callout { background: var(--warn-soft); border-radius: 10px; padding: 14px 16px; margin-top: 16px; max-width: 80ch; } .callout strong { color: var(--warn); }
+ul.clean { padding-left: 20px; margin: 8px 0 0; max-width: 72ch; } ul.clean li { margin-bottom: 6px; }
+pre.cmd { background: var(--kpi-bg); color: var(--kpi-ink); font: 13px/1.6 var(--mono); padding: 14px 16px; border-radius: 10px; overflow-x: auto; margin-top: 14px; }
+@media (max-width: 900px) { .wrap { grid-template-columns: 1fr; gap: 0; } nav.toc { display: none; } .two { grid-template-columns: 1fr; } }
+</style>
+
+<div class="wrap">
+<nav class="toc" aria-label="Contents">
+  <p>Blueprint</p>
+  <ol>
+    <li><a href="#status">Status</a></li>
+    <li><a href="#new">New: polish</a></li>
+    <li><a href="#roadmap-done">Roadmap, finished</a></li>
+    <li><a href="#tour">Tour</a></li>
+    <li><a href="#architecture">Architecture</a></li>
+    <li><a href="#outputs">Outputs</a></li>
+    <li><a href="#tests">Test results</a></li>
+    <li><a href="#fixed">Fixed in this pass</a></li>
+    <li><a href="#roadmap">Roadmap</a></li>
+    <li><a href="#run">Run &amp; reproduce</a></li>
+  </ol>
+</nav>
+<main>
+<header class="top" id="status">
+  <p class="eyebrow">Hermes Duet · blueprint · roadmap complete · <!--bp:generated-->2026-10-29 · 05dc95e<!--/bp:generated--></p>
+  <h1>Your agent, in duet — on your phone.</h1>
+  <p class="lede">Hermes Duet is a PWA front end for a Hermes agent: one thread for chat and approval cards, a morning brief, background tasks, standing pages, and a live view of the browser the agent drives. This page captures every screen and modal, driven in real Chrome against a seeded demo server.</p>
+  <p class="muted">Everything below came from a local run in real Chrome on this Mac. Screenshots are real captures by the harness in <code>tools/blueprint/</code>; the demo server (<code>bun scripts/demo.ts --reset</code>) holds seeded content, the scheduler off. Nothing is estimated.</p>
+  <div class="kpis" role="list">
+    <div class="kpi" role="listitem"><b><!--bp:checks-->64 / 64<!--/bp:checks--></b><span>browser checks passed</span></div>
+    <div class="kpi" role="listitem"><b>274/274</b><span>unit tests (<code>bun test</code>, 31 files)</span></div>
+    <div class="kpi" role="listitem"><b><!--bp:console-errors-->5<!--/bp:console-errors--></b><span>console errors, all five the expected logged-out /api/state 401 probe (one per script)</span></div>
+    <div class="kpi" role="listitem"><b><!--bp:shots-->25<!--/bp:shots--></b><span>screenshots captured &amp; reviewed</span></div>
+    <div class="kpi" role="listitem"><b>119&nbsp;ms</b><span>first render of the pair screen</span></div>
+  </div>
+</header>
+
+<section id="roadmap-done">
+  <h2>New in this pass: the roadmap, finished</h2>
+  <p class="intro">Every open roadmap item, worked in order, each with its own harness script. Product changes: three surgical fixes (below). Everything else is new evidence.</p>
+
+  <h3>Live browser: frames flow, taps land</h3>
+  <p class="intro">The demo server owns a real headed Chrome (own debug port and throwaway profile). <code>tools/blueprint/live.mjs</code> pairs, opens the pane, navigates to a local fixture through the pane's own URL bar, taps it, and measures the repaint in-page. 6/6.</p>
+  <figure><img src="media/live-03-tapped.jpg" alt="Driven page flipped to TAPPED green after a tap through the pane" loading="lazy"><figcaption>The fixture after the tap: gold → green, TAP ME → TAPPED, mean abs diff 70.3. Along the way the harness proved the failure mode too — a stale second tab strands the screencast on a never-painting page, so <code>live.mjs</code> now closes leftover tabs before starting (hermetic reset check).</figcaption></figure>
+  <ul class="clean"><li>Limits: the driven window is a test profile, not the user's; long-press/scroll/text input go through the same <code>input()</code> path but only tap is asserted end to end.</li></ul>
+
+  <h3>Card taps change state</h3>
+  <p class="intro"><code>tools/blueprint/approvals.mjs</code> (fresh seed, runs after sweep) approves the Dana draft and answers the Thursday question through the real buttons. 7/7: SENT 11:06 AM, YOU CHOSE “YES, MOVE IT”, nothing pending, needs-you badge clears while the running-task badge correctly stays at 1.</p>
+  <figure><img src="media/approvals-after.jpg" alt="Thread after both cards decided, rail cleared" loading="lazy"><figcaption>After both taps: decisions stamped on the cards, “Nothing waiting on you”, status Working (the decision turn enqueues).</figcaption></figure>
+
+  <h3>The pairing gate holds</h3>
+  <p class="intro"><code>tools/blueprint/pairing.mjs</code>: wrong code refused with words, fresh code redeems once (200) and dies on reuse (401), cookie-less message and card actions refused (401), health stays public. 7/7. The 8-guess lockout is deliberately not tripped — it would poison the shared demo seed.</p>
+  <figure><img src="media/pairing-error.jpg" alt="Pair screen showing the wrong-code error" loading="lazy"><figcaption>Refusal with words: “That code didn't work. Codes expire after 10 minutes.”</figcaption></figure>
+
+  <h3>Recovery: offline banner, restart resync</h3>
+  <p class="intro"><code>tools/blueprint/recovery.mjs</code> points the demo at a dead Hermes port, then stops and restarts the server mid-session. 4/4: “Hermes offline” status instead of a spinner, “Reconnecting” while down, resync keeps every card and duplicates none (a queued turn's retry card legitimately arrives mid-outage — the check asserts keep-all + no-dupes, not frozen counts).</p>
+  <figure><img src="media/recovery-resynced.jpg" alt="Thread after server restart, no duplicates, offline status shown" loading="lazy"><figcaption>After the restart: identical cards, one honest retry note, HERMES OFFLINE status.</figcaption></figure>
+
+  <h3>Channels: #taxes end to end, plus two real bugs</h3>
+  <p class="intro"><code>tools/blueprint/channels.mjs</code> creates #taxes in the sheet, posts in it, finds the message through search and jumps to it. 6/6. Doing it surfaced two product bugs, both fixed:</p>
+  <ul class="clean">
+    <li><strong>The channels sheet lived under the rail.</strong> It rendered inside <code>.main</code> (stacking context z-index 1), so on ≥1280px the rail (z-index 2) painted over the sheet's right edge — the Create button was unclickable, verified with <code>elementFromPoint</code>. Fix: the sheet now renders at app level like every other modal (<code>App.tsx</code>, <code>Channels.tsx</code>).</li>
+    <li><strong>A new channel dethroned general.</strong> The channel list ordered by recent activity, so #taxes sorted first and every <code>channels[0]</code> assumption (default thread, archive guard, topic bar) pointed at the wrong channel. Fix: general first in SQL (<code>db.ts</code>) and in the live-update path (<code>store.ts</code>); harness asserts the strip order.</li>
+  </ul>
+  <figure><img src="media/sheet-before-after.jpg" alt="Channels sheet before (buried under rail) and after (full-width scrim)" loading="lazy"><figcaption>Before: the rail swallows the sheet's right edge. After: the scrim covers sidebar and rail, Create clickable.</figcaption></figure>
+  <figure><img src="media/channels-taxes.jpg" alt="#taxes thread with general first in the strip" loading="lazy"><figcaption>#taxes live: topic bar, empty state, general first in the strip.</figcaption></figure>
+
+  <h3>Keyboard and contrast, measured</h3>
+  <p class="intro"><code>tools/blueprint/a11y.mjs</code> tab-walks the app (named, visible, focus-indicated stops; <code>/</code> focuses the composer) and computes WCAG contrast from computed styles. 10/10 — after one fix: timestamps sat at 4.25:1, so <code>--faint</code> lifted one step (<code>#7a746a → #8b857a</code>, same hue); body text ≥8.3, timestamps now 5.37.</p>
+  <h3>Limits</h3>
+  <ul class="clean"><li>Push delivery to a physical device is untested — it needs the user's paired iPhone (blocked on user hardware, not attempted).</li><li>Pairing-lockout behavior untested by design (would poison the shared seed).</li><li>Long-press/scroll/text through the live pane go through the same tested <code>input()</code> path but only tap is asserted end to end.</li></ul>
+</section>
+
+<section id="new">
+  <h2>New in this pass: polish</h2>
+  <p class="intro">Two visual defects the bootstrap screenshots caught, fixed without changing any behaviour or the theme.</p>
+  <figure><img src="media/search-before-after.jpg" alt="Search results before (echoed titles) and after (single-line title-only hits)" loading="lazy"><figcaption>Search rows no longer echo the title as the snippet: a title-only match (a card heading, a file name) renders as one clean line, while hits with real context keep their two-line excerpt. <code>web/src/components/Channels.tsx</code>; asserted by a harness check (<code>echoes=0 of 5</code>).</figcaption></figure>
+  <figure><img src="media/composer-before-after.jpg" alt="Mobile composer before (wrapped placeholder) and after (full-width input with action row)" loading="lazy"><figcaption>The 390px composer: the input takes the full row and the five actions sit right-aligned underneath, instead of squeezing “Message Hermes Duet” into two lines beside bottom-aligned buttons. Desktop layout untouched (rule lives in the ≤560px query). <code>web/src/styles.css</code>; asserted by a harness check (<code>textarea=41px</code>).</figcaption></figure>
+  <h3>How it was verified</h3>
+  <ul class="clean"><li>Rebuilt (<code>bun run build</code>), re-ran the full sweep: 22/22, then looked at the new captures side by side with the bootstrap ones.</li><li>One capture artifact also fixed in the harness: tab screenshots now wait for <code>aria-selected</code> on the clicked tab, so the highlight can never lag a frame behind the content.</li><li>No app bug found in this pass: a suspect sidebar highlight in one bootstrap capture reproduced correctly on re-probe (DOM and pixels agree).</li></ul>
+  <h3>Limits</h3>
+  <ul class="clean"><li>Behaviour is unchanged: search ranking, snippets and composer actions work exactly as before — only redundant or awkward pixels moved.</li></ul>
+</section>
+
+<section id="tour">
+  <h2>Tour</h2>
+  <p class="intro">Every screen and modal, in the order a user meets them: pairing, the thread, tasks, files, the viewer, search, settings, the live browser pane, and the 390px phone layout.</p>
+  <figure><img src="media/01-pair.jpg" alt="Pair screen: mascot, speech bubble, code input" loading="lazy"><figcaption><strong>Pair.</strong> A fresh device sees the mascot and one input. The harness redeemed a real code from the loopback-only internal API through this UI — no cookie injection, no shortcut.</figcaption></figure>
+  <div class="two">
+    <figure><img src="media/02-chat-thread.jpg" alt="Chat thread with morning brief on top" loading="lazy"><figcaption><strong>Chat.</strong> The brief lands first, then drafts, activity, checklist, metrics and file cards — one thread, everything in it.</figcaption></figure>
+    <figure><img src="media/03-approval-focus.jpg" alt="Approval card with editable draft, Send and Not now" loading="lazy"><figcaption><strong>Approval.</strong> The exact text to send is editable until decided; Send / Not now. The choice card below it offers tappable answers.</figcaption></figure>
+  </div>
+  <div class="two">
+    <figure><img src="media/04-tasks.jpg" alt="Tasks tab: needs-you cards, running deck job, finished dashboard" loading="lazy"><figcaption><strong>Tasks.</strong> Pending cards that need you, the running investor deck with its step list, the finished dashboard underneath.</figcaption></figure>
+    <figure><img src="media/05-make.jpg" alt="Make tab: starters and delivered files" loading="lazy"><figcaption><strong>Make.</strong> Starters for new work, every delivered file in one list — this is where standing pages live.</figcaption></figure>
+  </div>
+  <figure><img src="media/06-viewer.jpg" alt="Viewer modal rendering the delivered dashboard" loading="lazy"><figcaption><strong>Viewer.</strong> The delivered dashboard renders in a sandboxed iframe (<code>allow-scripts …</code>, no <code>allow-same-origin</code> — asserted by the harness), with Print / Copy / Download.</figcaption></figure>
+  <div class="two">
+    <figure><img src="media/07-search.jpg" alt="Search overlay as a centered palette with keyboard cursor" loading="lazy"><figcaption><strong>Search.</strong> A centered palette on desktop (bottom sheet on phones): single-line title-only hits, gold-edge keyboard cursor, footer hints. Arrows move, Enter opens.</figcaption></figure>
+    <figure><img src="media/08-settings.jpg" alt="Settings sheet: notifications, brief, check-ins, connectors, triggers" loading="lazy"><figcaption><strong>Settings.</strong> Notifications, brief time (07:30 asserted from the input value, not the pixels), check-ins, connectors, webhook triggers, and What-I-can-see.</figcaption></figure>
+  </div>
+  <figure><img src="media/09-browser.jpg" alt="Live browser pane: toolbar renders, empty stage, no Chrome behind the demo" loading="lazy"><figcaption><strong>Live browser pane.</strong> The toolbar renders (back, reload, tabs, autofill, phone view, close). The empty stage here is the no-Chrome baseline — streaming and taps are exercised for real in <a href="#roadmap-done">the roadmap pass</a> (<code>media/live-03-tapped.jpg</code>).</figcaption></figure>
+  <h3>Phone width</h3>
+  <div class="two">
+    <figure><img src="media/10-mobile-chat.jpg" alt="Chat at 390px with bottom dock" loading="lazy"><figcaption><strong>390px chat.</strong> Sidebar becomes the dock; no sideways scroll (asserted).</figcaption></figure>
+    <figure><img src="media/11-mobile-tasks.jpg" alt="Tasks at 390px" loading="lazy"><figcaption><strong>390px tasks.</strong> Same content, dock navigation.</figcaption></figure>
+  </div>
+  <figure><img src="media/12-mobile-make.jpg" alt="Make at 390px" loading="lazy"><figcaption><strong>390px Make.</strong> Starters and files reflow to one column.</figcaption></figure>
+</section>
+
+<section id="architecture">
+  <h2>Architecture</h2>
+  <p class="intro">One lane per Hermes session; the phone never talks to Hermes directly.</p>
+  <div class="arch">
+<pre class="mermaid">
+flowchart LR
+  P["phone PWA"] --> D["Duet server (Bun + SQLite)\n:7456 app · :7457 internal"]
+  D --> H["Hermes gateway\nPOST /v1/runs · /events · /steer · /stop"]
+  H --> M["server/mcp-shim.ts\nMCP server 'duet'"]
+  M --> D
+  D --> C["agent-driven Chrome\nCDP frames over websocket"]
+  C --> P
+</pre>
+  </div>
+  <div class="modules">
+    <div class="module"><h4>Thread &amp; cards</h4><code>web/src/components/Thread.tsx</code><code>web/src/components/CardView.tsx</code><p>Brief, approval, payment, choice, checklist, metrics, file, handover cards in one conversation.</p></div>
+    <div class="module"><h4>Tasks &amp; files</h4><code>web/src/components/TasksView.tsx</code><code>web/src/components/MakeView.tsx</code><code>web/src/components/Viewer.tsx</code><p>Background runs in their own Hermes sessions; deliverables render sandboxed with a postMessage bridge.</p></div>
+    <div class="module"><h4>Modals</h4><code>web/src/components/SettingsSheet.tsx</code><code>web/src/components/BrowserView.tsx</code><code>web/src/components/Channels.tsx</code><p>Settings, live browser pane (JPEG frames in, CDP input out), ⌘K search overlay.</p></div>
+    <div class="module"><h4>Server</h4><code>server/index.ts</code><code>server/runner.ts</code><code>server/approval.ts</code><p>Lanes, scheduler (briefs, check-ins, quiet hours), approval/payment gates, webhooks, push.</p></div>
+  </div>
+</section>
+
+<section id="outputs">
+  <h2>Outputs</h2>
+  <p class="intro">The one delivered file in the seed, opened through the real viewer and verified by the harness — not downloaded by hand.</p>
+  <div class="table-box"><table>
+    <thead><tr><th>File</th><th>Format</th><th>Probe</th><th>Size</th><th>Verdict</th></tr></thead>
+    <tbody><tr><td><code>weekly-dashboard.html</code></td><td>HTML, sandboxed iframe</td><td>sandbox attr without <code>allow-same-origin</code>; 1 frame rendered</td><td class="num">~1 KB</td><td><span class="pill ok">pass</span></td></tr></tbody>
+  </table></div>
+</section>
+
+<section id="tests">
+  <h2>Test results</h2>
+  <p class="intro">The harness drives the real app in real Chrome with a disposable paired context per viewport and every non-local request aborted. Unit tests: <code>bun test</code>, 274 pass / 0 fail across 31 files. Build: <code>bun run build</code> clean.</p>
+  <div class="table-box"><table>
+    <thead><tr><th>Run</th><th>Check</th><th>Measured</th><th>Result</th></tr></thead>
+    <tbody><!--bp:checks-rows-->
+<tr><td>sweep</td><td>Pair screen asks for a code</td><td>inputs=1</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>sweep</td><td>Pairing with a real code lands in the thread</td><td>code S2… accepted</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>sweep</td><td>Thread shows the morning brief</td><td>6 cards</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>sweep</td><td>Thread shows a pending approval</td><td></td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>sweep</td><td>Thread shows a pending question</td><td></td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>sweep</td><td>Thread shows checklist + metrics cards</td><td></td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>sweep</td><td>Approval card offers Approve / Not now</td><td>Send | Not now</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>sweep</td><td>Tasks lists the running deck job</td><td>Send the reply to Dana · Move the investor call to Thursday 2 PM? · Investor update deck · Weekly metrics dashboard</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>sweep</td><td>Tasks lists the finished dashboard job</td><td>Send the reply to Dana · Move the investor call to Thursday 2 PM? · Investor update deck · Weekly metrics dashboard</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>sweep</td><td>Make lists the delivered dashboard</td><td>Weekly metrics dashboard</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>sweep</td><td>Viewer renders the dashboard in a sandboxed frame</td><td>iframes=1</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>sweep</td><td>Viewer frame is sandboxed</td><td>allow-scripts allow-popups allow-popups-to-escape-sandbox allow-downloads allow-modals</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>sweep</td><td>Search finds the dashboard</td><td>hits=5</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>sweep</td><td>Search rows don&#x27;t echo the title as the snippet</td><td>echoes=0 of 5</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>sweep</td><td>Arrow keys move, cursor returns to the first hit</td><td></td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>sweep</td><td>Enter opens the hit and lands in Chat</td><td></td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>sweep</td><td>Settings shows the morning brief controls</td><td>time=07:30</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>sweep</td><td>Settings shows connectors + triggers</td><td></td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>sweep</td><td>Live browser pane opens (demo has no Chrome to drive)</td><td>canvas</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>sweep</td><td>Pairing cookie is HttpOnly</td><td>duet_device set</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>sweep</td><td>Composer stays single-line at 390px</td><td>textarea=41px</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>sweep</td><td>No sideways scroll at 390px</td><td></td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>sweep</td><td>Visual evidence includes actual screenshots</td><td>12 shots</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>sweep</td><td>No unexpected console errors</td><td>only the expected logged-out /api/state 401</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>live</td><td>Driven Chrome starts with no leftover tabs</td><td>0 left</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>live</td><td>Live pane toolbar renders</td><td></td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>live</td><td>Non-black frames flow from the driven Chrome</td><td></td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>live</td><td>URL-bar navigation lands on the fixture</td><td>127.0.0.1:7499</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>live</td><td>A tap through the pane repaints the driven page</td><td>mean abs diff=70.3</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>live</td><td>No unexpected console errors</td><td>clean</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>channels</td><td>Channel sheet creates #taxes and the topic bar follows</td><td>taxes Deductions and receipts</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>channels</td><td>General stays first in the strip</td><td>general</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>channels</td><td>Message posted in #taxes appears in its thread</td><td>Receipts to gather 99280</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>channels</td><td>Search finds the #taxes message</td><td>hits=2</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>channels</td><td>Jump lands on the message</td><td>visible</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>channels</td><td>No unexpected console errors</td><td>clean</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>pairing</td><td>Wrong code is refused with words, not a blank shake</td><td>That code didn’t work. Codes expire after 10 minutes.</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>pairing</td><td>Fresh code redeems (200)</td><td>status=200</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>pairing</td><td>Same code is dead on reuse (401)</td><td>status=401</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>pairing</td><td>Message without a device cookie is refused (401)</td><td>status=401</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>pairing</td><td>Card action without a device cookie is refused (401)</td><td>status=401</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>pairing</td><td>Health stays public (liveness needs no pairing)</td><td>status=200</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>pairing</td><td>No page errors during the refusal paths</td><td>clean</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>a11y</td><td>&quot;/&quot; focuses the composer</td><td>{&quot;tag&quot;:&quot;TEXTAREA&quot;,&quot;inComposer&quot;:true}</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>a11y</td><td>Tab order reaches interactive controls with names</td><td>8 stops</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>a11y</td><td>Every stop is visible</td><td>8 visible</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>a11y</td><td>Every stop shows a focus indicator</td><td>8 with outline/shadow</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>a11y</td><td>Contrast ≥ 4.5: .card-title</td><td>17.01:1</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>a11y</td><td>Contrast ≥ 4.5: .bubble</td><td>15.64:1</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>a11y</td><td>Contrast ≥ 4.5: .card .card-body</td><td>8.72:1</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>a11y</td><td>Contrast ≥ 4.5: .status-text</td><td>8.37:1</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>a11y</td><td>Secondary text contrast ≥ 4.5 too</td><td>.card-meta=5.37:1 .msg-time=5.37:1</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>a11y</td><td>No unexpected console errors</td><td>clean</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>approvals</td><td>Seed holds a pending approval and a pending question</td><td>approvals=1 choices=1</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>approvals</td><td>Rail badge counts what needs you</td><td>badges=2,1</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>approvals</td><td>Approval decides and says what happened</td><td>SENT · 11:34 AM</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>approvals</td><td>Choice decides and names the chosen answer</td><td>YOU CHOSE “YES, MOVE IT” · 11:34 AM</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>approvals</td><td>Nothing stays pending</td><td>pending=0</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>approvals</td><td>Needs-you badge clears, running-task badge stays</td><td>chat=0 tasks=1</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>approvals</td><td>No unexpected console errors</td><td>clean</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>recovery</td><td>Hermes-down surfaces as a status, not a spinner</td><td>Hermes offline / Hermes offline</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>recovery</td><td>Dropped connection shows Reconnecting</td><td></td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>recovery</td><td>Thread resyncs without duplicating cards</td><td>before=13 after=14 dupes=0</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>recovery</td><td>No page errors across the outage</td><td>clean</td><td><span class="pill ok">pass</span></td></tr>
+<!--/bp:checks-rows--></tbody>
+  </table></div>
+  <h3>Performance</h3>
+  <div class="table-box"><table>
+    <thead><tr><th>Measure</th><th>Value</th></tr></thead>
+    <tbody><!--bp:perf-rows-->
+<tr><td><code>sweep.jsHeapMB</code></td><td>6.4</td></tr>
+<tr><td><code>sweep.screenshots</code></td><td>12</td></tr>
+<tr><td><code>sweep.firstRenderMs</code></td><td>117</td></tr>
+<tr><td><code>live.tapRepaintDiff</code></td><td>70.3</td></tr>
+<tr><td><code>live.screenshots</code></td><td>3</td></tr>
+<tr><td><code>channels.screenshots</code></td><td>3</td></tr>
+<tr><td><code>pairing.screenshots</code></td><td>1</td></tr>
+<tr><td><code>a11y.contrast</code></td><td>{&quot;.card-title&quot;: 17.01, &quot;.bubble&quot;: 15.64, &quot;.card .card-body&quot;: 8.72, &quot;.status-text&quot;: 8.37, &quot;.card-meta&quot;: 5.37, &quot;.msg-time&quot;: 5.37}</td></tr>
+<tr><td><code>a11y.stops</code></td><td>8</td></tr>
+<tr><td><code>approvals.screenshots</code></td><td>2</td></tr>
+<tr><td><code>recovery.screenshots</code></td><td>3</td></tr>
+<!--/bp:perf-rows--></tbody>
+  </table></div>
+  <p class="muted">Measured in-page: first render is navigation-to-pair-screen on a cold demo server; JS heap after pairing and a full thread render. No perf budget is enforced yet.</p>
+</section>
+
+<section id="fixed">
+  <h2>Fixed in this pass</h2>
+  <p class="intro">Product bugs the harness proved, then the fixes. Harness-only fixes from the bootstrap pass stay listed after them.</p>
+  <div class="table-box"><table>
+    <thead><tr><th>Issue</th><th>Cause</th><th>Fix</th></tr></thead>
+    <tbody>
+      <tr><td>Channels sheet buried under the rail on wide screens</td><td>Rendered inside <code>.main</code> (stacking context z-index 1); rail z-index 2 painted over it — Create unclickable, proven by <code>elementFromPoint</code>.</td><td>Renders at app level like every other modal (<code>App.tsx</code>, <code>Channels.tsx</code>); <code>channels.mjs</code> clicks Create for real.</td></tr>
+      <tr><td>New channel dethroned general</td><td>List ordered by recent activity; every <code>channels[0]</code> assumption pointed at #taxes after creating it.</td><td>General first in SQL (<code>db.ts</code>) and the live-update path (<code>store.ts</code>); harness asserts strip order.</td></tr>
+      <tr><td>Timestamps at 4.25:1 contrast</td><td><code>--faint</code> too dark for 11px text on the card surface (computed in-page).</td><td><code>#7a746a → #8b857a</code>, same hue; <code>a11y.mjs</code> asserts ≥4.5 everywhere incl. secondary text.</td></tr>
+      <tr><td>Sweep died clicking the search button: “element is not visible”</td><td>At 1600px the topbar icon buttons hide via CSS; the only search entry point is the channel strip, which renders on the Chat tab only — the sweep had moved to Make.</td><td>Navigate back to Chat first; click <code>.channel-search</code>. Sidebar buttons by text for Settings / Live browser.</td></tr>
+      <tr><td>Sweep timed out after closing the viewer</td><td>Viewer iframe eats the Escape keypress, so the modal never closed and later clicks hit the backdrop.</td><td>Close via the header Close button and wait for detach.</td></tr>
+      <tr><td>Search rows repeated the title as the snippet</td><td>Server falls back to <code>title</code> when FTS returns no body context, so short messages and file/task names rendered twice.</td><td>Skip the snippet line when it equals the title (<code>Channels.tsx</code>); harness asserts <code>echoes=0</code>.</td></tr>
+      <tr><td>Phone composer squeezed the placeholder into two lines</td><td>Five 38px buttons left ~131px for the input at 390px; buttons bottom-aligned beside a wrapped textarea.</td><td>Below 560px the input takes the full row with actions right-aligned underneath (<code>styles.css</code>); harness asserts <code>textarea=41px</code>.</td></tr>
+      <tr><td>Search was a full-bleed list with no keyboard path</td><td>The sheet never got a desktop max-width, and rows were mouse-only — no cursor, no Enter, no hints.</td><td>Centered 700px palette with gold-edge cursor row, ↑↓/↵/hover support and a footer hint (<code>Channels.tsx</code>, <code>styles.css</code>); harness drives arrows+Enter end to end.</td></tr>
+      <tr><td>Pair screen needed a little taste</td><td>Static hero: the wordmark and tagline just sat there.</td><td>Looping scramble-decode on the wordmark (band echo mirrored via <code>data-text</code>) and tagline (<code>Decode</code> in <code>Manga.tsx</code>); monospace pixel font means zero reflow, static under reduced-motion, plain strings for screen readers. Harness waits for the settle before capturing.</td></tr>
+      <tr><td>Settings brief-time check failed though the pixels showed 07:30</td><td><code>innerText</code> applies CSS <code>text-transform</code> (headings are uppercase) and omits <code>&lt;input&gt;</code> values.</td><td>Case-insensitive heading match; assert the time from <code>inputValue()</code>.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="roadmap">
+  <h2>Roadmap</h2>
+  <p class="intro">Everything below shipped in the roadmap-completion pass above — kept here as the ranked record. Size: S under half a day, M 1–2 days, L most of a week.</p>
+  <div class="tier">
+    <h3>P1 · Live browser, exercised <small>done</small></h3>
+    <div class="items">
+      <div class="item"><h4><span class="pill ok">done</span> Stream a real page through the pane</h4><dl><dt>Evidence</dt><dd><code>media/live-03-tapped.jpg</code>: fixture flips gold→green through a real tap; <code>live.mjs</code> 6/6.</dd><dt>Approach</dt><dd>Demo-owned Chrome on its own debug port + throwaway profile, local fixture, in-page repaint measurement.</dd><dt>Size</dt><dd class="effort">M</dd></dl></div>
+    </div>
+  </div>
+  <div class="tier">
+    <h3>P2 · Unhappy paths, covered <small>done</small></h3>
+    <div class="items">
+      <div class="item"><h4><span class="pill ok">done</span> Approve / decline / answer through the cards</h4><dl><dt>Evidence</dt><dd><code>media/approvals-after.jpg</code>: SENT + YOU CHOSE lines, badges correct; <code>approvals.mjs</code> 7/7.</dd><dt>Approach</dt><dd>Fresh seed, real button taps, decision + rail assertions.</dd><dt>Size</dt><dd class="effort">S</dd></dl></div>
+      <div class="item"><h4><span class="pill ok">done</span> Pairing failures</h4><dl><dt>Evidence</dt><dd><code>media/pairing-error.jpg</code>; <code>pairing.mjs</code> 7/7: wrong code, reuse 401, cookie-less 401s, public health.</dd><dt>Approach</dt><dd>UI refusal + raw-status API probes. Lockout deliberately untested (poisons the seed).</dd><dt>Size</dt><dd class="effort">S</dd></dl></div>
+      <div class="item"><h4><span class="pill ok">done</span> Hermes-offline + restart recovery</h4><dl><dt>Evidence</dt><dd><code>media/recovery-resynced.jpg</code>; <code>recovery.mjs</code> 4/4: offline status, Reconnecting, keep-all + no-dupes resync.</dd><dt>Size</dt><dd class="effort">S</dd></dl></div>
+      <div class="item"><h4><span class="pill ok">done</span> Multi-channel threads</h4><dl><dt>Evidence</dt><dd><code>media/channels-taxes.jpg</code>; <code>channels.mjs</code> 6/6, incl. the two product bugs it surfaced.</dd><dt>Size</dt><dd class="effort">S</dd></dl></div>
+      <div class="item"><h4><span class="pill ok">done</span> Accessibility pass</h4><dl><dt>Evidence</dt><dd><code>a11y.mjs</code> 10/10: keyboard operability, focus indicators, computed contrast ≥4.5 everywhere.</dd><dt>Size</dt><dd class="effort">S</dd></dl></div>
+    </div>
+  </div>
+  <div class="callout"><strong>Not yet tested:</strong> push delivery to a real device — needs the user's paired iPhone (blocked on user hardware, not attempted).</div>
+</section>
+
+<section id="run">
+  <h2>Run &amp; reproduce</h2>
+<pre class="cmd">bun run build
+python3 ~/.agents/skills/blueprint/scripts/devserver.py start \
+  --url http://127.0.0.1:7466/ --expect "Hermes Duet" \
+  --cwd /Users/devgwardo/hermes-duet -- env DUET_CHROME_PORT=9334 \
+  "DUET_CHROME_PROFILE=/Users/devgwardo/hermes-duet/blueprint-out/chrome-profile" \
+  DUET_HERMES_URL=http://127.0.0.1:9 bun scripts/demo.ts --reset
+export APP_URL=http://127.0.0.1:7466/ BP_OUT=/Users/devgwardo/hermes-duet/blueprint-out
+for s in sweep live channels pairing a11y approvals recovery; do
+  node tools/blueprint/$s.mjs || echo "$s FAILED"
+done
+bun test   # 274 pass, 0 fail</pre>
+</section>
+</main>
+</div>
+<script type="module">
+// The Artifact host renders .mermaid itself; a local file:// or http.server view has no runtime.
+const pending = () => document.querySelectorAll("pre.mermaid:not([data-processed])");
+setTimeout(async () => {
+  if (!pending().length) return;
+  const { default: mermaid } = await import("https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs");
+  const dark = matchMedia("(prefers-color-scheme: dark)").matches && document.documentElement.dataset.theme !== "light";
+  mermaid.initialize({ startOnLoad: false, theme: dark ? "dark" : "neutral" });
+  await mermaid.run({ nodes: [...pending()] });
+}, 800);
+</script>

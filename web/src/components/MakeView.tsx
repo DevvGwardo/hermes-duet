@@ -12,22 +12,36 @@ const STARTERS = [
   { icon: Icon.doc, label: 'A brief', prompt: 'Write me a one-page brief on ' },
 ];
 
-export function MakeView({ onStart, onOpenFile }: { onStart: (prompt: string) => void; onOpenFile: (id: string) => void }) {
+export function MakeView({ onStart, onOpenFile, onCompare }: { onStart: (prompt: string) => void; onOpenFile: (id: string) => void; onCompare?: (current: string, previous: string) => void }) {
   const files = useStore((s) => s.files);
   const pages = useStore((s) => s.pages);
   const tasks = useStore((s) => s.tasks);
   const shown = shelf(files, pages.map((p) => p.id));
+  // Every delivered version of a page stays in the files list; the newest one is current, the one before it is what
+  // "Compare" slides against.
+  const versionsOf = (page: Page) =>
+    files.filter((f) => f.page_id === page.id).sort((a, b) => b.created_at - a.created_at);
   return (
     <div className="pane make-pane">
       {pages.length > 0 && (
         <section>
           <h2 className="section-title">Every morning</h2>
           <ul className="list">
-            {pages.map((p) => (
-              <li key={p.id}>
-                <PageRow page={p} file={files.find((f) => f.id === p.file_id)} task={tasks.find((t) => t.id === p.task_id)} onOpen={() => onOpenFile(p.file_id)} />
-              </li>
-            ))}
+            {pages.map((p) => {
+              const previous = versionsOf(p).find((f) => f.id !== p.file_id);
+              return (
+                <li key={p.id}>
+                  <PageRow
+                    page={p}
+                    file={files.find((f) => f.id === p.file_id)}
+                    task={tasks.find((t) => t.id === p.task_id)}
+                    previous={previous}
+                    onOpen={() => onOpenFile(p.file_id)}
+                    onCompare={previous && onCompare ? () => onCompare(p.file_id, previous.id) : undefined}
+                  />
+                </li>
+              );
+            })}
           </ul>
         </section>
       )}
@@ -78,7 +92,21 @@ export function MakeView({ onStart, onOpenFile }: { onStart: (prompt: string) =>
  * A standing page: when its current version arrived, and the one thing that changed (or why nothing did).
  * "Stop refreshing" takes a second tap to confirm; the row disappears when the server's page_removed event lands.
  */
-function PageRow({ page, file, task, onOpen }: { page: Page; file?: FileEntry; task?: Task; onOpen: () => void }) {
+function PageRow({
+  page,
+  file,
+  task,
+  previous,
+  onOpen,
+  onCompare,
+}: {
+  page: Page;
+  file?: FileEntry;
+  task?: Task;
+  previous?: FileEntry;
+  onOpen: () => void;
+  onCompare?: () => void;
+}) {
   const FIcon = file ? fileIcon(file.mime, file.name) : Icon.file;
   const at = page.refreshed_at ?? page.created_at;
   const day = dayLabel(at);
@@ -117,6 +145,11 @@ function PageRow({ page, file, task, onOpen }: { page: Page; file?: FileEntry; t
         <Icon.chevron size={18} />
       </button>
       <div className="page-actions">
+        {onCompare && previous && (
+          <button className="btn btn-ghost small" onClick={onCompare}>
+            Compare with {dayLabel(previous.created_at) === 'Yesterday' ? 'yesterday' : new Date(previous.created_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+          </button>
+        )}
         {confirm ? (
           <>
             <span className="muted">{refreshing ? 'Cancel today’s refresh and stop?' : 'Stop refreshing every morning?'} Its files stay.</span>

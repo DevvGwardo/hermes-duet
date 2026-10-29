@@ -1,8 +1,9 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Item } from '../../../shared/types';
 import { loadOlder, loadUntil } from '../api';
 import { useStore } from '../store';
 import { Icon, Markdown, dayLabel, timeLabel } from '../ui';
+import { Attachments } from './Attachments';
 import { CardView } from './CardView';
 import { BrandBadge, Mascot, SpeechBubble } from './Manga';
 import { STATUS_LABEL } from './TasksView';
@@ -29,7 +30,11 @@ export function Thread({
   /** Bumped when you send from the composer: your own message always brings the thread back to the bottom. */
   followKey?: number;
 }) {
-  const items = useStore((s) => s.items);
+  const all = useStore((s) => s.items);
+  const channelId = useStore((s) => s.channelId);
+  const generalId = useStore((s) => s.channels.find((c) => c.slug === 'general')?.id);
+  // useSyncExternalStore compares snapshots by identity, so the filter runs here rather than inside the selector.
+  const items = useMemo(() => (channelId ? all.filter((i) => (i.channel_id ?? generalId) === channelId) : all), [all, channelId, generalId]);
   const hasMore = useStore((s) => s.hasMore);
   const ref = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
@@ -171,7 +176,8 @@ function ItemView({ item, onOpenFile, onShowTasks, avatar }: { item: Item; onOpe
     case 'user':
       return (
         <div className={`msg msg-user ${item.task_id ? 'as-task' : ''}`} id={`item-${item.id}`}>
-          <div className="bubble">{item.text}</div>
+          {item.text && <div className="bubble">{item.text}</div>}
+          {item.attachments?.length ? <Attachments list={item.attachments} /> : null}
           <div className="msg-time">
             {item.task_id && <StartedTask id={item.task_id} onShowTasks={onShowTasks} />}
             {timeLabel(item.created_at)}

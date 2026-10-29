@@ -4,6 +4,7 @@ export type ItemKind = 'user' | 'assistant' | 'card' | 'activity' | 'system';
 
 export type CardType =
   | 'approval' // "Needs your OK": Approve / Not now
+  | 'payment' // "Check before I spend": itemized spend approval, optionally paid with a single-use card
   | 'choice' // a question with fixed options
   | 'brief' // morning brief / check-in digest
   | 'checklist'
@@ -59,6 +60,13 @@ export interface MetricEntry {
   tone?: 'good' | 'bad' | 'neutral';
 }
 
+/** One line of a payment card's receipt. `price_cents` is the unit price. */
+export interface PaymentItem {
+  title: string;
+  price_cents: number;
+  quantity?: number;
+}
+
 export interface CardData {
   type: CardType;
   title: string;
@@ -94,8 +102,39 @@ export interface CardData {
   alert?: boolean;
   /** Agent session that receives the decision (Duet-tool cards). */
   session_id?: string;
+  /** Channel the card belongs to; the thread shows only its channel's items. */
+  channel_id?: string;
+  // ---- payment cards ----
+  merchant?: string;
+  /** Total the user is approving, in the currency's minor unit (cents). */
+  amount_cents?: number;
+  currency?: string;
+  /** The hard ceiling the total was checked against (config.maxTransactionCents). */
+  cap_cents?: number;
+  line_items?: PaymentItem[];
+  /** Set when a single-use virtual card was issued for this payment. Never the card itself: only how it ended. */
+  card_summary?: string;
+  /** Set when the card details were typed into the agent's live browser instead of being handed to the model. */
+  card_filled?: boolean;
   /** Set when the card mirrors a Hermes-native approval/clarify prompt on a live run. */
   hermes?: { kind: 'approval' | 'clarify'; run_id: string; request_id: string; generation: number };
+}
+
+/** A file the user handed over from the composer: a camera photo, a document, or a voice memo. */
+export interface Attachment {
+  id: string;
+  name: string;
+  mime: string;
+  size: number;
+  /** images and PDFs are shown in the thread; audio is playable in place. */
+  kind: 'image' | 'audio' | 'file';
+  created_at: number;
+}
+
+export function attachmentKind(mime: string): Attachment['kind'] {
+  if (mime.startsWith('image/')) return 'image';
+  if (mime.startsWith('audio/')) return 'audio';
+  return 'file';
 }
 
 export interface ToolStep {
@@ -122,10 +161,54 @@ export interface Item {
   updated_at: number;
   run_id?: string | null;
   task_id?: string | null;
+  /** Which topic channel this belongs to; absent means the general channel. */
+  channel_id?: string;
   text?: string; // user / assistant / system
   streaming?: boolean;
   card?: CardData;
   activity?: ActivityData;
+  attachments?: Attachment[];
+}
+
+/** A topic thread. Each one runs its own Hermes session but shares the agent's memory across the install. */
+export interface Channel {
+  id: string;
+  name: string;
+  slug: string;
+  topic?: string;
+  /** The Hermes session this channel talks to. */
+  session_id: string;
+  /** Last time the user opened it here, for the unread dot. */
+  seen_at?: number;
+  /** Newest item in it, filled in when the channel list is read. */
+  last_at?: number;
+  archived?: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+/** One hit from the full-text index: a thread item, a task, a delivered file or a standing page. */
+export interface SearchHit {
+  kind: 'item' | 'task' | 'file' | 'page';
+  /** Item id for thread hits, otherwise the record's id. */
+  id: string;
+  /** Card or message title; the first line for plain messages. */
+  title: string;
+  /** Plain-text excerpt with the matched terms in it (the client marks them up). */
+  snippet: string;
+  channel_id?: string;
+  created_at: number;
+}
+
+/** A native integration the agent can use on this machine. */
+export interface Connector {
+  id: string;
+  name: string;
+  kind: 'reminders' | 'calendar' | 'mail' | 'webhook' | 'folder';
+  status: 'active' | 'needs_auth' | 'missing' | 'unsupported';
+  detail: string;
+  /** The command or setting that turns it on, when it isn't. */
+  hint?: string;
 }
 
 export type TaskStatus = 'queued' | 'running' | 'waiting' | 'done' | 'failed' | 'cancelled';
@@ -152,6 +235,8 @@ export interface Task {
   retried_at?: number;
   /** A standing page's scheduled refresh: the file it delivers becomes the page's current version. */
   page_id?: string;
+  /** Which channel to hand the result back in; absent means general. */
+  channel_id?: string;
   /** Page refresh only: the agent's one line on what changed since the previous version. */
   changed?: string;
   created_at: number;
@@ -232,6 +317,8 @@ export interface Snapshot {
   tasks: Task[];
   files: FileEntry[];
   pages: Page[];
+  /** Topic channels, newest activity last. The app opens the general one first. */
+  channels: Channel[];
   settings: Settings;
   agent: AgentState;
   push_enabled: boolean;
@@ -244,6 +331,8 @@ export type ServerEvent =
   | { type: 'file'; file: FileEntry }
   | { type: 'page'; page: Page }
   | { type: 'page_removed'; id: string }
+  | { type: 'channel'; channel: Channel }
+  | { type: 'channel_removed'; id: string }
   | { type: 'agent'; agent: AgentState }
   | { type: 'settings'; settings: Settings }
   | { type: 'hello'; at: number };

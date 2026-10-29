@@ -1,12 +1,13 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { askAge } from '../../../shared/age';
-import type { CardData, FollowUp, Item, WatchEntry } from '../../../shared/types';
+import type { CardData, FollowUp, Item, PaymentItem, WatchEntry } from '../../../shared/types';
 import { api } from '../api';
 import { useStore } from '../store';
 import { Icon, Markdown, bytesLabel, fileIcon, timeLabel } from '../ui';
 
 const KIND_LABEL: Record<CardData['type'], string> = {
   approval: 'Needs your OK',
+  payment: 'Check before I spend',
   choice: 'Question',
   brief: 'Brief',
   checklist: 'Checklist',
@@ -47,6 +48,7 @@ export function CardView({ item, onOpenFile }: { item: Item; onOpenFile: (id: st
         <span className="card-meta">{card.updated_label ?? timeLabel(item.updated_at)}</span>
       </header>
       <h3 className="card-title">{card.title}</h3>
+      {card.type === 'brief' && <ListenButton item={item} />}
       {card.body && <Markdown text={card.body} className="card-body" />}
 
       {card.type === 'brief' && card.entries?.length ? <BriefList id={item.id} card={card} onOpenFile={onOpenFile} /> : null}
@@ -64,6 +66,7 @@ export function CardView({ item, onOpenFile }: { item: Item; onOpenFile: (id: st
         </div>
       )}
       {card.type === 'file' && card.file_id && <FileRow fileId={card.file_id} onOpen={onOpenFile} />}
+      {card.type === 'payment' && <PaymentDetails card={card} />}
       {card.type === 'handover' && (
         <>
           {card.file_ids?.map((id) => <FileRow key={id} fileId={id} onOpen={onOpenFile} />)}
@@ -99,6 +102,20 @@ export function CardView({ item, onOpenFile }: { item: Item; onOpenFile: (id: st
           <Decision card={card} />
         ))}
 
+      {card.type === 'payment' &&
+        (pending ? (
+          <div className="card-actions">
+            <button className="btn btn-primary pay" disabled={!!busy} onClick={() => act('approve')}>
+              {busy === 'approve' ? 'Approving…' : card.action_label || 'Approve & pay'}
+            </button>
+            <button className="btn btn-ghost" disabled={!!busy} onClick={() => act('decline')}>
+              Decline
+            </button>
+          </div>
+        ) : (
+          <Decision card={card} />
+        ))}
+
       {card.type === 'choice' &&
         (pending ? (
           <div className="card-actions wrap">
@@ -116,6 +133,121 @@ export function CardView({ item, onOpenFile }: { item: Item; onOpenFile: (id: st
   );
 }
 
+/**
+ * "Listen": the brief read aloud, so the morning can be taken in while walking. The audio is synthesized on the Mac
+ * and cached; a lock-screen player is exposed through the Media Session API so playback survives switching apps.
+ */
+function ListenButton({ item }: { item: Item }) {
+  const audio = useRef<HTMLAudioElement | null>(null);
+  const [state, setState] = useState<'idle' | 'loading' | 'playing'>('idle');
+  const [err, setErr] = useState<string | null>(null);
+  const title = item.card?.title ?? 'Morning brief';
+
+  useEffect(
+    () => () => {
+      audio.current?.pause();
+      audio.current = null;
+    },
+    [],
+  );
+
+  function stop() {
+    const el = audio.current;
+    if (el) {
+      el.pause();
+      el.currentTime = 0;
+    }
+    setState('idle');
+  }
+
+  async function toggle() {
+    setErr(null);
+    const el = audio.current ?? new Audio();
+    audio.current = el;
+    if (state === 'playing') {
+      el.pause();
+      setState('idle');
+      return;
+    }
+    try {
+      if (el.src !== new URL(`/api/brief/${item.id}/audio`, location.href).href) {
+        el.src = `/api/brief/${item.id}/audio`;
+        el.preload = 'auto';
+      }
+      el.onended = () => setState('idle');
+      el.onerror = () => {
+        setState('idle');
+        setErr('Could not play the brief. Set up speech on the Mac: hermes-duet doctor.');
+      };
+      const session = (navigator as any).mediaSession;
+      if (session && typeof MediaMetadata !== 'undefined') {
+        session.metadata = new MediaMetadata({ title, artist: 'Hermes Duet', album: 'Morning brief' });
+        session.setActionHandler?.('play', () => void el.play());
+        session.setActionHandler?.('pause', () => el.pause());
+        session.setActionHandler?.('stop', stop);
+      }
+      setState('loading');
+      await el.play();
+      setState('playing');
+    } catch (e: any) {
+      setState('idle');
+      setErr(/not allowed|gesture/i.test(String(e?.message)) ? 'Tap Listen again to allow audio.' : 'Could not play the brief.');
+    }
+  }
+
+  return (
+    <>
+      <button className={`listen ${state}`} onClick={toggle} aria-label={state === 'playing' ? 'Pause the brief' : 'Listen to the brief'}>
+        {state === 'playing' ? <Icon.stop size={14} /> : <Icon.play size={14} />}
+        {state === 'playing' ? 'Pause' : state === 'loading' ? 'Getting audio…' : 'Listen'}
+      </button>
+      {err && <p className="card-error">{err}</p>}
+    </>
+  );
+}
+
+/** The receipt behind a payment card: every line, the total, and what the cap was. Never any card number. */
+function PaymentDetails({ card }: { card: CardData }) {
+  const items = card.line_items ?? [];
+  const currency = card.currency ?? 'USD';
+  const price = (cents: number) => {
+    try {
+      return new Intl.NumberFormat([], { style: 'currency', currency }).format(cents / 100);
+    } catch {
+      return `${(cents / 100).toFixed(2)} ${currency}`;
+    }
+  };
+  return (
+    <div className="payment">
+      {items.length > 0 && (
+        <ul className="payment-items">
+          {items.map((it: PaymentItem, i) => (
+            <li key={i}>
+              <span className="pay-title">
+                {it.title}
+                {(it.quantity ?? 1) > 1 && <span className="pay-qty"> × {it.quantity}</span>}
+              </span>
+              <span className="pay-price">{price(it.price_cents * (it.quantity ?? 1))}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="payment-total">
+        <span>Total</span>
+        <strong>{price(card.amount_cents ?? 0)}</strong>
+      </div>
+      {card.merchant && <div className="payment-merchant">To {card.merchant}</div>}
+      {card.cap_cents ? (
+        <div className="payment-cap">
+          Capped at {price(card.cap_cents)} per payment{card.amount_cents !== undefined && card.amount_cents < card.cap_cents ? ` · ${price(card.cap_cents - card.amount_cents)} under the limit` : ''}
+        </div>
+      ) : null}
+      {card.card_summary && <div className="payment-card-note">{card.card_summary}</div>}
+    </div>
+  );
+}
+
+/** What the user decided, in one line. */
 function Decision({ card }: { card: CardData }) {
   const label =
     card.status === 'approved'

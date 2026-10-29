@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { normalizeInput, normalizeUrl } from './browser';
+import { MOBILE_VIEWPORT, normalizeInput, normalizeUrl, viewportMetrics } from './browser';
 
 describe('normalizeUrl', () => {
   test('keeps absolute http(s) urls untouched', () => {
@@ -75,5 +75,16 @@ describe('normalizeInput', () => {
   test('tab switching needs an id', () => {
     expect(normalizeInput({ type: 'tab', id: 'ABC' })).toEqual({ type: 'tab', id: 'ABC' });
     expect(normalizeInput({ type: 'tab', id: '' })).toBeNull();
+  });
+});
+
+describe('viewportMetrics', () => {
+  test('mobile is an iPhone layout with touch', () => {
+    expect(viewportMetrics('mobile')).toEqual({ ...MOBILE_VIEWPORT, mobile: true });
+    expect(MOBILE_VIEWPORT).toEqual({ width: 390, height: 844, deviceScaleFactor: 3 });
+  });
+
+  test('desktop clears the override rather than guessing a size', () => {
+    expect(viewportMetrics('desktop')).toBeNull();
   });
 });

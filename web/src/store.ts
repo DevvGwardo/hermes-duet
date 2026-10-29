@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import { trackPending } from '../../shared/pending';
-import type { AgentState, FileEntry, Item, Page, ServerEvent, Settings, Snapshot, Task } from '../../shared/types';
+import type { AgentState, Channel, FileEntry, Item, Page, ServerEvent, Settings, Snapshot, Task } from '../../shared/types';
 
 export interface State {
   ready: boolean;
@@ -14,6 +14,10 @@ export interface State {
   files: FileEntry[];
   /** Standing pages, pinned at the top of Make. */
   pages: Page[];
+  /** Topic channels, newest activity first. */
+  channels: Channel[];
+  /** The channel the Chat tab is showing; null until the snapshot lands. */
+  channelId: string | null;
   settings: Settings | null;
   agent: AgentState;
   pushEnabled: boolean;
@@ -31,6 +35,8 @@ let state: State = {
   tasks: [],
   files: [],
   pages: [],
+  channels: [],
+  channelId: null,
   settings: null,
   agent: initialAgent,
   pushEnabled: false,
@@ -68,23 +74,46 @@ const byCreated = (a: { created_at: number }, b: { created_at: number }) => a.cr
 const byUpdatedDesc = (a: { updated_at: number }, b: { updated_at: number }) => b.updated_at - a.updated_at;
 
 export function applySnapshot(s: Snapshot) {
-  setState({
-    ready: true,
-    authed: true,
-    items: s.items,
-    hasMore: s.has_more,
-    pending: s.pending,
-    tasks: s.tasks.sort(byUpdatedDesc),
-    files: s.files,
-    pages: s.pages ?? [],
-    settings: s.settings,
-    agent: s.agent,
-    pushEnabled: s.push_enabled,
+  setState((current) => {
+    const channels = s.channels ?? [];
+    // Keep the channel the user is reading across a reconnect; fall back to general when it was archived.
+    const channelId = current.channelId && channels.some((c) => c.id === current.channelId) ? current.channelId : (channels[0]?.id ?? null);
+    return {
+      ready: true,
+      authed: true,
+      items: s.items,
+      hasMore: s.has_more,
+      pending: s.pending,
+      tasks: s.tasks.sort(byUpdatedDesc),
+      files: s.files,
+      pages: s.pages ?? [],
+      channels,
+      channelId,
+      settings: s.settings,
+      agent: s.agent,
+      pushEnabled: s.push_enabled,
+    };
   });
 }
 
+/** Switch the Chat tab's channel; the thread renders only that channel's items. */
+export function setChannel(id: string) {
+  setState({ channelId: id });
+}
+
+/** Items the Chat tab should show: everything in the chosen channel, oldest first. */
+export function channelItems(s: State): Item[] {
+  if (!s.channelId) return s.items;
+  return s.items.filter((i) => (i.channel_id ?? s.channels[0]?.id) === s.channelId);
+}
+
 export function prependItems(older: Item[], hasMore: boolean) {
-  setState((s) => ({ items: [...older.filter((o) => !s.items.some((i) => i.id === o.id)), ...s.items], hasMore }));
+  setState((s) => ({ items: [...older.filter((o) => !s.items.some((i) => i.id === o.id)), ...s.items, ...[]].sort(byCreated), hasMore }));
+}
+
+/** Fold a freshly fetched channel page into the loaded items, leaving everything else alone. */
+export function mergeItems(page: Item[]) {
+  setState((s) => ({ items: [...s.items.filter((i) => !page.some((p) => p.id === i.id)), ...page].sort(byCreated) }));
 }
 
 export function applyEvent(ev: ServerEvent) {
@@ -111,6 +140,23 @@ export function applyEvent(ev: ServerEvent) {
       break;
     case 'page_removed':
       setState((s) => ({ pages: s.pages.filter((p) => p.id !== ev.id) }));
+      break;
+    case 'channel': {
+      // A new or renamed channel joins the strip, but general stays first: the
+      // server orders snapshots that way, and a live event must not dethrone it.
+      setState((s) => {
+        const list = [ev.channel, ...s.channels.filter((c) => c.id !== ev.channel.id)];
+        const general = list.find((c) => c.slug === 'general');
+        const rest = list.filter((c) => c.slug !== 'general');
+        return { channels: general ? [general, ...rest] : list, channelId: s.channelId ?? ev.channel.id };
+      });
+      break;
+    }
+    case 'channel_removed':
+      setState((s) => {
+        const channels = s.channels.filter((c) => c.id !== ev.id);
+        return { channels, channelId: s.channelId === ev.id ? (channels[0]?.id ?? null) : s.channelId };
+      });
       break;
     case 'agent':
       setState({ agent: ev.agent });

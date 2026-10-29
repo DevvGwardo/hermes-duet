@@ -4,18 +4,32 @@ import { useMemo } from 'react';
 
 marked.setOptions({ gfm: true, breaks: true });
 
-// Links in agent replies open outside the app; following one in place would navigate the PWA away.
+// Links in agent replies open outside the app; following one in place would navigate the PWA away. An in-page
+// anchor (#section) stays in place, since a new tab would land at the top of a different document.
 DOMPurify.addHook('afterSanitizeAttributes', (node) => {
-  if (node.tagName === 'A' && node.getAttribute('href')) {
+  const href = node.tagName === 'A' ? node.getAttribute('href') : null;
+  if (href && !href.startsWith('#')) {
     node.setAttribute('target', '_blank');
     node.setAttribute('rel', 'noopener noreferrer');
   }
 });
 
+/**
+ * Agent text can come from a page the agent read, so it is treated as untrusted HTML. Scripts and handlers are
+ * stripped by default, but DOMPurify's allowlist keeps `style`, `class` and form controls, which is enough to
+ * draw a full-screen overlay over the app, or post to a bodyless route (stop the run, cancel a task) via a form.
+ * `src` is left alone: images in replies are a supported thing to show.
+ */
+const SANITIZE = {
+  ADD_ATTR: ['target'],
+  FORBID_ATTR: ['style', 'class', 'id'],
+  FORBID_TAGS: ['form', 'input', 'button', 'select', 'textarea', 'option', 'fieldset', 'legend', 'label', 'style'],
+};
+
 export function Markdown({ text, className }: { text: string; className?: string }) {
   const html = useMemo(() => {
     const raw = marked.parse(text ?? '', { async: false }) as string;
-    return DOMPurify.sanitize(raw, { ADD_ATTR: ['target'] });
+    return DOMPurify.sanitize(raw, SANITIZE);
   }, [text]);
   return <div className={`md ${className ?? ''}`} dangerouslySetInnerHTML={{ __html: html }} />;
 }
@@ -148,6 +162,46 @@ export const Icon = {
     </>,
   ),
   bolt: svg(<path d="M13 3 5 14h6l-1 7 8-11h-6z" />),
+  search: svg(
+    <>
+      <circle cx="11" cy="11" r="6.5" />
+      <path d="m16 16 4.5 4.5" />
+    </>,
+  ),
+  camera: svg(
+    <>
+      <path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z" />
+      <circle cx="12" cy="13" r="3.5" />
+    </>,
+  ),
+  attach: svg(<path d="M20 11.5 12 19.5a5 5 0 0 1-7-7l8.5-8.5a3.2 3.2 0 0 1 4.5 4.5L9.5 17a1.6 1.6 0 0 1-2.3-2.3L15 7" />),
+  play: svg(<path d="M8 5.5v13l11-6.5z" />),
+  plus: svg(<path d="M12 5v14M5 12h14" />),
+  hash: svg(<path d="M9 4 7.5 20M16.5 4 15 20M4 9h16M3 15h16" />),
+  speaker: svg(
+    <>
+      <path d="M4 9.5h3l4-3.5v12l-4-3.5H4z" />
+      <path d="M15 8.5a5 5 0 0 1 0 7M18 6a8.5 8.5 0 0 1 0 12" />
+    </>,
+  ),
+  key: svg(
+    <>
+      <circle cx="8" cy="12" r="4" />
+      <path d="M12 12h9M18 12v3M15.5 12v2.5" />
+    </>,
+  ),
+  phone: svg(
+    <>
+      <rect x="7" y="2.5" width="10" height="19" rx="2.5" />
+      <path d="M11 5.5h2" />
+    </>,
+  ),
+  archive: svg(
+    <>
+      <path d="M4 8h16v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z" />
+      <path d="M3 4.5h18V8H3zM10 12h4" />
+    </>,
+  ),
 };
 
 export function fileIcon(mime: string, name: string) {

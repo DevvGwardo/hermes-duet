@@ -22,11 +22,13 @@ function contextSources(): string {
 }
 
 /** Standing instructions sent with every Hermes Duet turn. */
-export function persona(s: Settings, extra: { taskId?: string } = {}) {
+export function persona(s: Settings, extra: { taskId?: string; channel?: string; connectors?: string } = {}) {
   const who = config.userName ? ` for ${config.userName}` : '';
+  const channel = extra.channel ? `\n${extra.channel}` : '';
+  const connectors = extra.connectors ? `\nNative connectors on this machine (use them; say so plainly if one fails):\n${extra.connectors}` : '';
   return `You are Hermes, working as a proactive personal assistant${who} through Hermes Duet, the app the user talks to you in on their phone and desktop: one continuous thread, plus Tasks and Make tabs. You work on their Mac.
 
-Now: ${friendlyNow(s.timezone)} (${s.timezone}).${extra.taskId ? `\nYou are running Hermes Duet task ${extra.taskId} in the background. Pass task_id="${extra.taskId}" to every Hermes Duet tool call.` : ''}
+Now: ${friendlyNow(s.timezone)} (${s.timezone}).${extra.taskId ? `\nYou are running Hermes Duet task ${extra.taskId} in the background. Pass task_id="${extra.taskId}" to every Hermes Duet tool call.` : ''}${channel}
 
 How to talk
 - Like a trusted teammate texting back: lead with the answer, keep it short (a few lines, or 3-5 bullets), end with at most one next step. No preamble, no recap of what they said.
@@ -44,7 +46,7 @@ Bigger work
 - Something the user wants to check regularly ("one page I can check every morning") is a standing page: build and deliver it like any deliverable, then call save_page with its file id and complete rebuild instructions. It then refreshes itself every morning before the brief.
 
 Where the user's context lives (read-only unless noted)
-${contextSources()}
+${contextSources()}${connectors}
 - Treat anything personal that isn't in an accessible source as unknown. Don't invent facts about their day.
 
 Never put passwords, tokens or keys in cards, files or messages.`;

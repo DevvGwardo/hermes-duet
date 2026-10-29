@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { api } from '../api';
 import { Icon } from '../ui';
 
 type Tab = { id: string; title: string; url: string; active: boolean };
@@ -25,6 +26,36 @@ export function BrowserView({ onClose }: { onClose: () => void }) {
   const [url, setUrl] = useState('');
   const [urlOpen, setUrlOpen] = useState(false);
   const [tabsOpen, setTabsOpen] = useState(false);
+  const [mobile, setMobile] = useState(false);
+  const [busy, setBusy] = useState<'fill' | 'viewport' | null>(null);
+
+  /** Type the site's saved login in from 1Password or Bitwarden, so a password never has to cross the phone keyboard. */
+  const autofill = async () => {
+    setBusy('fill');
+    setNotice(null);
+    try {
+      const r = await api.autofill();
+      setNotice(`Filled the ${r.vault === '1password' ? '1Password' : 'Bitwarden'} login for ${r.host}.`);
+    } catch (e: any) {
+      setNotice(e?.message ?? 'Autofill failed.');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  /** Render the page as a 390×844 phone so responsive sites use their mobile layout. */
+  const toggleViewport = async () => {
+    setBusy('viewport');
+    try {
+      const r = await api.viewport(mobile ? 'desktop' : 'mobile');
+      setMobile(r.mode === 'mobile');
+      setNotice(r.mode === 'mobile' ? 'Phone view. Tap again for desktop.' : 'Desktop view.');
+    } catch (e: any) {
+      setNotice(e?.message ?? 'Could not change the viewport.');
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const send = useCallback((evt: Record<string, unknown>) => {
     const ws = wsRef.current;
@@ -218,6 +249,19 @@ export function BrowserView({ onClose }: { onClose: () => void }) {
         </button>
         <button className="icon-btn" aria-label="Tabs" onClick={() => setTabsOpen((v) => !v)}>
           <Icon.deck size={18} />
+        </button>
+        <button className="icon-btn" aria-label="Autofill the login with 1Password or Bitwarden" title="Autofill login" disabled={busy === 'fill'} onClick={autofill}>
+          <Icon.key size={18} />
+        </button>
+        <button
+          className={`icon-btn ${mobile ? 'on' : ''}`}
+          aria-label={mobile ? 'Switch to desktop view' : 'Switch to phone view'}
+          aria-pressed={mobile}
+          title="Phone / desktop view"
+          disabled={busy === 'viewport'}
+          onClick={toggleViewport}
+        >
+          <Icon.phone size={18} />
         </button>
         <button className="icon-btn" aria-label="Close" onClick={onClose}>
           <Icon.close size={18} />

@@ -1,17 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
 import { cardOf, isSettledAsk } from '../../shared/links';
-import { api, clearSettledNotifications, connect, isStandalone, pushSupported } from './api';
+import { api, clearSettledNotifications, connect, isStandalone, openChannel, pushSupported } from './api';
 import { isIOS } from './platform';
+import { ChannelsStrip, ChannelBar, ChannelsSheet, SearchOverlay } from './components/Channels';
 import { Composer, type ComposerHandle } from './components/Composer';
 import { BrowserView } from './components/BrowserView';
 import { MakeView } from './components/MakeView';
-import { BrandBadge, MangaBackdrop, Mascot, SpeechBubble, Wordmark } from './components/Manga';
+import { BrandBadge, Decode, MangaBackdrop, Mascot, SpeechBubble, Wordmark } from './components/Manga';
 import { Rail } from './components/Rail';
 import { SettingsSheet } from './components/SettingsSheet';
 import { TasksView } from './components/TasksView';
 import { Thread } from './components/Thread';
 import { Viewer } from './components/Viewer';
-import { useStore } from './store';
+import { getState, useStore } from './store';
 import { Icon } from './ui';
 
 type Tab = 'chat' | 'tasks' | 'make';
@@ -54,7 +55,10 @@ function useStatus() {
 function Shell() {
   const [tab, setTab] = useState<Tab>('chat');
   const [fileId, setFileId] = useState<string | null>(null);
+  const [compareId, setCompareId] = useState<string | null>(null);
   const [settings, setSettings] = useState(false);
+  const [search, setSearch] = useState(false);
+  const [channelsOpen, setChannelsOpen] = useState(false);
   const [browserOpen, setBrowserOpen] = useState(false);
   const [jump, setJump] = useState<string | null>(null);
   const [briefNote, setBriefNote] = useState<string | null>(null);
@@ -105,8 +109,13 @@ function Shell() {
   }, []);
 
   useEffect(() => {
-    // "/" jumps to the composer from anywhere, unless you're already typing or a sheet is open.
+    // "/" jumps to the composer, ⌘K / Ctrl-K opens search, from anywhere unless you're already typing.
     const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'k' && (e.metaKey || e.ctrlKey) && !e.altKey) {
+        e.preventDefault();
+        setSearch(true);
+        return;
+      }
       if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey || settings || fileId) return;
       if ((e.target as HTMLElement).closest?.('input, textarea, select, [contenteditable="true"]')) return;
       e.preventDefault();
@@ -119,12 +128,23 @@ function Shell() {
 
   const jumpTo = (id: string) => {
     setTab('chat');
+    // A card or message can live in another channel: open that one first, or the jump has nothing to scroll to.
+    const channel = getState().items.find((i) => i.id === id)?.channel_id ?? getState().pending.find((i) => i.id === id)?.channel_id;
+    if (channel && channel !== getState().channelId) openChannel(channel).catch(() => {});
     setJump(null);
     requestAnimationFrame(() => setJump(id));
   };
   const startPrompt = (p: string) => {
     setTab('chat');
     requestAnimationFrame(() => composer.current?.prefill(p));
+  };
+  const openFile = (id: string) => {
+    setCompareId(null);
+    setFileId(id);
+  };
+  const compareFile = (current: string, previous: string) => {
+    setFileId(current);
+    setCompareId(previous);
   };
   const briefNow = () =>
     api.runBrief().then(
@@ -203,6 +223,9 @@ function Shell() {
             <span className="status-dot" />
             <span className="status-text">{status.text}</span>
           </div>
+          <button className="icon-btn top-gear" onClick={() => setSearch(true)} aria-label="Search everything">
+            <Icon.search size={20} />
+          </button>
           <button className="icon-btn top-gear" onClick={() => setBrowserOpen(true)} aria-label="Live browser">
             <Icon.globe size={20} />
           </button>
@@ -233,9 +256,15 @@ function Shell() {
         )}
 
         <main className="content">
-          {tab === 'chat' && <Thread onOpenFile={setFileId} scrollToId={jump} onSuggest={startPrompt} followKey={sent} onShowTasks={() => setTab('tasks')} />}
-          {tab === 'tasks' && <TasksView onJump={jumpTo} onOpenFile={setFileId} />}
-          {tab === 'make' && <MakeView onOpenFile={setFileId} onStart={startPrompt} />}
+          {tab === 'chat' && (
+            <>
+              <ChannelsStrip onSearch={() => setSearch(true)} onManage={() => setChannelsOpen(true)} />
+              <ChannelBar />
+              <Thread onOpenFile={openFile} scrollToId={jump} onSuggest={startPrompt} followKey={sent} onShowTasks={() => setTab('tasks')} />
+            </>
+          )}
+          {tab === 'tasks' && <TasksView onJump={jumpTo} onOpenFile={openFile} />}
+          {tab === 'make' && <MakeView onOpenFile={openFile} onStart={startPrompt} onCompare={compareFile} />}
         </main>
 
         {tab === 'chat' && <Composer ref={composer} onSent={() => setSent((n) => n + 1)} />}
@@ -256,9 +285,13 @@ function Shell() {
         </nav>
       </div>
 
-      <Rail tab={tab} onJump={jumpTo} onOpenFile={setFileId} onShowTasks={() => setTab('tasks')} />
+      <Rail tab={tab} onJump={jumpTo} onOpenFile={openFile} onShowTasks={() => setTab('tasks')} />
 
-      {fileId && <Viewer fileId={fileId} onClose={() => setFileId(null)} />}
+      {fileId && <Viewer fileId={fileId} compareId={compareId} onClose={() => (setFileId(null), setCompareId(null))} />}
+      {channelsOpen && <ChannelsSheet onClose={() => setChannelsOpen(false)} />}
+      {search && (
+        <SearchOverlay onClose={() => setSearch(false)} onJump={jumpTo} onShowTasks={() => setTab('tasks')} onOpenFile={openFile} />
+      )}
       {browserOpen && <BrowserView onClose={() => setBrowserOpen(false)} />}
       {settings && <SettingsSheet onClose={() => setSettings(false)} />}
     </div>
@@ -293,9 +326,11 @@ function Pair() {
           </SpeechBubble>
         </div>
         <h1>
-          <Wordmark size="lg" />
+          <Wordmark size="lg" decode />
         </h1>
-        <p className="pair-tag">your agent, working alongside you</p>
+        <p className="pair-tag">
+          <Decode text="your agent, working alongside you" speed={55} delay={1600} loopMs={17000} hold={5} />
+        </p>
         <div className="pair-panel">
           <label htmlFor="pair-code">Pairing code</label>
           <input

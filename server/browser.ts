@@ -534,3 +534,135 @@ export function cdpUrl(): string {
 export function status(): { running: boolean; port: number; profile: string; tabs: number } {
   return { running: !!ws && ws.readyState === WebSocket.OPEN, port: DEBUG_PORT, profile: PROFILE, tabs: sessions.size };
 }
+
+// ---------------------------------------------------------------------------
+// Viewport emulation
+// ---------------------------------------------------------------------------
+
+export type ViewportMode = 'mobile' | 'desktop';
+
+/** The iPhone 14/15 logical size: sites lay themselves out for a phone instead of a desktop window. */
+export const MOBILE_VIEWPORT = { width: 390, height: 844, deviceScaleFactor: 3 };
+
+export function viewportMetrics(mode: ViewportMode) {
+  return mode === 'mobile' ? { ...MOBILE_VIEWPORT, mobile: true } : null;
+}
+
+/**
+ * Render the page as a phone or as a desktop. Mobile mode also turns on touch emulation, so a site that branches on
+ * pointer type picks its mobile layout; desktop mode clears the override entirely.
+ */
+export async function setViewport(raw: unknown): Promise<ViewportMode> {
+  const mode: ViewportMode = raw === 'mobile' ? 'mobile' : 'desktop';
+  const sessionId = active ? sessions.get(active) : undefined;
+  if (!sessionId) throw new Error('no active tab');
+  const metrics = viewportMetrics(mode);
+  if (metrics) {
+    await send('Emulation.setDeviceMetricsOverride', { ...metrics, screenOrientation: { type: 'portraitPrimary', angle: 0 } }, sessionId);
+    await send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 }, sessionId);
+    await send('Emulation.setEmitTouchEventsForMouse', { enabled: true, configuration: 'mobile' }, sessionId).catch(() => {});
+  } else {
+    await send('Emulation.clearDeviceMetricsOverride', {}, sessionId);
+    await send('Emulation.setTouchEmulationEnabled', { enabled: false }, sessionId);
+    await send('Emulation.setEmitTouchEventsForMouse', { enabled: false }, sessionId).catch(() => {});
+  }
+  return mode;
+}
+
+// ---------------------------------------------------------------------------
+// Typing into the page as if the user typed it (logins, card fields)
+// ---------------------------------------------------------------------------
+
+async function sessionId(): Promise<string> {
+  if (!active) await open().catch(() => {});
+  const id = active ? sessions.get(active) : undefined;
+  if (!id) throw new Error('no active tab');
+  return id;
+}
+
+/**
+ * Focus the first visible element matching one of `selectors` and type into it with Input.insertText, which Chrome
+ * delivers as a trusted edit. Returns false when the page has no such field (yet) instead of throwing, so a login page
+ * that is still rendering gets a clear "not found" rather than a stack trace.
+ */
+async function typeInto(sid: string, selectors: string[], value: string): Promise<boolean> {
+  const expr = `(() => {
+    const sels = ${JSON.stringify(selectors)};
+    for (const s of sels) {
+      let el = null;
+      try { el = document.querySelector(s); } catch { continue; }
+      if (!el || el.disabled || el.readOnly) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width <= 0 || r.height <= 0) continue;
+      el.focus();
+      if (typeof el.select === 'function') el.select();
+      return true;
+    }
+    return false;
+  })()`;
+  const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true }, sid);
+  if (!r?.result?.result?.value) return false;
+  await send('Input.insertText', { text: value }, sid);
+  return true;
+}
+
+const LOGIN_USER = [
+  'input[autocomplete="username"]',
+  'input[type="email"]',
+  'input[name="username"]',
+  'input[name="email"]',
+  'input[id*="username" i]',
+  'input[id*="email" i]',
+  'input[type="text"]',
+];
+const LOGIN_PASS = ['input[type="password"]', 'input[autocomplete="current-password"]', 'input[name="password"]'];
+
+/**
+ * Fill the username and password fields of the page in front of the user. They tapped a button; the credentials come
+ * from a local vault CLI and are typed straight into Chrome. Nothing is logged, echoed back, or put in a card.
+ */
+export async function fillLogin(username: string, password: string): Promise<{ user: boolean; pass: boolean }> {
+  const sid = await sessionId();
+  const user = await typeInto(sid, LOGIN_USER, username);
+  // Tab moves focus the way a person would; some pages only reveal the password step after the username is entered.
+  if (user) {
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', windowsVirtualKeyCode: 9, key: 'Tab' }, sid);
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', windowsVirtualKeyCode: 9, key: 'Tab' }, sid);
+  }
+  const pass = await typeInto(sid, LOGIN_PASS, password);
+  if (pass) {
+    // Submit, so the login actually completes without another tap on the phone.
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', windowsVirtualKeyCode: 13, key: 'Enter', text: '\r' }, sid);
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', windowsVirtualKeyCode: 13, key: 'Enter' }, sid);
+  }
+  return { user, pass };
+}
+
+const CARD_NUMBER = ['input[autocomplete="cc-number"]', 'input[name*="cardnumber" i]', 'input[name*="card_number" i]', 'input[id*="card-number" i]', 'input[name="number"]', 'input[placeholder*="card number" i]'];
+const CARD_EXPIRY = ['input[autocomplete="cc-exp"]', 'input[name*="exp" i]', 'input[id*="exp" i]', 'input[placeholder*="MM" i]'];
+const CARD_CVV = ['input[autocomplete="cc-csc"]', 'input[name*="cvc" i]', 'input[name*="cvv" i]', 'input[name*="security" i]', 'input[id*="cvc" i]', 'input[placeholder*="CVC" i]'];
+
+/**
+ * Type an issued single-use card into the checkout. The caller keeps the number only in memory and calls this
+ * immediately after issuing it; only which fields were found is reported back.
+ */
+export async function fillCard(card: { number: string; expMonth: number; expYear: number; cvv: string }): Promise<{ number: boolean; expiry: boolean; cvv: boolean }> {
+  const sid = await sessionId();
+  const exp = `${String(card.expMonth).padStart(2, '0')}/${String(card.expYear).slice(-2)}`;
+  const number = await typeInto(sid, CARD_NUMBER, card.number);
+  const expiry = await typeInto(sid, CARD_EXPIRY, exp);
+  const cvv = await typeInto(sid, CARD_CVV, card.cvv);
+  return { number, expiry, cvv };
+}
+
+/** Hostname of the page in front of the user, for looking up which login it needs. */
+export async function currentHost(): Promise<string> {
+  const sid = await sessionId();
+  const r = await send('Runtime.evaluate', { expression: 'location.href', returnByValue: true }, sid);
+  const href = String(r?.result?.result?.value ?? '');
+  try {
+    return new URL(href).hostname;
+  } catch {
+    return '';
+  }
+}

@@ -1,16 +1,24 @@
 import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, normalize } from 'node:path';
 import type { Snapshot } from '../shared/types';
+import { briefSpeech, speak, transcribeFile } from './audio';
 import { capabilities } from './capabilities';
+import { channelInput } from './channels';
 import { createPairCode, deviceCookie, deviceFor, internalToken, isHttps, redeemPairCode, sameOrigin } from './auth';
+import { listConnectors, testConnector } from './connectors';
 import { sseResponse } from './bus';
 import { config } from './config';
-import { files, items, kv, pages, settings, tasks } from './db';
+import { type AttachmentRow, attachments, channels, db, devices, files, items, kv, pages, settings, tasks, toAttachment, triggers } from './db';
 import { hermes } from './hermes';
 import { presence } from './presence';
 import { hasSubscriptions, notify, publicKey, saveSubscription } from './push';
-import { actOnCard, agentState, cancelTask, executeTool, recoverOrphans, runBrief, runCheckin, startHermesWatch, startUserTask, stopMain, stopPage, submitUser } from './runner';
+import { actOnCard, agentState, cancelTask, deliverableAction, deliverableApproval, executeTool, recoverOrphans, runBrief, runCheckin, startConnectorWatch, startHermesWatch, startUserTask, stopMain, stopPage, submitSystem, submitUser } from './runner';
+import { ftsQuery, search } from './search';
 import { startScheduler } from './scheduler';
+import { downloadsPrompt, meetingPrompt, webhookMatches, webhookPrompt, type WatchedFile } from './triggers';
+import { checkMeetings, meetingPrepEnabled, recordWebhook, startFolderWatch, webhookReady, webhookToken } from './triggers-runtime';
+import { normalizeMime, saveUpload } from './uploads';
+import { readLogin, vaults } from './vault';
 import { broadcast } from './bus';
 
 const json = (data: unknown, status = 200, headers: Record<string, string> = {}) =>
@@ -22,6 +30,24 @@ async function body<T = any>(req: Request): Promise<T> {
   const text = await req.text();
   if (text.length > 256_000) throw new Error('body too large');
   return (text ? JSON.parse(text) : {}) as T;
+}
+
+/** Refuse an oversized body before it is buffered; the upload paths check the same limit per file. */
+function tooLarge(req: Request, limit: number): boolean {
+  const n = Number(req.headers.get('content-length') ?? 0);
+  return Number.isFinite(n) && n > limit;
+}
+
+const kb = (n: number) => (n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`);
+
+/**
+ * What the agent is told about the files a message came with. Paths, not bytes: the model reads them with its own file
+ * or vision tools, so a photo never has to be base64'd through the chat transcript.
+ */
+function attachmentNote(rows: AttachmentRow[]): string {
+  if (!rows.length) return '';
+  const lines = rows.map((r) => `- ${r.path} (${r.mime}, ${kb(r.size)})${r.mime.startsWith('audio/') ? ' — a voice memo the user recorded' : ''}`);
+  return `\n\nThe user attached ${rows.length === 1 ? 'a file' : `${rows.length} files`} with this message:\n${lines.join('\n')}\nLook at them with your file or vision tools before answering.`;
 }
 
 const SECURITY_HEADERS = {
@@ -56,11 +82,39 @@ async function handleApp(req: Request, server?: any): Promise<Response> {
 
   if (!path.startsWith('/api/')) return serveStatic(path);
 
+  // Liveness for Docker, launchd and anything else watching this process. It reveals nothing and needs no pairing.
+  if (path === '/api/health' && req.method === 'GET') return json({ ok: true, at: Date.now() });
+
   if (path === '/api/pair' && req.method === 'POST') {
     const { code } = await body<{ code?: string }>(req);
     const token = await redeemPairCode(String(code ?? ''), req.headers.get('user-agent') ?? 'device');
     if (!token) return err(401, 'invalid or expired code');
     return json({ ok: true }, 200, { 'set-cookie': deviceCookie(token, isHttps(req)) });
+  }
+
+  /**
+   * Webhook ingress for GitHub, Stripe, Zapier, n8n or a plain curl. It is called by the outside world, so it cannot
+   * carry a device cookie; the unguessable token in the URL is the credential, and it is the only one accepted.
+   */
+  const hookMatch = path.match(/^\/api\/webhooks\/([\w-]{8,64})$/);
+  if (hookMatch && req.method === 'POST') {
+    if (!webhookMatches(webhookToken(), hookMatch[1])) return err(401, 'bad webhook token');
+    if (tooLarge(req, 256_000)) return err(413, 'payload too large');
+    if (!webhookReady()) return err(429, 'too many webhooks');
+    const kindRaw = url.searchParams.get('kind') ?? '';
+    let payload: unknown = null;
+    const type = req.headers.get('content-type') ?? '';
+    if (type.includes('application/json')) {
+      payload = await req.json().catch(() => null);
+    } else {
+      payload = await req.text();
+    }
+    // GitHub names its event in a header; without it the URL's ?kind= is the label, else "webhook".
+    const kind = (req.headers.get('x-github-event') ?? kindRaw ?? 'webhook').replace(/[^\w.-]/g, '').slice(0, 40) || 'webhook';
+    recordWebhook();
+    triggers.save({ id: `trigger-webhook-${kind}`, kind: 'webhook', config: { kind }, last_triggered_at: Date.now() });
+    submitSystem(`Webhook received (${kind}).`, webhookPrompt(kind, payload, Date.now(), settings.get().timezone));
+    return json({ ok: true, queued: true });
   }
 
   const device = await deviceFor(req);
@@ -77,6 +131,7 @@ async function handleApp(req: Request, server?: any): Promise<Response> {
         tasks: tasks.recent(),
         files: files.all(),
         pages: pages.all(),
+        channels: channels.all(),
         settings: settings.get(),
         agent: agentState(),
         push_enabled: hasSubscriptions(device),
@@ -85,7 +140,60 @@ async function handleApp(req: Request, server?: any): Promise<Response> {
     }
     if (path === '/api/items' && req.method === 'GET') {
       const before = url.searchParams.get('before') ?? '';
-      return json(items.before(before, 100));
+      const channel = url.searchParams.get('channel') ?? '';
+      if (channel && !channels.get(channel)) return err(404, 'no such channel');
+      return json(items.before(before, 100, channel || undefined));
+    }
+
+    // ---- topic channels (see server/channels.ts) ----
+    if (path === '/api/channels' && req.method === 'GET') return json({ channels: channels.all() });
+    if (path === '/api/channels' && req.method === 'POST') {
+      const channel = channels.create(channelInput(await body(req)));
+      broadcast({ type: 'channel', channel });
+      return json({ channel });
+    }
+    const channelMatch = path.match(/^\/api\/channels\/([\w-]+)$/);
+    if (channelMatch && req.method === 'DELETE') {
+      if (!channels.archive(channelMatch[1])) return err(404, 'no such channel');
+      broadcast({ type: 'channel_removed', id: channelMatch[1] });
+      return json({ ok: true });
+    }
+    const channelSeen = path.match(/^\/api\/channels\/([\w-]+)\/seen$/);
+    if (channelSeen && req.method === 'POST') {
+      if (!channels.get(channelSeen[1])) return err(404, 'no such channel');
+      channels.seen(channelSeen[1]);
+      return json({ ok: true });
+    }
+    const channelItems = path.match(/^\/api\/channels\/([\w-]+)\/items$/);
+    if (channelItems && req.method === 'GET') {
+      if (!channels.get(channelItems[1])) return err(404, 'no such channel');
+      const before = url.searchParams.get('before') ?? '';
+      if (before) return json(items.before(before, 100, channelItems[1]));
+      return json(items.latest(100, channelItems[1]));
+    }
+
+    // ---- global search over the thread, tasks, files and pages ----
+    if (path === '/api/search' && req.method === 'GET') {
+      const q = url.searchParams.get('q') ?? '';
+      const parsed = ftsQuery(q);
+      if (!parsed) return json({ hits: [], terms: [] });
+      return json({ hits: search(db, q, Number(url.searchParams.get('limit') ?? 20) || 20), terms: parsed.terms });
+    }
+
+    // ---- native connectors (see server/connectors.ts) ----
+    if (path === '/api/connectors' && req.method === 'GET') return json({ connectors: await listConnectors() });
+    const connectorTest = path.match(/^\/api\/connectors\/([\w-]+)\/test$/);
+    if (connectorTest && req.method === 'POST') return json({ connector: await testConnector(connectorTest[1]) });
+
+    // ---- event triggers ----
+    if (path === '/api/triggers' && req.method === 'GET') {
+      const base = config.publicUrl || `http://${req.headers.get('host') ?? `127.0.0.1:${config.port}`}`;
+      return json({
+        webhook_url: `${base.replace(/\/$/, '')}/api/webhooks/${webhookToken()}`,
+        watch_dir: config.watchDir || null,
+        meeting_lead_minutes: config.meetingLeadMinutes,
+        triggers: triggers.all(),
+      });
     }
     if (path === '/api/events' && req.method === 'GET') return sseResponse(req);
     if (path === '/api/capabilities' && req.method === 'GET') return json(await capabilities());
@@ -104,26 +212,107 @@ async function handleApp(req: Request, server?: any): Promise<Response> {
       await browser.input(evt as any);
       return json({ ok: true });
     }
+    if (path === '/api/browser/viewport' && req.method === 'POST') {
+      const { mode } = await body<{ mode?: string }>(req);
+      return json({ mode: await browser.setViewport(mode) });
+    }
+    if (path === '/api/browser/vaults' && req.method === 'GET') return json({ vaults: await vaults() });
+    if (path === '/api/browser/autofill' && req.method === 'POST') {
+      const { provider } = await body<{ provider?: string }>(req);
+      const which = provider === '1password' || provider === 'bitwarden' ? provider : undefined;
+      let host = '';
+      try {
+        host = await browser.currentHost();
+        const login = await readLogin(host, which);
+        try {
+          const filled = await browser.fillLogin(login.username, login.password);
+          if (!filled.pass) return err(400, `Found the ${login.vault} login for ${host}, but there is no password field on the page.`);
+          return json({ host, vault: login.vault, filled });
+        } finally {
+          // The credentials live no longer than this request.
+          login.password = '';
+        }
+      } catch (e: any) {
+        return err(400, e?.message ?? 'Autofill failed');
+      }
+    }
 
     if (path === '/api/messages' && req.method === 'POST') {
-      const { text } = await body<{ text?: string }>(req);
-      const t = String(text ?? '').trim();
+      const { text, channel_id, attachment_ids } = await body<{ text?: string; channel_id?: string; attachment_ids?: string[] }>(req);
+      const ids = Array.isArray(attachment_ids) ? attachment_ids.slice(0, 6).map(String) : [];
+      if (attachment_ids && !Array.isArray(attachment_ids)) return err(400, 'attachment_ids must be a list');
+      const rows = ids.map((id) => attachments.get(id)).filter((r): r is AttachmentRow => !!r);
+      if (rows.length !== ids.length) return err(400, 'unknown attachment');
+      const t = String(text ?? '').trim() || (rows.length ? 'Here’s a file.' : '');
       if (!t) return err(400, 'empty message');
       if (t.length > 20_000) return err(400, 'message too long');
-      return json({ item: submitUser(t) });
+      const note = attachmentNote(rows);
+      const item = submitUser(t, note ? `${t}${note}` : undefined, channel_id, rows.map(toAttachment));
+      if (rows.length) attachments.link(ids, item.id);
+      return json({ item });
     }
     if (path === '/api/tasks' && req.method === 'POST') {
-      const { text } = await body<{ text?: string }>(req);
+      const { text, channel_id } = await body<{ text?: string; channel_id?: string }>(req);
       const t = String(text ?? '').trim();
       if (!t) return err(400, 'empty message');
       if (t.length > 20_000) return err(400, 'message too long');
-      return json(startUserTask(t));
+      return json(startUserTask(t, channel_id));
+    }
+
+    // ---- uploads, voice memos and spoken briefs (see server/uploads.ts, server/audio.ts) ----
+    if (path === '/api/uploads' && req.method === 'POST') {
+      if (tooLarge(req, 40 * 1024 * 1024)) return err(413, 'that file is too large');
+      const form = await req.formData().catch(() => null);
+      const file = form?.get('file');
+      if (!(file instanceof File)) return err(400, 'send the file in a "file" field');
+      const listed = form?.get('mime');
+      const mime = normalizeMime(listed ? String(listed) : file.type);
+      return json({ attachment: saveUpload({ bytes: new Uint8Array(await file.arrayBuffer()), mime, filename: String(form?.get('name') ?? file.name) }) });
+    }
+    const uploadMatch = path.match(/^\/api\/uploads\/([\w-]+)$/);
+    if (uploadMatch && req.method === 'GET') return serveUpload(uploadMatch[1]);
+
+    if (path === '/api/audio/transcribe' && req.method === 'POST') {
+      if (tooLarge(req, 40 * 1024 * 1024)) return err(413, 'that recording is too large');
+      let bytes: Uint8Array;
+      let mime: string;
+      if ((req.headers.get('content-type') ?? '').includes('multipart/form-data')) {
+        const form = await req.formData().catch(() => null);
+        const file = form?.get('audio') ?? form?.get('file');
+        if (!(file instanceof File)) return err(400, 'send the recording in an "audio" field');
+        bytes = new Uint8Array(await file.arrayBuffer());
+        mime = normalizeMime(file.type);
+      } else {
+        bytes = new Uint8Array(await req.arrayBuffer());
+        mime = normalizeMime(req.headers.get('content-type'));
+      }
+      if (!mime.startsWith('audio/')) return err(400, 'send an audio recording');
+      // The memo is kept even when transcription is unavailable, so it can be replayed and retried later.
+      const attachment = saveUpload({ bytes, mime, filename: 'Voice memo' });
+      const row = attachments.get(attachment.id)!;
+      try {
+        const text = await transcribeFile(row.path);
+        return json({ text, attachment });
+      } catch (e: any) {
+        return json({ error: e?.message ?? 'Transcription failed', attachment, text: '' }, 503);
+      }
+    }
+
+    // "Listen" on the morning brief: synthesized once, then served from data/tts.
+    const briefAudio = path.match(/^\/api\/brief\/([\w-]+)\/audio$/);
+    if (briefAudio && req.method === 'GET') {
+      const item = items.get(briefAudio[1]);
+      if (!item?.card || item.card.type !== 'brief') return err(404, 'no such brief');
+      const clip = await speak(briefSpeech(item.card));
+      return new Response(Bun.file(clip.path), {
+        headers: { 'content-type': clip.mime, 'cache-control': 'private, max-age=3600', 'x-content-type-options': 'nosniff' },
+      });
     }
 
     const cardMatch = path.match(/^\/api\/cards\/([\w-]+)\/act$/);
     if (cardMatch && req.method === 'POST') {
       const { action, value } = await body<{ action?: string; value?: string }>(req);
-      const item = actOnCard(cardMatch[1], String(action ?? ''), value);
+      const item = await actOnCard(cardMatch[1], String(action ?? ''), value);
       return json({ item });
     }
 
@@ -144,6 +333,19 @@ async function handleApp(req: Request, server?: any): Promise<Response> {
 
     const fileMatch = path.match(/^\/api\/files\/([\w-]+)$/);
     if (fileMatch && req.method === 'GET') return await serveFile(fileMatch[1], url.searchParams.has('download'));
+
+    // ---- interactive deliverables: buttons inside a delivered dashboard ----
+    const deliverable = path.match(/^\/api\/deliverables\/([\w-]+)\/(action|approval)$/);
+    if (deliverable && req.method === 'POST') {
+      const file = files.get(deliverable[1]);
+      if (!file) return err(404, 'no such file');
+      const bodyIn = await body<Record<string, unknown>>(req);
+      if (deliverable[2] === 'approval') {
+        const item = deliverableApproval(file.entry, bodyIn);
+        return json({ item });
+      }
+      return json({ item: deliverableAction(file.entry, bodyIn) });
+    }
 
     if (path === '/api/settings' && req.method === 'PUT') {
       const next = settings.update(await body(req));
@@ -183,6 +385,46 @@ async function handleApp(req: Request, server?: any): Promise<Response> {
 // Links within the same page (#section) still scroll in place.
 const LINK_SHIM = `<script>addEventListener('click',function(e){var a=e.target instanceof Element&&e.target.closest('a[href]');if(!a||(a.target&&a.target!=='_self'))return;var u=new URL(a.href,location.href);if(!/^https?:$/.test(u.protocol)||u.href.split('#')[0]===location.href.split('#')[0])return;a.target='_blank';a.rel='noopener'},true)</script>`;
 
+/**
+ * The bridge every delivered HTML file gets: a dashboard the agent built can call back into Duet from its own
+ * buttons. The frame is sandboxed without same-origin, so it can only post a message; the app decides what a message
+ * means (a user turn, or an approval card) and the payload is validated there. Actions are lowercase identifiers and
+ * payloads are plain data, so nothing here can become a URL or a command.
+ */
+const DELIVERABLE_BRIDGE = `<script>(function(){
+  function post(kind,data){try{parent.postMessage({type:'duet_'+kind,data:data},'*')}catch(e){}}
+  window.Duet={
+    version:1,
+    sendAction:function(action,payload){
+      var name=String(action==null?'':action).slice(0,64);
+      if(!name)return;
+      post('action',{action:name,payload:payload===undefined?null:payload});
+    },
+    requestApproval:function(data){
+      var d=data||{};
+      post('approval',{title:String(d.title||'').slice(0,140),summary:String(d.summary||'').slice(0,4000),action_label:String(d.action_label||'').slice(0,30)});
+    }
+  };
+  document.documentElement.setAttribute('data-duet','1');
+})()</script>`;
+
+/**
+ * An upload is served inline for the thread's thumbnails and the voice memo player, but sandboxed: an SVG is markup,
+ * and it must never run script with this app's origin and cookie behind it.
+ */
+async function serveUpload(id: string): Promise<Response> {
+  const row = attachments.get(id);
+  if (!row || !existsSync(row.path)) return err(404, 'file not found');
+  return new Response(Bun.file(row.path), {
+    headers: {
+      'content-type': row.mime,
+      'cache-control': 'private, max-age=3600',
+      'x-content-type-options': 'nosniff',
+      'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+    },
+  });
+}
+
 async function serveFile(id: string, download: boolean): Promise<Response> {
   const f = files.get(id);
   if (!f || !existsSync(f.path)) return err(404, 'file not found');
@@ -191,10 +433,10 @@ async function serveFile(id: string, download: boolean): Promise<Response> {
     'cache-control': 'private, max-age=300',
     'x-content-type-options': 'nosniff',
     // Agent-made HTML runs in an opaque origin: scripts yes, cookies/API access no. Tabs it opens are ordinary pages.
-    'content-security-policy': 'sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox allow-downloads; frame-ancestors \'self\'',
+    'content-security-policy': 'sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox allow-downloads allow-modals; frame-ancestors \'self\'',
   };
   if (download) headers['content-disposition'] = `attachment; filename="${f.entry.name.replace(/["\\\r\n]/g, '_')}"`;
-  else if (f.entry.mime === 'text/html') return new Response((await Bun.file(f.path).text()) + LINK_SHIM, { headers });
+  else if (f.entry.mime === 'text/html') return new Response((await Bun.file(f.path).text()) + LINK_SHIM + DELIVERABLE_BRIDGE, { headers });
   return new Response(Bun.file(f.path), { headers });
 }
 
@@ -250,6 +492,36 @@ async function doctor() {
   return { ok: checks.every((c) => c.ok || c.info), checks };
 }
 
+/**
+ * The event loops that need the database and the runner: a new file in the watched folder, and a meeting about to
+ * start. Both stay quiet during quiet hours and both land in the general channel, where the user already looks.
+ */
+function startTriggerLoops() {
+  const home = (p: string) => p.replace(/^\/Users\/[^/]+/, '~');
+  if (config.watchDir) {
+    startFolderWatch(async (fresh: WatchedFile[]) => {
+      const label = fresh.length === 1 ? `New file in ${home(config.watchDir)}` : `${fresh.length} new files in ${home(config.watchDir)}`;
+      submitSystem(`${label}: ${fresh.map((f) => f.name).join(', ').slice(0, 160)}`, downloadsPrompt(fresh));
+    });
+  }
+
+  // Calendar probes are AppleScript, so they run every couple of minutes at most, never on the 30s scheduler tick.
+  let lastCalendar = 0;
+  setInterval(async () => {
+    if (!meetingPrepEnabled() || Date.now() - lastCalendar < 120_000) return;
+    lastCalendar = Date.now();
+    try {
+      const tz = settings.get().timezone;
+      await checkMeetings((e, now) => {
+        const minutes = Math.max(1, Math.round((e.start - now) / 60_000));
+        submitSystem(`“${e.title}” starts in ${minutes} minute${minutes === 1 ? '' : 's'}.`, meetingPrompt(e, now, tz));
+      });
+    } catch {
+      // A denied or slow Calendar is already reported by the connectors list; the loop just waits for next time.
+    }
+  }, 60_000);
+}
+
 // ---------- internal server (loopback only: MCP shim + CLI) ----------
 const INTERNAL = internalToken();
 const tokenFile = join(config.dataDir, 'internal.token');
@@ -269,6 +541,12 @@ async function handleInternal(req: Request): Promise<Response> {
     }
     if (url.pathname === '/internal/pair' && req.method === 'POST') return json(createPairCode());
     if (url.pathname === '/internal/status' && req.method === 'GET') return json({ agent: agentState(), settings: settings.get() });
+    if (url.pathname === '/internal/devices' && req.method === 'GET') return json({ devices: devices.all() });
+    const revokeMatch = url.pathname.match(/^\/internal\/devices\/([\w-]+)\/revoke$/);
+    if (revokeMatch && req.method === 'POST') {
+      // A lost or replaced phone: its cookie stops working and it stops receiving pushes.
+      return devices.revoke(revokeMatch[1]) ? json({ ok: true }) : err(404, 'no such device');
+    }
     if (url.pathname === '/internal/doctor' && req.method === 'GET') return json(await doctor());
     if (url.pathname === '/internal/brief' && req.method === 'POST') {
       runBrief('manual');
@@ -363,5 +641,22 @@ Bun.serve({ hostname: '127.0.0.1', port: config.internalPort, fetch: handleInter
 
 recoverOrphans();
 startHermesWatch();
+startConnectorWatch();
 startScheduler();
+startTriggerLoops();
 console.log(`[hermes-duet] app http://${config.host}:${config.port}  internal http://127.0.0.1:${config.internalPort}  hermes ${config.hermesUrl}`);
+
+// launchd sends SIGTERM on stop and restart. Closing the database checkpoints the WAL, so a restart never depends on
+// recovery picking up a half-written file; runs that were in flight are reattached by recoverOrphans on the next boot.
+let closing = false;
+function shutdown(signal: string) {
+  if (closing) return;
+  closing = true;
+  console.log(`[hermes-duet] ${signal}: shutting down`);
+  try {
+    db.close();
+  } catch {}
+  process.exit(0);
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

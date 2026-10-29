@@ -1,9 +1,11 @@
 import { Database } from 'bun:sqlite';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import type { FileEntry, Item, Page, Settings, Task } from '../shared/types';
+import { type Attachment, type Channel, type FileEntry, type Item, type Page, type Settings, type Task, attachmentKind } from '../shared/types';
+import { type ChannelInput, slugFor } from './channels';
 import { config } from './config';
 import { lockDownDataDir } from './permissions';
+import { GENERAL_CHANNEL, applySchema } from './schema';
 
 mkdirSync(config.dataDir, { recursive: true });
 lockDownDataDir(config.dataDir);
@@ -11,31 +13,7 @@ export const db = new Database(join(config.dataDir, 'duet.db'), { create: true }
 db.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;');
 lockDownDataDir(config.dataDir);
 
-db.exec(`
-CREATE TABLE IF NOT EXISTS items (
-  id TEXT PRIMARY KEY, kind TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
-  run_id TEXT, task_id TEXT, json TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS items_created ON items(created_at, id);
-CREATE TABLE IF NOT EXISTS tasks (
-  id TEXT PRIMARY KEY, status TEXT NOT NULL, session_id TEXT, created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL, json TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS files (
-  id TEXT PRIMARY KEY, path TEXT NOT NULL, created_at INTEGER NOT NULL, json TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS runs (
-  id TEXT PRIMARY KEY, kind TEXT NOT NULL, session_id TEXT NOT NULL, task_id TEXT, status TEXT NOT NULL,
-  started_at INTEGER NOT NULL, ended_at INTEGER, error TEXT, meta TEXT
-);
-CREATE TABLE IF NOT EXISTS pages (id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, json TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS devices (
-  id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, name TEXT, created_at INTEGER NOT NULL, last_seen INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS push_subs (endpoint TEXT PRIMARY KEY, json TEXT NOT NULL, device_id TEXT, created_at INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS pair_codes (code TEXT PRIMARY KEY, expires_at INTEGER NOT NULL);
-`);
+applySchema(db);
 
 let lastTs = 0;
 let seq = 0;
@@ -58,29 +36,154 @@ const kvSet = db.query('INSERT INTO kv(key, value) VALUES (?, ?) ON CONFLICT(key
 export const kv = {
   get<T>(key: string, fallback: T): T {
     const row = kvGet.get(key);
-    return row ? (JSON.parse(row.value) as T) : fallback;
+    if (!row) return fallback;
+    try {
+      return JSON.parse(row.value) as T;
+    } catch {
+      // settings.get and mainSessionId both read through here, so one corrupt value must not take the server down.
+      console.error('[db] corrupt kv value for', key);
+      return fallback;
+    }
   },
   set(key: string, value: unknown) {
     kvSet.run(key, JSON.stringify(value));
   },
 };
 
+// ---------- channels ----------
+export interface ChannelRow extends Channel {
+  seen_at?: number;
+  archived_at?: number | null;
+}
+
+/** The Hermes session behind the general channel: the long-lived thread the app opens first. */
+function createMainSession(): string {
+  const id = `duet-main-${newId()}`;
+  kv.set('main_session', id);
+  return id;
+}
+
+const channelGet = db.query<ChannelRow, [string]>(
+  'SELECT id, name, slug, topic, session_id, seen_at, archived_at, created_at, updated_at FROM channels WHERE id = ?',
+);
+const channelAll = db.query<ChannelRow, [string]>(
+  `SELECT c.id, c.name, c.slug, c.topic, c.session_id, c.seen_at, c.archived_at, c.created_at, c.updated_at,
+          (SELECT MAX(i.created_at) FROM items i WHERE i.channel_id = c.id) AS last_at
+   FROM channels c WHERE c.archived_at IS NULL
+   ORDER BY CASE WHEN c.id = ? THEN 0 ELSE 1 END, coalesce(last_at, c.created_at) DESC`,
+);
+const channelBySlug = db.query<ChannelRow, [string]>('SELECT * FROM channels WHERE slug = ?');
+const channelInsert = db.query(
+  'INSERT INTO channels(id, name, slug, topic, session_id, seen_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+);
+const channelTouch = db.query('UPDATE channels SET name = ?, topic = ?, archived_at = NULL, updated_at = ? WHERE id = ?');
+const channelArchive = db.query('UPDATE channels SET archived_at = ?, updated_at = ? WHERE id = ?');
+const channelSeen = db.query('UPDATE channels SET seen_at = ? WHERE id = ?');
+
+export const channels = {
+  /**
+   * The general channel, created on first use. Its Hermes session is the install's main session, so an existing
+   * checkout keeps its history after the channels migration instead of starting a new thread.
+   */
+  general(): ChannelRow {
+    const row = channelGet.get(GENERAL_CHANNEL);
+    if (row) return row;
+    const session = kv.get<string>('main_session', '') || createMainSession();
+    const now = Date.now();
+    channelInsert.run(GENERAL_CHANNEL, 'general', 'general', 'Everything that is not a project of its own', session, null, now, now);
+    return channelGet.get(GENERAL_CHANNEL)!;
+  },
+  all(): ChannelRow[] {
+    channels.general();
+    return channelAll.all(GENERAL_CHANNEL);
+  },
+  get(id: string): ChannelRow | null {
+    return channelGet.get(id) ?? null;
+  },
+  bySlug(slug: string): ChannelRow | null {
+    return channelBySlug.get(slug) ?? null;
+  },
+  /**
+   * Create a channel, or bring back one that was archived under the same slug: the old session still has the
+   * history, so un-archiving is what the user means by reusing a name.
+   */
+  create(input: ChannelInput): ChannelRow {
+    const now = Date.now();
+    const slug = slugFor(input.name);
+    const existing = channels.bySlug(slug);
+    if (existing) {
+      channelTouch.run(input.name, input.topic ?? null, now, existing.id);
+      return channelGet.get(existing.id)!;
+    }
+    const id = `chan-${slug}-${newId().slice(-4)}`;
+    channelInsert.run(id, input.name, slug, input.topic ?? null, `duet-channel-${slug}`, null, now, now);
+    return channelGet.get(id)!;
+  },
+  archive(id: string): boolean {
+    if (id === GENERAL_CHANNEL) throw new Error('the general channel cannot be archived');
+    if (!channelGet.get(id)) return false;
+    channelArchive.run(Date.now(), Date.now(), id);
+    return true;
+  },
+  /** Mark a channel read up to now; called when the app opens it. */
+  seen(id: string) {
+    channelSeen.run(Date.now(), id);
+  },
+  /**
+   * Which channel an agent session belongs to. Background task sessions are not channels, so they fall back to
+   * general: their result and handover card belong in the thread the user talks in.
+   */
+  bySession(sessionId: string): ChannelRow | null {
+    return db.query<ChannelRow, [string]>('SELECT * FROM channels WHERE session_id = ?').get(sessionId) ?? null;
+  },
+  /** The channel a task's cards and handover belong to (tasks inherit the channel they were started from). */
+  forTask(task: Task | null | undefined): string {
+    return task?.channel_id && channels.get(task.channel_id) ? task.channel_id : GENERAL_CHANNEL;
+  },
+};
+
+// ---------- full-text index for tasks, files and pages ----------
+const ftsAssetDelete = db.query('DELETE FROM fts_assets WHERE ref_id = ?');
+const ftsAssetInsert = db.query('INSERT INTO fts_assets(ref_id, kind, title, body) VALUES (?, ?, ?, ?)');
+export const searchIndex = {
+  put(refId: string, kind: 'task' | 'file' | 'page', title: string, body: string) {
+    ftsAssetDelete.run(refId);
+    ftsAssetInsert.run(refId, kind, title, body);
+  },
+  remove(refId: string) {
+    ftsAssetDelete.run(refId);
+  },
+};
+
 // ---------- items ----------
+// `channel_id` is a real column so a channel's page is one index scan; the full item stays in `json`.
 const itemUpsert = db.query(
-  `INSERT INTO items(id, kind, created_at, updated_at, run_id, task_id, json) VALUES ($id, $kind, $created_at, $updated_at, $run_id, $task_id, $json)
-   ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at, run_id = excluded.run_id, task_id = excluded.task_id, json = excluded.json`,
+  `INSERT INTO items(id, kind, created_at, updated_at, run_id, task_id, channel_id, json)
+   VALUES ($id, $kind, $created_at, $updated_at, $run_id, $task_id, $channel_id, $json)
+   ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at, run_id = excluded.run_id, task_id = excluded.task_id,
+     channel_id = excluded.channel_id, json = excluded.json`,
 );
 const itemGet = db.query<{ json: string }, [string]>('SELECT json FROM items WHERE id = ?');
 const itemsLatest = db.query<{ json: string }, [number]>('SELECT json FROM items ORDER BY created_at DESC, id DESC LIMIT ?');
+const itemsLatestIn = db.query<{ json: string }, [string, number]>(
+  'SELECT json FROM items WHERE channel_id = ? ORDER BY created_at DESC, id DESC LIMIT ?',
+);
 const itemsBefore = db.query<{ json: string }, [number, number, string, number]>(
   'SELECT json FROM items WHERE created_at < ? OR (created_at = ? AND id < ?) ORDER BY created_at DESC, id DESC LIMIT ?',
+);
+const itemsBeforeIn = db.query<{ json: string }, [string, number, number, string, number]>(
+  'SELECT json FROM items WHERE channel_id = ? AND (created_at < ? OR (created_at = ? AND id < ?)) ORDER BY created_at DESC, id DESC LIMIT ?',
 );
 const itemsPending = db.query<{ json: string }, []>(
   `SELECT json FROM items WHERE kind = 'card' AND json_extract(json, '$.card.status') = 'pending' ORDER BY created_at`,
 );
+const itemsPendingIn = db.query<{ json: string }, [string]>(
+  `SELECT json FROM items WHERE kind = 'card' AND channel_id = ? AND json_extract(json, '$.card.status') = 'pending' ORDER BY created_at`,
+);
 const itemsBriefsSince = db.query<{ json: string }, [number]>(
   `SELECT json FROM items WHERE kind = 'card' AND json_extract(json, '$.card.type') = 'brief' AND created_at >= ? ORDER BY created_at`,
 );
+const itemsChannel = db.query('UPDATE items SET channel_id = ? WHERE id = ?');
 
 export const items = {
   save(item: Item) {
@@ -91,32 +194,90 @@ export const items = {
       $updated_at: item.updated_at,
       $run_id: item.run_id ?? null,
       $task_id: item.task_id ?? null,
+      $channel_id: item.channel_id ?? GENERAL_CHANNEL,
       $json: JSON.stringify(item),
     });
+    return item;
+  },
+  /** Move an existing item into a channel (a task's cards follow it when it hands over). */
+  setChannel(id: string, channelId: string) {
+    const item = items.get(id);
+    if (!item || item.channel_id === channelId) return item;
+    item.channel_id = channelId;
+    items.save(item);
     return item;
   },
   get(id: string): Item | null {
     const row = itemGet.get(id);
     return row ? (JSON.parse(row.json) as Item) : null;
   },
-  latest(limit: number): { items: Item[]; has_more: boolean } {
-    const rows = itemsLatest.all(limit + 1).map((r) => JSON.parse(r.json) as Item);
+  /** Newest page of the thread, whole install when `channelId` is omitted. */
+  latest(limit: number, channelId?: string): { items: Item[]; has_more: boolean } {
+    const rows = (channelId ? itemsLatestIn.all(channelId, limit + 1) : itemsLatest.all(limit + 1)).map((r) => JSON.parse(r.json) as Item);
     return { items: rows.slice(0, limit).reverse(), has_more: rows.length > limit };
   },
-  before(id: string, limit: number): { items: Item[]; has_more: boolean } {
+  before(id: string, limit: number, channelId?: string): { items: Item[]; has_more: boolean } {
     const ref = items.get(id);
     if (!ref) return { items: [], has_more: false };
-    const rows = itemsBefore.all(ref.created_at, ref.created_at, ref.id, limit + 1).map((r) => JSON.parse(r.json) as Item);
+    const rows = (
+      channelId
+        ? itemsBeforeIn.all(channelId, ref.created_at, ref.created_at, ref.id, limit + 1)
+        : itemsBefore.all(ref.created_at, ref.created_at, ref.id, limit + 1)
+    ).map((r) => JSON.parse(r.json) as Item);
     return { items: rows.slice(0, limit).reverse(), has_more: rows.length > limit };
   },
-  pendingCards(): Item[] {
-    return itemsPending.all().map((r) => JSON.parse(r.json) as Item);
+  pendingCards(channelId?: string): Item[] {
+    return (channelId ? itemsPendingIn.all(channelId) : itemsPending.all()).map((r) => JSON.parse(r.json) as Item);
   },
   /** Brief cards (morning and check-in) posted at or after `since`, oldest first. */
   briefsSince(since: number): Item[] {
     return itemsBriefsSince.all(since).map((r) => JSON.parse(r.json) as Item);
   },
+  channelOf(id: string): string {
+    return items.get(id)?.channel_id ?? GENERAL_CHANNEL;
+  },
 };
+
+// ---------- attachments ----------
+const attachmentInsert = db.query(
+  'INSERT INTO attachments(id, item_id, filename, mime, size, path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+);
+const attachmentGet = db.query<AttachmentRow, [string]>(
+  'SELECT id, item_id, filename, mime, size, path, created_at FROM attachments WHERE id = ?',
+);
+const attachmentLink = db.query('UPDATE attachments SET item_id = ? WHERE id = ?');
+export interface AttachmentRow {
+  id: string;
+  filename: string;
+  mime: string;
+  size: number;
+  path: string;
+  item_id: string | null;
+  created_at: number;
+}
+export const attachments = {
+  add(row: { id: string; filename: string; mime: string; size: number; path: string }): AttachmentRow {
+    const created_at = Date.now();
+    attachmentInsert.run(row.id, null, row.filename, row.mime, row.size, row.path, created_at);
+    return { ...row, item_id: null, created_at };
+  },
+  get(id: string): AttachmentRow | null {
+    return attachmentGet.get(id) ?? null;
+  },
+  /** Record which message carried each upload, so it can be listed and cleaned up with the thread. */
+  link(ids: string[], itemId: string) {
+    for (const id of ids) attachmentLink.run(itemId, id);
+  },
+};
+
+export const toAttachment = (r: AttachmentRow): Attachment => ({
+  id: r.id,
+  name: r.filename,
+  mime: r.mime,
+  size: r.size,
+  kind: attachmentKind(r.mime),
+  created_at: r.created_at,
+});
 
 // ---------- tasks ----------
 const taskUpsert = db.query(
@@ -139,6 +300,7 @@ export const tasks = {
       $updated_at: task.updated_at,
       $json: JSON.stringify(task),
     });
+    searchIndex.put(task.id, 'task', task.title, [task.result, task.progress, task.instructions].filter(Boolean).join('\n'));
     return task;
   },
   get(id: string): Task | null {
@@ -161,6 +323,7 @@ const fileUpdate = db.query('UPDATE files SET json = ? WHERE id = ?');
 export const files = {
   add(entry: FileEntry, path: string) {
     fileInsert.run(entry.id, path, entry.created_at, JSON.stringify(entry));
+    searchIndex.put(entry.id, 'file', entry.title, entry.name);
     return entry;
   },
   update(entry: FileEntry) {
@@ -184,6 +347,7 @@ export const pages = {
   save(page: Page) {
     page.updated_at = Date.now();
     pageUpsert.run(page.id, page.created_at, JSON.stringify(page));
+    searchIndex.put(page.id, 'page', page.title, page.instructions);
     return page;
   },
   get(id: string): Page | null {
@@ -195,6 +359,7 @@ export const pages = {
   },
   remove(id: string) {
     db.query('DELETE FROM pages WHERE id = ?').run(id);
+    searchIndex.remove(id);
   },
 };
 
@@ -226,12 +391,69 @@ export const runs = {
   end(id: string, status: string, error?: string) {
     db.query('UPDATE runs SET status = ?, ended_at = ?, error = ? WHERE id = ?').run(status, Date.now(), error ?? null, id);
   },
+  /** Close a run that is still marked running, leaving one that already ended with its real outcome. */
+  abandon(id: string, error: string) {
+    db.query(`UPDATE runs SET status = 'error', ended_at = ?, error = ? WHERE id = ? AND status = 'running'`).run(Date.now(), error, id);
+  },
   recentFor(sessionId: string, limit: number): { id: string }[] {
     return db.query<{ id: string }, [string, number]>('SELECT id FROM runs WHERE session_id = ? ORDER BY started_at DESC LIMIT ?').all(sessionId, limit);
   },
   /** Runs left 'running' by a crash or restart. */
   orphaned(): RunRow[] {
     return db.query<RunRow, []>(`SELECT id, kind, session_id, task_id, status, started_at, meta FROM runs WHERE status = 'running'`).all();
+  },
+};
+
+// ---------- devices ----------
+export interface DeviceRow {
+  id: string;
+  name: string | null;
+  created_at: number;
+  last_seen: number;
+}
+const devicesAll = db.query<DeviceRow, []>('SELECT id, name, created_at, last_seen FROM devices ORDER BY created_at');
+const deviceGet = db.query<{ id: string }, [string]>('SELECT id FROM devices WHERE id = ?');
+const deviceDelete = db.query('DELETE FROM devices WHERE id = ?');
+const subsDeleteForDevice = db.query('DELETE FROM push_subs WHERE device_id = ?');
+export const devices = {
+  all(): DeviceRow[] {
+    return devicesAll.all();
+  },
+  /** Forget a paired device: its cookie stops working and its pushes stop being sent. */
+  revoke(id: string): boolean {
+    if (!deviceGet.get(id)) return false;
+    subsDeleteForDevice.run(id);
+    deviceDelete.run(id);
+    return true;
+  },
+};
+
+// ---------- triggers ----------
+export interface TriggerRow {
+  id: string;
+  kind: string;
+  config_json: string;
+  enabled: number;
+  last_triggered_at: number | null;
+  created_at: number;
+}
+const triggerAll = db.query<TriggerRow, []>('SELECT id, kind, config_json, enabled, last_triggered_at, created_at FROM triggers ORDER BY created_at');
+const triggerUpsert = db.query(
+  `INSERT INTO triggers(id, kind, config_json, enabled, last_triggered_at, created_at) VALUES (?, ?, ?, ?, ?, ?)
+   ON CONFLICT(id) DO UPDATE SET config_json = excluded.config_json, enabled = excluded.enabled, last_triggered_at = excluded.last_triggered_at`,
+);
+const triggerTouch = db.query('UPDATE triggers SET last_triggered_at = ? WHERE id = ?');
+export const triggers = {
+  all(): TriggerRow[] {
+    return triggerAll.all();
+  },
+  /** Record a trigger's state (a webhook's name, a watched folder) so it survives restarts. */
+  save(row: { id: string; kind: string; config: unknown; enabled?: boolean; last_triggered_at?: number | null; created_at?: number }) {
+    triggerUpsert.run(row.id, row.kind, JSON.stringify(row.config), row.enabled === false ? 0 : 1, row.last_triggered_at ?? null, row.created_at ?? Date.now());
+    return row;
+  },
+  touch(id: string, at = Date.now()) {
+    triggerTouch.run(at, id);
   },
 };
 
@@ -267,3 +489,6 @@ export const settings = {
     return next;
   },
 };
+
+// Create the general channel at boot so the app, the CLI and the webhooks all have somewhere to put things.
+channels.general();

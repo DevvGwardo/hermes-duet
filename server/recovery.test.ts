@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { CardData, Item, ToolStep } from '../shared/types';
 import { decisionPrompt } from './prompts';
-import { RETRY_OPTIONS, TIMED_OUT, failedTurnBody, lastDone, movedOn, resumeCardBody, retryTitle, runHung } from './recovery';
+import { RESUME_OPTIONS, RETRY_OPTIONS, TIMED_OUT, failedTurnBody, lastDone, movedOn, resumeCardBody, retryTitle, runHung } from './recovery';
 
 const step = (id: string, status: ToolStep['status'], label?: string): ToolStep => ({ id, name: `tool_${id}`, label, status, started_at: 1 });
 
@@ -78,4 +78,13 @@ describe('hung-run watchdog', () => {
   test('a run paused on a Hermes prompt is waiting on the user, however long', () => {
     expect(runHung({ lastEventAt: 0, waitingOnUser: true }, 10 * limit, limit)).toBe(false);
   });
+});
+
+test('every recovery card offers a way forward and a way out', () => {
+  for (const options of [RESUME_OPTIONS, RETRY_OPTIONS]) {
+    expect(options).toHaveLength(2);
+    expect(options).toContain('Leave it');
+  }
+  expect(RESUME_OPTIONS[0]).toBe('Pick it up');
+  expect(RETRY_OPTIONS[0]).toBe('Try again');
 });

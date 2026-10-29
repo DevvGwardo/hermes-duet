@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { settledNotifications } from '../shared/links';
+import { cardOf, isSettledAsk, settledNotifications } from '../shared/links';
 import type { CardData, Item } from '../shared/types';
 
 const card = (id: string, type: CardData['type'], status: CardData['status']) =>
@@ -42,5 +42,36 @@ describe('settledNotifications', () => {
 
   test('reads a settled card linked only by URL (an older push without card_id)', () => {
     expect(settledNotifications(notes({ url: '/?card=answered' }), (id) => cards.get(id))).toHaveLength(1);
+  });
+});
+
+describe('cardOf', () => {
+  test('prefers card_id and falls back to the ?card= param', () => {
+    expect(cardOf({ card_id: 'a', url: '/?card=b' })).toBe('a');
+    expect(cardOf({ url: 'https://duet.example/?card=brief' })).toBe('brief');
+    expect(cardOf({ url: '/?x=1&card=q2#frag' })).toBe('q2');
+  });
+
+  test('yields null when no card is named', () => {
+    expect(cardOf({})).toBeNull();
+    expect(cardOf({ card_id: null, url: null })).toBeNull();
+    expect(cardOf({ url: '/?x=1' })).toBeNull();
+  });
+});
+
+describe('isSettledAsk', () => {
+  test('pending approvals and questions still wait on the user', () => {
+    expect(isSettledAsk(card('a', 'approval', 'pending'))).toBe(false);
+    expect(isSettledAsk(card('q', 'choice', 'pending'))).toBe(false);
+  });
+
+  test('decided asks are settled; notes and briefs never are', () => {
+    expect(isSettledAsk(card('a', 'approval', 'approved'))).toBe(true);
+    expect(isSettledAsk(card('d', 'approval', 'declined'))).toBe(true);
+    expect(isSettledAsk(card('q', 'choice', 'answered'))).toBe(true);
+    expect(isSettledAsk(card('x', 'choice', 'expired'))).toBe(true);
+    expect(isSettledAsk(card('n', 'note', 'info'))).toBe(false);
+    expect(isSettledAsk(card('b', 'brief', 'info'))).toBe(false);
+    expect(isSettledAsk(undefined)).toBe(false);
   });
 });

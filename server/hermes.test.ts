@@ -15,4 +15,15 @@ describe('Hermes SSE frame parsing', () => {
     expect(parseSseFrame('id: 41\nevent: run.completed\ndata: {"ok":true}')).toEqual({ data: '{"ok":true}', id: 41, name: 'run.completed' });
     expect(parseSseFrame(': ping')).toBeNull();
   });
+
+  test('CRLF framing and data lines without a space still parse', () => {
+    expect(parseSseFrame('event: delta\r\ndata: {"t":1}')).toEqual({ data: '{"t":1}', id: undefined, name: 'delta' });
+    expect(parseSseFrame('data:compact')).toEqual({ data: 'compact', id: undefined, name: undefined });
+  });
+
+  test('empty frames carry nothing, and a non-numeric id stays numeric-or-NaN', () => {
+    expect(parseSseFrame('')).toBeNull();
+    expect(parseSseFrame('event: keepalive')).toBeNull();
+    expect(parseSseFrame('id: abc\ndata: x')?.id).toBeNaN();
+  });
 });

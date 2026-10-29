@@ -1,0 +1,269 @@
+{
+  "attempts": [
+    {
+      "n": 1,
+      "hypothesis": "baseline on current working tree (58 uncommitted changes preserved, 274 pass 0 fail, typecheck clean)",
+      "files": [
+        "tools/hillclimb/score.sh"
+      ],
+      "score": 274.0,
+      "prevBest": null,
+      "delta": 0.0,
+      "verdict": "baseline",
+      "detail": "SCORE=274 PASS=274 FAIL=0 GATE=pass; scorer hash 883a19c6b92f",
+      "at": "2026-10-29T17:06:44+00:00"
+    },
+    {
+      "n": 2,
+      "hypothesis": "add server/auth.test.ts covering pure auth helpers (deviceCookie, sameOrigin, isHttps) to lock security invariants",
+      "files": [
+        "server/auth.test.ts"
+      ],
+      "score": 279.0,
+      "prevBest": 274.0,
+      "delta": 5.0,
+      "verdict": "keep",
+      "detail": "SCORE 274->279 (+5 tests); bun test 279 pass 0 fail; typecheck clean via score.sh gate",
+      "at": "2026-10-29T17:07:15+00:00"
+    },
+    {
+      "n": 3,
+      "hypothesis": "add server/bus.test.ts covering SSE broadcast, headers, hello handshake and client tracking",
+      "files": [
+        "server/bus.test.ts"
+      ],
+      "score": 283.0,
+      "prevBest": 279.0,
+      "delta": 4.0,
+      "verdict": "keep",
+      "detail": "SCORE 279->283 (+4 tests); bun test 283 pass 0 fail; typecheck clean via score.sh gate",
+      "at": "2026-10-29T17:07:41+00:00"
+    },
+    {
+      "n": 4,
+      "hypothesis": "add server/prompts.test.ts locking persona/brief/checkin/task/page-refresh prompt invariants",
+      "files": [
+        "server/prompts.test.ts"
+      ],
+      "score": 289.0,
+      "prevBest": 283.0,
+      "delta": 6.0,
+      "verdict": "keep",
+      "detail": "SCORE 283->289 (+6 tests); bun test 289 pass 0 fail; typecheck clean (fixed Task fixture created_at/updated_at/background)",
+      "at": "2026-10-29T17:08:28+00:00"
+    },
+    {
+      "n": 5,
+      "hypothesis": "add server/push.test.ts locking subscription validation and fresh-db empty state",
+      "files": [
+        "server/push.test.ts"
+      ],
+      "score": 292.0,
+      "prevBest": 289.0,
+      "delta": 3.0,
+      "verdict": "keep",
+      "detail": "SCORE 289->292 (+3 tests); bun test 292 pass 0 fail; typecheck clean via score.sh gate",
+      "at": "2026-10-29T17:08:44+00:00"
+    },
+    {
+      "n": 6,
+      "hypothesis": "add server/triggers-runtime.test.ts covering webhook tokens, rate-limit record and meeting-prep dedup",
+      "files": [
+        "server/triggers-runtime.test.ts"
+      ],
+      "score": 297.0,
+      "prevBest": 292.0,
+      "delta": 5.0,
+      "verdict": "keep",
+      "detail": "SCORE 292->297 (+5 tests); bun test 297 pass 0 fail; typecheck clean via score.sh gate",
+      "at": "2026-10-29T17:09:39+00:00"
+    },
+    {
+      "n": 7,
+      "hypothesis": "add server/db.test.ts covering newId shape/sortability/uniqueness and kv fallback/roundtrip/corrupt-value safety",
+      "files": [
+        "server/db.test.ts"
+      ],
+      "score": 301.0,
+      "prevBest": 297.0,
+      "delta": 4.0,
+      "verdict": "keep",
+      "detail": "SCORE 297->301 (+4 tests); bun test 301 pass 0 fail; typecheck clean (fixed kv generic)",
+      "at": "2026-10-29T17:10:12+00:00"
+    },
+    {
+      "n": 8,
+      "hypothesis": "add web/src/store.test.ts covering snapshot channel pick, channel filter, merge dedup, item/delta events and general-first ordering",
+      "files": [
+        "web/src/store.test.ts"
+      ],
+      "score": 306.0,
+      "prevBest": 301.0,
+      "delta": 5.0,
+      "verdict": "keep",
+      "detail": "SCORE 301->306 (+5 tests); bun test 306 pass 0 fail; typecheck clean (fixed Channel updated_at fixture)",
+      "at": "2026-10-29T17:11:10+00:00"
+    },
+    {
+      "n": 9,
+      "hypothesis": "extend server/links.test.ts with direct cardOf routing and isSettledAsk coverage (push/link tap targets)",
+      "files": [
+        "server/links.test.ts"
+      ],
+      "score": 310.0,
+      "prevBest": 306.0,
+      "delta": 4.0,
+      "verdict": "keep",
+      "detail": "SCORE 306->310 (+4 tests: 3 existing + 4 new = 7 in file); bun test 310 pass 0 fail; typecheck clean via score.sh gate",
+      "at": "2026-10-29T17:12:12+00:00"
+    },
+    {
+      "n": 10,
+      "hypothesis": "add server/runner.test.ts covering pageRefreshing across queued/running/waiting/done/failed/dangling states",
+      "files": [
+        "server/runner.test.ts"
+      ],
+      "score": 315.0,
+      "prevBest": 310.0,
+      "delta": 5.0,
+      "verdict": "keep",
+      "detail": "SCORE 310->315 (+5 tests); bun test 315 pass 0 fail; typecheck clean via score.sh gate",
+      "at": "2026-10-29T17:13:14+00:00"
+    },
+    {
+      "n": 11,
+      "hypothesis": "extend server/runner.test.ts with dashboard proposal boundary: approval-only cards, defaults, truncation, action sanitizing",
+      "files": [
+        "server/runner.test.ts"
+      ],
+      "score": 319.0,
+      "prevBest": 315.0,
+      "delta": 4.0,
+      "verdict": "keep",
+      "detail": "SCORE 315->319 (+4 tests); bun test 319 pass 0 fail; typecheck clean via score.sh gate",
+      "at": "2026-10-29T17:15:26+00:00"
+    },
+    {
+      "n": 12,
+      "hypothesis": "add server/scheduler.test.ts locking that a disabled scheduler starts nothing (test/demo isolation)",
+      "files": [
+        "server/scheduler.test.ts"
+      ],
+      "score": 321.0,
+      "prevBest": 319.0,
+      "delta": 2.0,
+      "verdict": "keep",
+      "detail": "SCORE 319->321 (+2 tests); bun test 321 pass 0 fail; typecheck clean via score.sh gate",
+      "at": "2026-10-29T17:15:43+00:00"
+    },
+    {
+      "n": 13,
+      "hypothesis": "extend server/uploads.test.ts with saveUpload persistence: server-generated paths, no collisions, 0600, refusal parity",
+      "files": [
+        "server/uploads.test.ts"
+      ],
+      "score": 325.0,
+      "prevBest": 321.0,
+      "delta": 4.0,
+      "verdict": "keep",
+      "detail": "SCORE 321->325 (+4 tests: 10 existing + 4 new = 14 in file); bun test 325 pass 0 fail; typecheck clean via score.sh gate",
+      "at": "2026-10-29T17:16:15+00:00"
+    },
+    {
+      "n": 14,
+      "hypothesis": "add server/payments-issue.test.ts locking single-use capped issuance per provider with stubbed fetch, plus refusal/expiry rejection",
+      "files": [
+        "server/payments-issue.test.ts"
+      ],
+      "score": 331.0,
+      "prevBest": 325.0,
+      "delta": 6.0,
+      "verdict": "keep",
+      "detail": "SCORE 325->331 (+6 tests); bun test 331 pass 0 fail; typecheck clean; fetch stub restored per-test",
+      "at": "2026-10-29T17:17:30+00:00"
+    },
+    {
+      "n": 15,
+      "hypothesis": "add server/hermes-client.test.ts locking gateway URL/auth/idempotency-key wiring and HermesError refusal paths",
+      "files": [
+        "server/hermes-client.test.ts"
+      ],
+      "score": 335.0,
+      "prevBest": 331.0,
+      "delta": 4.0,
+      "verdict": "keep",
+      "detail": "SCORE 331->335 (+4 tests); bun test 335 pass 0 fail; typecheck clean; fetch stub restored per-test",
+      "at": "2026-10-29T17:18:17+00:00"
+    },
+    {
+      "n": 16,
+      "hypothesis": "extend server/hermes.test.ts with SSE framing edges: CRLF, spaceless data, empty frames, non-numeric id",
+      "files": [
+        "server/hermes.test.ts"
+      ],
+      "score": 337.0,
+      "prevBest": 335.0,
+      "delta": 2.0,
+      "verdict": "keep",
+      "detail": "SCORE 335->337 (+2 tests); bun test 337 pass 0 fail; typecheck clean (fixed nullable deref)",
+      "at": "2026-10-29T17:18:59+00:00"
+    },
+    {
+      "n": 17,
+      "hypothesis": "extend server/clock.test.ts with friendlyNow format and bad-timezone fail-fast (fixed regex for 'at' in locale string)",
+      "files": [
+        "server/clock.test.ts"
+      ],
+      "score": 339.0,
+      "prevBest": 337.0,
+      "delta": 2.0,
+      "verdict": "keep",
+      "detail": "SCORE 337->339 (+2 tests); bun test 339 pass 0 fail; typecheck clean via score.sh gate",
+      "at": "2026-10-29T17:19:52+00:00"
+    },
+    {
+      "n": 18,
+      "hypothesis": "add web/src/api.test.ts with DOM stubs unlocking endpoint-contract tests: channel wiring, paging URLs, 401 unpair, error surfacing",
+      "files": [
+        "web/src/api.test.ts"
+      ],
+      "score": 344.0,
+      "prevBest": 339.0,
+      "delta": 5.0,
+      "verdict": "keep",
+      "detail": "SCORE 339->344 (+5 tests); bun test 344 pass 0 fail; typecheck clean; full suite ~2s, no hang from module interval",
+      "at": "2026-10-29T17:21:00+00:00"
+    },
+    {
+      "n": 19,
+      "hypothesis": "extend server/approval.test.ts with oldAskNote staleness warnings (relative-date shift, answer fit, resume-prompt age)",
+      "files": [
+        "server/approval.test.ts"
+      ],
+      "score": 347.0,
+      "prevBest": 344.0,
+      "delta": 3.0,
+      "verdict": "keep",
+      "detail": "SCORE 344->347 (+3 tests: 13 existing + 3 new = 16 in file); bun test 347 pass 0 fail; typecheck clean via score.sh gate",
+      "at": "2026-10-29T17:21:39+00:00"
+    },
+    {
+      "n": 20,
+      "hypothesis": "extend server/recovery.test.ts locking that every recovery card offers proceed and Leave-it options",
+      "files": [
+        "server/recovery.test.ts"
+      ],
+      "score": 348.0,
+      "prevBest": 347.0,
+      "delta": 1.0,
+      "verdict": "keep",
+      "detail": "SCORE 347->348 (+1 test); bun test 348 pass 0 fail; typecheck clean via score.sh gate",
+      "at": "2026-10-29T17:22:25+00:00"
+    }
+  ],
+  "best": {
+    "n": 20,
+    "score": 348.0,
+    "hypothesis": "extend server/recovery.test.ts locking that every recovery card offers proceed and Leave-it options"
+  }
+}
