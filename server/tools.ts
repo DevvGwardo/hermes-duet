@@ -1,6 +1,6 @@
 // Tool contract between the agent and Hermes Duet. The MCP shim lists these; the server executes them.
 
-const taskId = { type: 'string', description: 'The Hermes Duet task id this belongs to, if you are working on a task (it appears in your instructions as "Hermes Duet task <id>").' };
+const taskId = { type: 'string', description: 'The Hermes Duet task id this belongs to, if you are working on a task (it appears in your instructions as "Hermes Duet task <id>"). If a call is refused because several turns are running at once, pass "main" when you are the main conversation.' };
 const PAGE_ID_DESC = 'Optional. When this line is about a standing page (the brief prompt lists them as "page <id>"), its id; tapping the line then opens the page.';
 
 export const TOOLS = [

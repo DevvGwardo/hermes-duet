@@ -1511,23 +1511,56 @@ interface Origin {
   run?: ActiveRun;
 }
 
-/** Work out which session a tool call came from: explicit task_id, else the run that just started that tool. */
+/** `task_id` a turn in the main conversation passes when several turns are live and a tool call is refused. */
+const MAIN_ORIGIN = 'main';
+
+/** Work out which session a tool call came from. */
 async function originOf(tool: string, taskId: unknown): Promise<Origin> {
-  if (typeof taskId === 'string' && taskId) {
-    const sid = tasks.sessionOf(taskId);
-    const run = sid ? (lanes.get(sid)?.active ?? undefined) : undefined;
-    if (sid) return { sessionId: sid, taskId, channelId: channels.forTask(tasks.get(taskId)), run };
+  const explicit = typeof taskId === 'string' ? taskId.trim() : '';
+  // "main" is how a turn in the main conversation answers the ambiguity error below when background work is running.
+  if (explicit === MAIN_ORIGIN) return mainOrigin();
+  if (explicit) {
+    const sid = tasks.sessionOf(explicit);
+    if (!sid) throw new Error(`No Hermes Duet task ${explicit}, so nothing was posted. Check the id in your instructions, or pass "main" for the main conversation.`);
+    const run = lanes.get(sid)?.active ?? undefined;
+    return { sessionId: sid, taskId: explicit, channelId: channels.forTask(tasks.get(explicit)), run };
   }
+  // With one run (or none) there is nothing to guess. With several, the run that just started this tool has it in its
+  // step list once that event lands, so give it a moment; if two runs are using the same tool, refuse rather than
+  // pick — a card or a file filed under the wrong task can't be fixed by the user afterwards.
   for (let i = 0; i < 8; i++) {
-    const hits = activeRuns().filter((r) => r.steps.some((s) => s.status === 'running' && s.name.endsWith(tool)));
-    if (hits.length === 1) return { sessionId: hits[0].spec.sessionId, taskId: hits[0].spec.taskId ?? null, channelId: channelOfSpec(hits[0].spec), run: hits[0] };
-    if (hits.length > 1) break;
+    const act = activeRuns();
+    if (act.length <= 1) break;
+    const hits = act.filter((r) => r.steps.some((s) => s.status === 'running' && s.name.endsWith(tool)));
+    if (hits.length === 1) return originOfRun(hits[0]);
+    if (hits.length > 1) throw ambiguousOrigin(tool, hits);
     await Bun.sleep(100);
   }
   const act = activeRuns();
-  if (act.length === 1) return { sessionId: act[0].spec.sessionId, taskId: act[0].spec.taskId ?? null, channelId: channelOfSpec(act[0].spec), run: act[0] };
+  if (act.length > 1) throw ambiguousOrigin(tool, act);
+  return act.length ? originOfRun(act[0]) : mainOrigin();
+}
+
+function originOfRun(run: ActiveRun): Origin {
+  return { sessionId: run.spec.sessionId, taskId: run.spec.taskId ?? null, channelId: channelOfSpec(run.spec), run };
+}
+
+function mainOrigin(): Origin {
   const m = mainLane();
-  return { sessionId: m.sessionId, taskId: null, channelId: channelOfSpec(m.active?.spec ?? { kind: 'chat', sessionId: m.sessionId, input: '' }), run: m.active ?? undefined };
+  const spec = m.active?.spec ?? { kind: 'chat', sessionId: m.sessionId, input: '' };
+  return { sessionId: m.sessionId, taskId: null, channelId: channelOfSpec(spec), run: m.active ?? undefined };
+}
+
+/**
+ * More than one live turn could have called this tool, and they are not distinguishable. The call is dropped and the
+ * agent is told how to place it, so a file or a card never lands in a conversation it does not belong to.
+ */
+function ambiguousOrigin(tool: string, runs: ActiveRun[]): Error {
+  const where = runs.map((r) => (r.spec.taskId ? `task ${r.spec.taskId}` : 'the main conversation'));
+  const remedy = runs.map((r) => (r.spec.taskId ? r.spec.taskId : '"main"')).join(' or ');
+  return new Error(
+    `Nothing was posted: ${runs.length} turns are running at once (${where.join(', ')}) and more than one is using ${tool}, so I can't tell which one this belongs to. Call ${tool} again with task_id: ${remedy}.`,
+  );
 }
 
 const str = (v: unknown, max = 4000) => (typeof v === 'string' ? v.slice(0, max) : v === undefined || v === null ? '' : String(v).slice(0, max));

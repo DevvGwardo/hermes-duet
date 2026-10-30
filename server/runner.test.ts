@@ -3,7 +3,7 @@ import type { FileEntry, Item, Page, Task } from '../shared/types';
 import { newId, items, tasks } from './db';
 import { HermesError, hermes } from './hermes';
 import { GENERAL_CHANNEL } from './schema';
-import { agentState, cancelTask, deliverableAction, deliverableApproval, pageRefreshing, settleHermesAsk, startUserTask } from './runner';
+import { agentState, cancelTask, deliverableAction, deliverableApproval, executeTool, mainSessionId, pageRefreshing, settleHermesAsk, startUserTask } from './runner';
 
 const task = (status: Task['status']): Task => ({
   id: newId(),
@@ -222,4 +222,87 @@ test('a stop Hermes accepts but never confirms still frees the lane within the g
   } finally {
     restore();
   }
+});
+
+// Two turns running at once must never have their cards or files resolved by guesswork: a deck that lands in the wrong
+// chat is not something the user can undo. The call is refused, says nothing was posted, and says how to place it.
+let multiSeq = 0;
+const manyRuns = () => ({
+  ...silentRun('unused'),
+  startRun: async () => ({ run_id: `r-multi-${++multiSeq}`, status: 'running' }),
+});
+
+test('a tool call two live turns could own is refused, not guessed at', async () => {
+  const restore = stubHermes({
+    ...manyRuns(),
+    stop: async () => {
+      throw new HermesError(404, 'no such run');
+    },
+  });
+  const a = startUserTask('task one').task;
+  const b = startUserTask('task two').task;
+  try {
+    await until(() => agentState().background_running === 2);
+    const err = await executeTool('request_approval', { title: 'Send the deck', summary: 'The deck is ready.' }).catch((e) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toContain('Nothing was posted');
+    expect(err.message).toContain(a.id);
+    expect(err.message).toContain(b.id);
+    expect(items.pendingCards().some((i) => i.card?.title === 'Send the deck')).toBe(false);
+  } finally {
+    await cancelTask(a.id).catch(() => {});
+    await cancelTask(b.id).catch(() => {});
+    restore();
+  }
+});
+
+test('an explicit task_id still files the card on that task while another turn runs', async () => {
+  const restore = stubHermes({
+    ...manyRuns(),
+    stop: async () => {
+      throw new HermesError(404, 'no such run');
+    },
+  });
+  const a = startUserTask('deck task').task;
+  const b = startUserTask('other task').task;
+  try {
+    await until(() => agentState().background_running === 2);
+    await executeTool('request_approval', { title: 'Send the deck', summary: 'x', task_id: a.id });
+    const card = items.pendingCards().find((i) => i.card?.title === 'Send the deck');
+    expect(card?.card!.task_id).toBe(a.id);
+    expect(card?.task_id).toBe(a.id);
+  } finally {
+    await cancelTask(a.id).catch(() => {});
+    await cancelTask(b.id).catch(() => {});
+    restore();
+  }
+});
+
+test('"main" answers an ambiguous call from the main conversation', async () => {
+  const restore = stubHermes({
+    ...manyRuns(),
+    stop: async () => {
+      throw new HermesError(404, 'no such run');
+    },
+  });
+  const a = startUserTask('one task').task;
+  const b = startUserTask('another task').task;
+  try {
+    await until(() => agentState().background_running === 2);
+    await executeTool('request_approval', { title: 'Chat card', summary: 'x', task_id: 'main' });
+    const card = items.pendingCards().find((i) => i.card?.title === 'Chat card');
+    expect(card?.task_id).toBeNull();
+    expect(card?.card!.session_id).toBe(mainSessionId());
+  } finally {
+    await cancelTask(a.id).catch(() => {});
+    await cancelTask(b.id).catch(() => {});
+    restore();
+  }
+});
+
+test('a task id that does not exist is refused instead of falling back to the main lane', async () => {
+  const err = await executeTool('request_approval', { title: 'Nowhere', summary: 'x', task_id: 'no-such-task' }).catch((e) => e);
+  expect(err).toBeInstanceOf(Error);
+  expect(err.message).toContain('No Hermes Duet task no-such-task');
+  expect(items.pendingCards().some((i) => i.card?.title === 'Nowhere')).toBe(false);
 });
