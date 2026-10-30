@@ -1,7 +1,8 @@
 import { expect, test } from 'bun:test';
-import type { FileEntry, Page, Task } from '../shared/types';
-import { newId, tasks } from './db';
-import { deliverableAction, deliverableApproval, pageRefreshing } from './runner';
+import type { FileEntry, Item, Page, Task } from '../shared/types';
+import { newId, items, tasks } from './db';
+import { GENERAL_CHANNEL } from './schema';
+import { deliverableAction, deliverableApproval, pageRefreshing, settleHermesAsk } from './runner';
 
 const task = (status: Task['status']): Task => ({
   id: newId(),
@@ -85,4 +86,84 @@ test('dashboard buttons sanitize the action and arrive as a system line', () => 
   expect(item.kind).toBe('system');
   expect(item.text).toContain('export-csv');
   expect(item.text).not.toContain('!');
+});
+
+// The card records the tap, then the decision goes to Hermes. It may only read as decided once Hermes has it: a
+// green "Approved" on an action the agent never received is the app lying about the most sensitive thing it does.
+const hermesAsk = (decision: string = 'approve'): Item => {
+  const now = Date.now();
+  const item: Item = {
+    id: newId(),
+    kind: 'card',
+    created_at: now,
+    updated_at: now,
+    channel_id: GENERAL_CHANNEL,
+    card: {
+      type: 'approval',
+      title: 'Send the invoice',
+      status: 'pending',
+      decision,
+      decided_at: now,
+      hermes: { kind: 'approval', run_id: 'r1', request_id: 'q1', generation: 1 },
+    },
+  };
+  return items.save(item);
+};
+
+test('an approval Hermes never received goes back to pending, not green', async () => {
+  const item = hermesAsk();
+  const err = await settleHermesAsk(item, 'approved', async () => {
+    throw new Error('gateway timeout');
+  }).catch((e) => e);
+  expect(err).toBeInstanceOf(Error);
+  expect(err.message).toContain('Tap again');
+  const saved = items.get(item.id)!;
+  expect(saved.card!.status).toBe('pending');
+  expect(saved.card!.decision).toBeUndefined();
+  expect(saved.card!.decided_at).toBeUndefined();
+  expect(saved.card!.error).toContain('gateway timeout');
+});
+
+test('an approval Hermes acknowledged is recorded as approved', async () => {
+  const item = hermesAsk();
+  const saved = await settleHermesAsk(item, 'approved', async () => ({}));
+  expect(saved.card!.status).toBe('approved');
+  expect(saved.card!.decision).toBe('approve');
+  expect(saved.card!.error).toBeUndefined();
+});
+
+test('a declined ask that never reached Hermes is not left declined', async () => {
+  const item = hermesAsk('decline');
+  await settleHermesAsk(item, 'declined', async () => {
+    throw new Error('run gone');
+  }).catch(() => {});
+  expect(items.get(item.id)!.card!.status).toBe('pending');
+});
+
+test('the card can be tapped again after a failed send', async () => {
+  const item = hermesAsk();
+  await settleHermesAsk(item, 'approved', async () => {
+    throw new Error('down');
+  }).catch(() => {});
+  const retried = await settleHermesAsk(items.get(item.id)!, 'approved', async () => ({}));
+  expect(retried.card!.status).toBe('approved');
+  expect(retried.card!.error).toBeUndefined();
+});
+
+test('a double tap sends the decision once, not twice', async () => {
+  const item = hermesAsk();
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => (release = r));
+  let sends = 0;
+  const first = settleHermesAsk(item, 'approved', async () => {
+    sends++;
+    await gate;
+  });
+  const second = settleHermesAsk(item, 'approved', async () => {
+    sends++;
+  }).catch((e) => e);
+  expect((await second).message).toContain('already on its way');
+  release();
+  expect((await first).card!.status).toBe('approved');
+  expect(sends).toBe(1);
 });

@@ -2,7 +2,7 @@ import { copyFileSync, mkdirSync, statSync } from 'node:fs';
 import { basename, extname, join } from 'node:path';
 import { deliverySource } from './delivery';
 import { askAge } from '../shared/age';
-import type { AgentState, Attachment, CardData, FileEntry, Item, Page, Task, TaskStep, ToolStep } from '../shared/types';
+import type { AgentState, Attachment, CardData, CardStatus, FileEntry, Item, Page, Task, TaskStep, ToolStep } from '../shared/types';
 import { DRAFT_MAX, PROMPT_ENDED, REPLACED, WITHDRAWN, approvalDecision, approvalPush, deadPrompts, replaceRefusal, turnNote, withdrawRefusal } from './approval';
 import { BRIEF_RETRY, SKIP_MEMORY_DAYS, briefCard, briefFailure, briefTitle, checkinOutcome, morningOutcome, notifyRefusal, raisedToday, skipEntry, skippedLately, useAction, useDraft } from './brief';
 import { broadcast } from './bus';
@@ -1134,6 +1134,36 @@ export function deliverableApproval(file: FileEntry, raw: Record<string, unknown
   return item;
 }
 
+/** Card ids whose decision is on its way to Hermes right now, so a double-tap can't send it twice. */
+const decidingCards = new Set<string>();
+
+/**
+ * Take a decision to Hermes on one of its own ask cards. The card is only marked decided once the POST resolves: a
+ * green "Approved" on an action the agent never received is the one lie this app must not tell. If it fails the card
+ * goes back to pending — keeping any edit the user made — with the reason on it, so it can be tapped again.
+ *
+ * The card stays pending while the POST is out, so a second tap would otherwise send the same decision twice; the
+ * in-flight set makes the duplicate a no-op.
+ */
+export async function settleHermesAsk(item: Item, status: CardStatus, send: () => Promise<unknown>): Promise<Item> {
+  if (decidingCards.has(item.id)) throw new Error('that decision is already on its way');
+  decidingCards.add(item.id);
+  try {
+    await send();
+  } catch (e: any) {
+    const card = { ...(items.get(item.id)?.card ?? item.card!) };
+    // Nothing was decided, so the card must not carry a decision either.
+    delete card.decision;
+    delete card.decided_at;
+    put({ ...item, card: { ...card, status: 'pending', error: `The agent didn't get that (${e?.message ?? e}). Tap again to retry.` } });
+    throw new Error("The agent didn't receive that decision. Tap again to retry.");
+  } finally {
+    decidingCards.delete(item.id);
+  }
+  const card = items.get(item.id)?.card ?? item.card!;
+  return put({ ...item, card: { ...card, status, error: undefined } });
+}
+
 export async function actOnCard(id: string, action: string, value?: string): Promise<Item> {
   const item = items.get(id);
   if (!item || item.kind !== 'card' || !item.card) throw new Error('card not found');
@@ -1185,10 +1215,13 @@ export async function actOnCard(id: string, action: string, value?: string): Pro
   }
 
   const decided = c.type === 'approval' || c.type === 'payment';
+  const status: CardStatus = decided ? (approved ? 'approved' : 'declined') : 'answered';
+  const ask = c.hermes;
   item.card = {
     ...c,
     ...edits,
-    status: decided ? (approved ? 'approved' : 'declined') : 'answered',
+    // A Hermes-native ask is not decided yet: see settleHermesAsk.
+    status: ask ? 'pending' : status,
     decision: answer ?? (approved ? 'approve' : 'decline'),
     decided_at: Date.now(),
   };
@@ -1202,17 +1235,17 @@ export async function actOnCard(id: string, action: string, value?: string): Pro
     return items.get(item.id) ?? item;
   }
 
-  if (c.hermes) {
-    const h = c.hermes;
-    const p =
-      h.kind === 'approval'
-        ? hermes.approve(h.run_id, h.request_id, h.generation, approved ? 'once' : 'deny')
-        : hermes.clarify(h.run_id, h.request_id, h.generation, answer!);
-    p.catch((e) => systemNote(`That request had already expired (${e?.message ?? e}).`, c.task_id));
+  if (ask) {
+    await settleHermesAsk(item, status, () =>
+      ask.kind === 'approval'
+        ? hermes.approve(ask.run_id, ask.request_id, ask.generation, approved ? 'once' : 'deny')
+        : hermes.clarify(ask.run_id, ask.request_id, ask.generation, answer!),
+    );
     if (c.task_id) {
       const t = tasks.get(c.task_id);
       if (t && t.status === 'waiting') putTask({ ...t, status: 'running', progress: '' });
     }
+    return items.get(item.id) ?? item;
   } else if (c.rerun === 'brief') {
     // A fresh brief run, not an agent turn about the old one: it gathers again from now.
     if (answer === BRIEF_RETRY[0]) runBrief('manual');

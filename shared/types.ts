@@ -92,6 +92,8 @@ export interface CardData {
   retry?: boolean;
   decision?: string; // what the user picked
   decided_at?: number;
+  /** A decision the agent never received: the card is pending again and this says why, so it can be re-tapped. */
+  error?: string;
   task_id?: string;
   updated_label?: string; // e.g. "Updated 5:48 AM"
   /** "Pick it back up?" card offered after Hermes dropped a run mid-flight. */

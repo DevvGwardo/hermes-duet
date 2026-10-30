@@ -128,7 +128,7 @@ export function CardView({ item, onOpenFile }: { item: Item; onOpenFile: (id: st
         ) : (
           <Decision card={card} />
         ))}
-      {err && <p className="card-error">{err}</p>}
+      {(err || card.error) && <p className="card-error">{err ?? card.error}</p>}
     </article>
   );
 }
