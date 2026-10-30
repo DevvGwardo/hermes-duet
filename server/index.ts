@@ -225,7 +225,7 @@ async function handleApp(req: Request, server?: any): Promise<Response> {
         host = await browser.currentHost();
         const login = await readLogin(host, which);
         try {
-          const filled = await browser.fillLogin(login.username, login.password);
+          const filled = await browser.fillLogin(login.username, login.password, host);
           if (!filled.pass) return err(400, `Found the ${login.vault} login for ${host}, but there is no password field on the page.`);
           return json({ host, vault: login.vault, filled });
         } finally {

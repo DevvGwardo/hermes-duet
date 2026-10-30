@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { MOBILE_VIEWPORT, normalizeInput, normalizeUrl, viewportMetrics } from './browser';
+import { MOBILE_VIEWPORT, normalizeInput, normalizeUrl, sameLoginSite, viewportMetrics } from './browser';
 
 describe('normalizeUrl', () => {
   test('keeps absolute http(s) urls untouched', () => {
@@ -86,5 +86,31 @@ describe('viewportMetrics', () => {
 
   test('desktop clears the override rather than guessing a size', () => {
     expect(viewportMetrics('desktop')).toBeNull();
+  });
+});
+
+describe('sameLoginSite', () => {
+  test('the saved site and its subdomains are the same site', () => {
+    expect(sameLoginSite('example.com', 'example.com')).toBe(true);
+    expect(sameLoginSite('example.com', 'www.example.com')).toBe(true);
+    expect(sameLoginSite('example.com', 'app.example.com')).toBe(true);
+    expect(sameLoginSite('www.example.com', 'example.com')).toBe(true);
+    expect(sameLoginSite('Example.COM', 'app.example.com.')).toBe(true);
+  });
+
+  test('a credential saved for a subdomain is not typed into the bare domain', () => {
+    expect(sameLoginSite('app.example.com', 'example.com')).toBe(false);
+  });
+
+  test('lookalike hosts are not the same site', () => {
+    expect(sameLoginSite('example.com', 'example.com.evil.test')).toBe(false);
+    expect(sameLoginSite('example.com', 'evil-example.com')).toBe(false);
+    expect(sameLoginSite('example.com', 'example.org')).toBe(false);
+    expect(sameLoginSite('bank.com', 'bank.com.co')).toBe(false);
+  });
+
+  test('an unknown host on either side never matches', () => {
+    expect(sameLoginSite('', 'example.com')).toBe(false);
+    expect(sameLoginSite('example.com', '')).toBe(false);
   });
 });

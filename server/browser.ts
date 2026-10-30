@@ -621,11 +621,45 @@ const LOGIN_USER = [
 const LOGIN_PASS = ['input[type="password"]', 'input[autocomplete="current-password"]', 'input[name="password"]'];
 
 /**
+ * Whether a page is still on the site a login was looked up for. A login saved for `example.com` may be filled on
+ * `www.example.com` or `app.example.com`; it is never filled on another site, including the `example.com.evil.test`
+ * and `evil-example.com` shapes. The saved site is the ceiling, so a credential saved for `app.example.com` is not
+ * typed into `example.com` either.
+ */
+export function sameLoginSite(savedHost: string, pageHost: string): boolean {
+  const norm = (h: string) => String(h ?? '').trim().toLowerCase().replace(/^www\./, '').replace(/\.$/, '');
+  const saved = norm(savedHost);
+  const page = norm(pageHost);
+  if (!saved || !page) return false;
+  return page === saved || page.endsWith(`.${saved}`);
+}
+
+/** Take the password back out of the DOM once the form has been submitted, so the page can't read it later. */
+async function clearPassword(sid: string): Promise<void> {
+  const expr = `(() => {
+    let n = 0;
+    for (const s of ${JSON.stringify(LOGIN_PASS)}) {
+      for (const el of document.querySelectorAll(s)) if (el.value) { el.value = ''; n++; }
+    }
+    return n;
+  })()`;
+  await send('Runtime.evaluate', { expression: expr, returnByValue: true }, sid);
+}
+
+/**
  * Fill the username and password fields of the page in front of the user. They tapped a button; the credentials come
  * from a local vault CLI and are typed straight into Chrome. Nothing is logged, echoed back, or put in a card.
+ *
+ * `host` is the site the login was looked up for. The vault CLI takes a second or two, and the agent may have
+ * navigated the tab in that window, so the page is re-checked here before a single character is typed: a hostile page
+ * must not be able to receive a password saved for somewhere else.
  */
-export async function fillLogin(username: string, password: string): Promise<{ user: boolean; pass: boolean }> {
+export async function fillLogin(username: string, password: string, host: string): Promise<{ user: boolean; pass: boolean }> {
   const sid = await sessionId();
+  const page = await currentHost();
+  if (!sameLoginSite(host, page)) {
+    throw new Error(`the tab moved to ${page || 'another site'} while I was fetching that login, so nothing was filled`);
+  }
   const user = await typeInto(sid, LOGIN_USER, username);
   // Tab moves focus the way a person would; some pages only reveal the password step after the username is entered.
   if (user) {
@@ -637,6 +671,9 @@ export async function fillLogin(username: string, password: string): Promise<{ u
     // Submit, so the login actually completes without another tap on the phone.
     await send('Input.dispatchKeyEvent', { type: 'keyDown', windowsVirtualKeyCode: 13, key: 'Enter', text: '\r' }, sid);
     await send('Input.dispatchKeyEvent', { type: 'keyUp', windowsVirtualKeyCode: 13, key: 'Enter' }, sid);
+    // The form has the value it needs; leaving the plaintext sitting in the DOM only gives page scripts a copy.
+    await Bun.sleep(300);
+    await clearPassword(sid).catch(() => {});
   }
   return { user, pass };
 }
