@@ -10,7 +10,7 @@ import { channelLine } from './channels';
 import { inQuietHours, localParts } from './clock';
 import { config } from './config';
 import { connectorBrief, listConnectors } from './connectors';
-import { channels, files, items, kv, newId, pages, runs, settings, tasks } from './db';
+import { channels, files, items, kv, newId, pages, runs, settings, tasks, tx } from './db';
 import { GENERAL_CHANNEL } from './schema';
 import { followUps, handoverCard, useFollowUp } from './handover';
 import { HermesError, hermes, type RunEvent } from './hermes';
@@ -226,6 +226,19 @@ function putTask(task: Task, sessionId?: string | null) {
   tasks.save(task, sessionId);
   broadcast({ type: 'task', task });
   return task;
+}
+
+/**
+ * End every live run's event stream on shutdown without finishing it: the rows stay 'running', so the next boot's
+ * recoverOrphans reattaches them exactly as a crash would. Called by the process signal handler before the database
+ * is closed.
+ */
+export function abortActiveRuns() {
+  for (const l of lanes.values()) {
+    try {
+      l.active?.abort.abort();
+    } catch {}
+  }
 }
 
 /** Every page write goes out as an event, so the pinned pages in Make stay current. */
@@ -700,6 +713,9 @@ function finish(l: Lane, run: ActiveRun, status: 'done' | 'error' | 'stopped', o
     l.active = null;
     broadcastAgent();
     pumpAll();
+    // A lane with nothing running and nothing queued holds nothing: without this the map grows by one entry per task
+    // session for the life of the process, and pumpAll scans every one of them on each wake. `lane()` recreates it.
+    if (!l.main && !l.active && !l.queue.length) lanes.delete(l.sessionId);
   }
 }
 
@@ -978,9 +994,12 @@ function handOver(t: Task): Item {
   const channel = channels.forTask(t);
   const card = handoverCard(t, files.all(), existing?.card);
   if (existing) return put({ ...existing, card: { ...card, channel_id: channel }, channel_id: channel });
-  const item = put(newItem('card', { card: { ...card, channel_id: channel }, task_id: t.id, channel_id: channel }));
-  putTask({ ...t, handover_id: item.id });
-  return item;
+  // One unit: a crash between the card and the task's pointer to it leaves a card the task can never update.
+  return tx(() => {
+    const item = put(newItem('card', { card: { ...card, channel_id: channel }, task_id: t.id, channel_id: channel }));
+    putTask({ ...t, handover_id: item.id });
+    return item;
+  });
 }
 
 /** `push: false` when the caller pushes its own card for the same event, so the user gets one notification. */
@@ -1091,7 +1110,9 @@ export function submitUser(text: string, input?: string, channelId?: string, att
         if (!r?.accepted) throw new Error('not accepted');
       })
       .catch(() => {
-        if (steer.queued) return;
+        // `queued` is set by whichever path claimed it: this one, or finish() replaying what Hermes reported as
+        // undelivered. A run that has already finished has had that chance, so queueing here would send it twice.
+        if (steer.queued || active.finished) return;
         steer.queued = true;
         saveRunMeta(active);
         enqueue({ kind: 'chat', sessionId: l.sessionId, channelId: channel.id, input: t });

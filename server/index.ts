@@ -12,7 +12,7 @@ import { type AttachmentRow, attachments, channels, db, devices, files, items, k
 import { hermes } from './hermes';
 import { presence } from './presence';
 import { hasSubscriptions, notify, publicKey, saveSubscription } from './push';
-import { actOnCard, agentState, cancelTask, deliverableAction, deliverableApproval, executeTool, recoverOrphans, runBrief, runCheckin, startConnectorWatch, startHermesWatch, startUserTask, stopMain, stopPage, submitSystem, submitUser } from './runner';
+import { abortActiveRuns, actOnCard, agentState, cancelTask, deliverableAction, deliverableApproval, executeTool, recoverOrphans, runBrief, runCheckin, startConnectorWatch, startHermesWatch, startUserTask, stopMain, stopPage, submitSystem, submitUser } from './runner';
 import { ftsQuery, search } from './search';
 import { startScheduler } from './scheduler';
 import { downloadsPrompt, meetingPrompt, webhookMatches, webhookPrompt, type WatchedFile } from './triggers';
@@ -667,7 +667,7 @@ export async function handleInternal(req: Request): Promise<Response> {
  * JSON header), pointer/keyboard events in. Frames are dropped rather than queued when a phone
  * can't keep up, so a slow link degrades the picture instead of lagging behind reality.
  */
-if (import.meta.main) Bun.serve({
+const appServer = import.meta.main ? Bun.serve({
   hostname: config.host,
   port: config.port,
   fetch: (req, srv) => handleApp(req, srv),
@@ -732,8 +732,8 @@ if (import.meta.main) Bun.serve({
     },
   },
   idleTimeout: 0,
-});
-if (import.meta.main) Bun.serve({ hostname: '127.0.0.1', port: config.internalPort, fetch: handleInternal, idleTimeout: 120 });
+}) : null;
+const internalServer = import.meta.main ? Bun.serve({ hostname: '127.0.0.1', port: config.internalPort, fetch: handleInternal, idleTimeout: 120 }) : null;
 
 if (import.meta.main) {
   recoverOrphans();
@@ -744,17 +744,26 @@ if (import.meta.main) {
   console.log(`[hermes-duet] app http://${config.host}:${config.port}  internal http://127.0.0.1:${config.internalPort}  hermes ${config.hermesUrl}`);
 }
 
-// launchd sends SIGTERM on stop and restart. Closing the database checkpoints the WAL, so a restart never depends on
-// recovery picking up a half-written file; runs that were in flight are reattached by recoverOrphans on the next boot.
+/**
+ * launchd and systemd send SIGTERM on stop and restart. Stop taking requests, end the event streams so their finally
+ * blocks run, give the last write a moment, and only then close the database (which checkpoints the WAL). Runs that
+ * were in flight stay 'running' in the database and recoverOrphans reattaches them on the next boot.
+ */
 let closing = false;
-function shutdown(signal: string) {
+async function shutdown(signal: string) {
   if (closing) return;
   closing = true;
   console.log(`[hermes-duet] ${signal}: shutting down`);
+  try {
+    appServer?.stop(true);
+    internalServer?.stop(true);
+  } catch {}
+  abortActiveRuns();
+  await Bun.sleep(150);
   try {
     db.close();
   } catch {}
   process.exit(0);
 }
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => void shutdown('SIGTERM'));
+process.on('SIGINT', () => void shutdown('SIGINT'));

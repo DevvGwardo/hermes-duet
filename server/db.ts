@@ -30,6 +30,13 @@ export function newId(): string {
   return now.toString(36).padStart(9, '0') + seq.toString(36).padStart(2, '0') + r;
 }
 
+/**
+ * Run a unit of work as one transaction. Multi-statement writes (a task and its search row, a device and its
+ * subscriptions) are otherwise only atomic per statement: a kill between them leaves a row nothing points at.
+ * Bun nests these with savepoints, so a helper may call another safely.
+ */
+export const tx = <T>(fn: () => T): T => db.transaction(fn)();
+
 // ---------- kv ----------
 const kvGet = db.query<{ value: string }, [string]>('SELECT value FROM kv WHERE key = ?');
 const kvSet = db.query('INSERT INTO kv(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value');
@@ -110,13 +117,23 @@ export const channels = {
   create(input: ChannelInput): ChannelRow {
     const now = Date.now();
     const slug = slugFor(input.name);
-    const existing = channels.bySlug(slug);
-    if (existing) {
+    const reuse = () => {
+      const existing = channels.bySlug(slug);
+      if (!existing) return null;
       channelTouch.run(input.name, input.topic ?? null, now, existing.id);
       return channelGet.get(existing.id)!;
-    }
+    };
+    const found = reuse();
+    if (found) return found;
     const id = `chan-${slug}-${newId().slice(-4)}`;
-    channelInsert.run(id, input.name, slug, input.topic ?? null, `duet-channel-${slug}`, null, now, now);
+    try {
+      tx(() => channelInsert.run(id, input.name, slug, input.topic ?? null, `duet-channel-${slug}`, null, now, now));
+    } catch (e: any) {
+      // Another create won the slug between the read and the insert: that is the same "already archived" answer.
+      const again = reuse();
+      if (again) return again;
+      throw e;
+    }
     return channelGet.get(id)!;
   },
   archive(id: string): boolean {
@@ -292,15 +309,17 @@ const tasksRecent = db.query<{ json: string }, [number]>(
 export const tasks = {
   save(task: Task, sessionId?: string | null) {
     const existing = taskGet.get(task.id);
-    taskUpsert.run({
-      $id: task.id,
-      $status: task.status,
-      $session_id: sessionId ?? existing?.session_id ?? null,
-      $created_at: task.created_at,
-      $updated_at: task.updated_at,
-      $json: JSON.stringify(task),
+    tx(() => {
+      taskUpsert.run({
+        $id: task.id,
+        $status: task.status,
+        $session_id: sessionId ?? existing?.session_id ?? null,
+        $created_at: task.created_at,
+        $updated_at: task.updated_at,
+        $json: JSON.stringify(task),
+      });
+      searchIndex.put(task.id, 'task', task.title, [task.result, task.progress, task.instructions].filter(Boolean).join('\n'));
     });
-    searchIndex.put(task.id, 'task', task.title, [task.result, task.progress, task.instructions].filter(Boolean).join('\n'));
     return task;
   },
   get(id: string): Task | null {
@@ -422,8 +441,10 @@ export const devices = {
   /** Forget a paired device: its cookie stops working and its pushes stop being sent. */
   revoke(id: string): boolean {
     if (!deviceGet.get(id)) return false;
-    subsDeleteForDevice.run(id);
-    deviceDelete.run(id);
+    tx(() => {
+      subsDeleteForDevice.run(id);
+      deviceDelete.run(id);
+    });
     return true;
   },
 };
