@@ -74,6 +74,8 @@ interface ActiveRun {
   finished: boolean;
   abort: AbortController;
   lastSave: number;
+  /** When this run's meta was last written, so a long run doesn't rewrite it on every event. */
+  metaAt: number;
   /** Restart recovery: existing segment items to reuse while the event stream replays. */
   reuse: Item[];
   /** Main-thread turns that run long get mirrored into Tasks so the work is visible there. */
@@ -295,6 +297,7 @@ async function launch(l: Lane, spec: RunSpec) {
     finished: false,
     abort: new AbortController(),
     lastSave: 0,
+    metaAt: 0,
     reuse: [],
     fgTaskId: null,
     steers: [],
@@ -383,8 +386,22 @@ async function launch(l: Lane, spec: RunSpec) {
       }),
     );
   }
-  runs.start(run.id, spec.kind, spec.sessionId, spec.taskId ?? null, { spec, activityId: run.activity?.id ?? null });
+  runs.start(run.id, spec.kind, spec.sessionId, spec.taskId ?? null, runMeta(run));
   consume(l, run);
+}
+
+/**
+ * What a restart needs to pick this run up where it left off: its spec, the messages steered into it that Hermes may
+ * still return undelivered, and how far it got. Written throttled from `onEvent` and whenever a steer changes, so a
+ * crash or gateway restart replays from the last second rather than from the beginning of the turn.
+ */
+function runMeta(run: ActiveRun) {
+  return { spec: run.spec, activityId: run.activity?.id ?? null, fgTaskId: run.fgTaskId, steers: run.steers, lastSeq: run.lastSeq, lastEventAt: run.lastEventAt };
+}
+
+function saveRunMeta(run: ActiveRun) {
+  if (!run.id) return;
+  runs.meta(run.id, runMeta(run));
 }
 
 async function consume(l: Lane, run: ActiveRun) {
@@ -480,6 +497,12 @@ function onEvent(l: Lane, run: ActiveRun, ev: RunEvent) {
   if (typeof ev.seq === 'number' && ev.seq <= run.lastSeq) return;
   run.lastEventAt = Date.now();
   if (typeof ev.seq === 'number') run.lastSeq = Math.max(run.lastSeq, ev.seq);
+  // A restart should resume from here, not from the start of the turn (and an orphan that has been silent for hours
+  // should not get a fresh timeout window). Batched: this is a SQLite write.
+  if (run.lastEventAt - run.metaAt > 1_000) {
+    run.metaAt = run.lastEventAt;
+    saveRunMeta(run);
+  }
   // assistant.completed and the terminal run.* event both carry it.
   if (typeof ev.pending_steer === 'string') run.leftoverSteer = ev.pending_steer;
   switch (ev.event) {
@@ -578,7 +601,7 @@ function trackForeground(l: Lane, run: ActiveRun) {
   };
   run.fgTaskId = task.id;
   putTask(task, null);
-  runs.meta(run.id, { spec: run.spec, activityId: run.activity?.id ?? null, fgTaskId: task.id });
+  saveRunMeta(run);
 }
 
 function saveActivity(run: ActiveRun) {
@@ -1045,6 +1068,8 @@ export function submitUser(text: string, input?: string, channelId?: string, att
     // The note goes only on the steer: a refused or replayed one is queued raw, and launch gives it a fresh note.
     const steer: Steer = { sent: turnNote(items.pendingCards(channel.id), active.spec) + t, raw: t };
     active.steers.push(steer);
+    // On disk before it is sent: a restart between these two lines would otherwise lose the message entirely.
+    saveRunMeta(active);
     hermes
       .steer(active.id, steer.sent)
       .then((r) => {
@@ -1053,6 +1078,7 @@ export function submitUser(text: string, input?: string, channelId?: string, att
       .catch(() => {
         if (steer.queued) return;
         steer.queued = true;
+        saveRunMeta(active);
         enqueue({ kind: 'chat', sessionId: l.sessionId, channelId: channel.id, input: t });
       });
   } else {
@@ -1899,32 +1925,42 @@ export function recoverOrphans() {
       continue;
     }
     const activity = meta.activityId ? items.get(meta.activityId) : null;
+    const segments = segmentsOf(row.id);
+    // A run saved with a cursor resumes where it stopped: the segment it was writing continues rather than being
+    // rebuilt from a replay that will no longer include its earlier deltas. A run saved before cursors existed (or
+    // one with no segments) still replays from the start and reuses the segments in order, as it always has.
+    const resumed = typeof meta.lastSeq === 'number' && meta.lastSeq > 0;
+    const last = resumed ? segments[segments.length - 1] : undefined;
+    // Only a segment that was still streaming when the run stopped is continued; a closed one stays closed.
+    const open = last?.streaming ? last : undefined;
     const run: ActiveRun = {
       id: row.id,
       spec,
       startedAt: row.started_at,
       activity,
-      assistant: null,
-      text: '',
-      segText: '',
-      lastText: '',
+      assistant: open ? { ...open, streaming: true } : null,
+      text: last?.text ?? '',
+      segText: open?.text ?? '',
+      lastText: last && !last.streaming ? (last.text ?? '') : '',
       pendingWs: '',
       // Seeded from the saved activity so a run Hermes no longer knows still shows (and reports) its steps;
       // a replay that does arrive matches them by tool_call_id instead of adding duplicates.
       steps: (activity?.activity?.steps ?? []).map((s) => ({ ...s })),
-      lastSeq: 0,
+      lastSeq: resumed ? meta.lastSeq : 0,
       cards: 0,
       briefs: 0,
       finished: false,
       abort: new AbortController(),
       lastSave: 0,
-      // Replay from the start, reusing this run's existing text segments in order.
-      reuse: segmentsOf(row.id),
+      metaAt: 0,
+      reuse: resumed ? [] : segments,
       fgTaskId: meta.fgTaskId ?? null,
-      // Steers sent before the restart aren't kept, so one Hermes returns undelivered can't be matched and replayed.
-      steers: [],
+      // A steer Hermes has not delivered yet comes back as `pending_steer`; keeping the list across a restart is what
+      // lets it be matched and replayed instead of silently dropped.
+      steers: Array.isArray(meta.steers) ? meta.steers : [],
       leftoverSteer: '',
-      lastEventAt: Date.now(),
+      // The silence clock survives too, so a run that was already wedged before the restart is not given a fresh hour.
+      lastEventAt: typeof meta.lastEventAt === 'number' ? meta.lastEventAt : Date.now(),
     };
     l.active = run;
     console.log(`[recover] reattaching run ${row.id} (${spec.kind})`);

@@ -1,9 +1,9 @@
 import { expect, test } from 'bun:test';
 import type { FileEntry, Item, Page, Task } from '../shared/types';
-import { newId, items, tasks } from './db';
+import { items, newId, runs, tasks } from './db';
 import { HermesError, hermes } from './hermes';
 import { GENERAL_CHANNEL } from './schema';
-import { agentState, cancelTask, deliverableAction, deliverableApproval, executeTool, mainSessionId, pageRefreshing, settleHermesAsk, startUserTask } from './runner';
+import { agentState, cancelTask, deliverableAction, deliverableApproval, executeTool, mainSessionId, pageRefreshing, recoverOrphans, settleHermesAsk, startUserTask, stopMain } from './runner';
 
 const task = (status: Task['status']): Task => ({
   id: newId(),
@@ -305,4 +305,96 @@ test('a task id that does not exist is refused instead of falling back to the ma
   expect(err).toBeInstanceOf(Error);
   expect(err.message).toContain('No Hermes Duet task no-such-task');
   expect(items.pendingCards().some((i) => i.card?.title === 'Nowhere')).toBe(false);
+});
+
+// A gateway restart mid-turn used to lose a message the user had just steered in: Hermes returns it as
+// `pending_steer`, but the in-memory list of steers was empty after the restart, so nothing matched and nothing was
+// replayed. The list, the replay cursor and the silence clock are now stored with the run.
+test('a steer a restart interrupted is replayed into a new turn, not lost', async () => {
+  const inputs: string[] = [];
+  let runsSoFar = 0;
+  let first = true;
+  const restore = stubHermes({
+    hasKey: () => true,
+    startRun: async (a: any) => {
+      inputs.push(String(a.input));
+      return { run_id: `r-rec-${++runsSoFar}`, status: 'running' };
+    },
+    events: async (_id: string, _seq: number, on: (ev: any) => void, signal: AbortSignal) => {
+      if (first) {
+        first = false;
+        on({ event: 'run.completed', pending_steer: 'rework the deck', seq: 7 });
+        return;
+      }
+      await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve()));
+    },
+    stop: async () => {
+      throw new HermesError(404, 'no such run');
+    },
+  });
+  try {
+    const sessionId = mainSessionId();
+    runs.start('r-orphan-steer', 'chat', sessionId, null, {
+      spec: { kind: 'chat', sessionId, input: 'original turn' },
+      activityId: null,
+      steers: [{ sent: 'rework the deck', raw: 'rework the deck' }],
+      lastSeq: 3,
+      lastEventAt: Date.now(),
+    });
+    // An earlier test can leave a real main-lane run behind; reattaching is skipped while a lane is busy.
+    await stopMain().catch(() => {});
+    recoverOrphans();
+    await until(() => inputs.some((i) => i.includes('rework the deck')));
+    expect(inputs.some((i) => i.includes('rework the deck'))).toBe(true);
+  } finally {
+    await stopMain().catch(() => {});
+    restore();
+  }
+});
+
+test('a resumed run continues the message it was writing instead of duplicating it', async () => {
+  let first = true;
+  const restore = stubHermes({
+    hasKey: () => true,
+    startRun: async () => ({ run_id: 'r-rec-seg', status: 'running' }),
+    events: async (_id: string, _seq: number, on: (ev: any) => void, signal: AbortSignal) => {
+      if (first) {
+        first = false;
+        on({ event: 'message.delta', delta: ' again', seq: 6 });
+        on({ event: 'run.completed', seq: 7 });
+        return;
+      }
+      await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve()));
+    },
+    stop: async () => {
+      throw new HermesError(404, 'no such run');
+    },
+  });
+  try {
+    await stopMain().catch(() => {});
+    const sessionId = mainSessionId();
+    const seg = items.save({
+      id: newId(),
+      kind: 'assistant',
+      run_id: 'r-orphan-seg',
+      channel_id: GENERAL_CHANNEL,
+      created_at: Date.now(),
+      updated_at: Date.now(),
+      text: 'Hello world',
+      streaming: true,
+    });
+    runs.start('r-orphan-seg', 'chat', sessionId, null, {
+      spec: { kind: 'chat', sessionId, input: 'say hello' },
+      activityId: null,
+      steers: [],
+      lastSeq: 5,
+      lastEventAt: Date.now(),
+    });
+    recoverOrphans();
+    await until(() => items.get(seg.id)?.streaming === false);
+    expect(items.get(seg.id)!.text).toBe('Hello world again');
+  } finally {
+    await stopMain().catch(() => {});
+    restore();
+  }
 });
