@@ -1,6 +1,7 @@
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import { useMemo } from 'react';
+import { droppedImageHost, sameOriginImage } from '../../shared/media';
 
 marked.setOptions({ gfm: true, breaks: true });
 
@@ -11,6 +12,16 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
   if (href && !href.startsWith('#')) {
     node.setAttribute('target', '_blank');
     node.setAttribute('rel', 'noopener noreferrer');
+  }
+  // A remote image is a request the phone makes the moment the reply renders: a tracking pixel, or a beacon telling a
+  // third party that the agent read their page. Only what this app serves (or an inline data: image) is loaded.
+  if (node.tagName === 'IMG') {
+    node.removeAttribute('srcset');
+    const src = node.getAttribute('src') ?? '';
+    if (!sameOriginImage(src)) {
+      node.removeAttribute('src');
+      node.setAttribute('alt', `Image not loaded (${droppedImageHost(src)})`);
+    }
   }
 });
 

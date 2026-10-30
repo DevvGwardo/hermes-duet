@@ -4,7 +4,7 @@ import type { Snapshot } from '../shared/types';
 import { briefSpeech, speak, transcribeFile } from './audio';
 import { capabilities } from './capabilities';
 import { channelInput } from './channels';
-import { createPairCode, deviceCookie, deviceFor, internalToken, isHttps, redeemPairCode, sameOrigin } from './auth';
+import { createPairCode, deviceCookie, deviceFor, internalToken, isHttps, pairBlocked, redeemPairCode, sameOrigin } from './auth';
 import { listConnectors, testConnector } from './connectors';
 import { sseResponse } from './bus';
 import { config } from './config';
@@ -178,6 +178,13 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
   if (path === '/api/version' && req.method === 'GET') return json({ version: VERSION });
 
   if (path === '/api/pair' && req.method === 'POST') {
+    // The brake is checked before the code is even looked at, and says how long the wait is instead of "invalid code".
+    const brake = pairBlocked();
+    if (brake.blocked) {
+      return json({ error: 'too many tries', code: 'too_many', retry_after_ms: brake.waitMs }, 429, {
+        'retry-after': String(Math.max(1, Math.ceil(brake.waitMs / 1000))),
+      });
+    }
     const { code } = await body<{ code?: string }>(req);
     const token = await redeemPairCode(String(code ?? ''), req.headers.get('user-agent') ?? 'device');
     if (!token) return err(401, 'invalid or expired code');

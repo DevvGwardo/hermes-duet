@@ -1,5 +1,5 @@
 import { config } from './config';
-import { db, newId } from './db';
+import { db, kv, newId } from './db';
 
 const COOKIE = 'duet_device';
 const PAIR_TTL_MS = 10 * 60_000;
@@ -23,18 +23,48 @@ export function createPairCode(): { code: string; expires_at: number } {
   return { code, expires_at };
 }
 
-// Global brute-force brake: a handful of wrong codes locks pairing for a while.
-let failures: number[] = [];
+/**
+ * Global brute-force brake. The attempts are kept in the database, so restarting the server (or a crash loop) does not
+ * reset the count: an eight-try guess against a ~40-bit code is not a race anyone wins, but it should not be a race
+ * anyone can restart either. After every trio of wrong codes the wait between attempts doubles, capped at an hour.
+ */
+const PAIR_MAX_FAILURES = 8;
+
+function recentFailures(now: number): number[] {
+  return kv.get<number[]>('pair_failures', []).filter((t) => now - t < PAIR_TTL_MS);
+}
+
+function noteFailure(now: number) {
+  // Bounded: the brake only reads the last few, and the list must not grow for the life of the install.
+  kv.set('pair_failures', [...recentFailures(now), now].slice(-PAIR_MAX_FAILURES));
+}
+
+/** How long the next attempt must wait after this many wrong codes: 0, 0, 30 s, 60 s, 2 min … up to an hour. */
+export function pairBackoffMs(failures: number): number {
+  if (failures < 3) return 0;
+  return Math.min(3600_000, 30_000 * 2 ** (Math.floor(failures / 3) - 1));
+}
+
+/** Is pairing locked right now, and for how much longer? Exported so the route and tests agree. */
+export function pairBlocked(now = Date.now()): { blocked: boolean; waitMs: number } {
+  const fails = recentFailures(now);
+  if (fails.length >= PAIR_MAX_FAILURES) {
+    const oldestInWindow = Math.min(...fails);
+    return { blocked: true, waitMs: Math.max(0, oldestInWindow + PAIR_TTL_MS - now) };
+  }
+  const backoff = pairBackoffMs(fails.length);
+  const since = fails.length ? now - Math.max(...fails) : Infinity;
+  return { blocked: backoff > 0 && since < backoff, waitMs: Math.max(0, backoff - since) };
+}
 
 export async function redeemPairCode(input: string, deviceName: string): Promise<string | null> {
   const now = Date.now();
-  failures = failures.filter((t) => now - t < PAIR_TTL_MS);
-  if (failures.length >= 8) return null;
+  if (pairBlocked(now).blocked) return null;
   const norm = input.toUpperCase().replace(/[^A-Z0-9]/g, '');
   const code = `${norm.slice(0, 4)}-${norm.slice(4, 8)}`;
   const row = db.query<{ expires_at: number }, [string]>('SELECT expires_at FROM pair_codes WHERE code = ?').get(code);
   if (!row || row.expires_at < now) {
-    failures.push(now);
+    noteFailure(now);
     return null;
   }
   db.query('DELETE FROM pair_codes WHERE code = ?').run(code);

@@ -2,6 +2,7 @@
 // needed beyond a paired cookie.
 import { describe, expect, test } from 'bun:test';
 import { createPairCode, deviceCookie, internalToken, redeemPairCode } from './auth';
+import { kv } from './db';
 import { apiError, handleApp, handleInternal } from './index';
 import { MAX_UPLOAD_BYTES } from './uploads';
 
@@ -147,4 +148,17 @@ describe('loopback API', () => {
     expect(res.status).toBe(400);
     expect(((await res.json()) as any).error).toContain('missing title');
   });
+});
+
+
+test('a locked-out pair attempt is told how long to wait', async () => {
+  kv.set('pair_failures', Array.from({ length: 8 }, () => Date.now()));
+  try {
+    const res = await app('/api/pair', jsonPost({ code: 'AAAA-AAAA' }));
+    expect(res.status).toBe(429);
+    expect(res.headers.get('retry-after')).toBeTruthy();
+    expect(((await res.json()) as any).code).toBe('too_many');
+  } finally {
+    kv.set('pair_failures', []);
+  }
 });
