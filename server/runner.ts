@@ -76,6 +76,8 @@ interface ActiveRun {
   lastSave: number;
   /** When this run's meta was last written, so a long run doesn't rewrite it on every event. */
   metaAt: number;
+  /** The watchdog's stop was never acknowledged: the run may still be going on the Hermes side, so a retry could double it. */
+  stopUnconfirmed: boolean;
   /** Restart recovery: existing segment items to reuse while the event stream replays. */
   reuse: Item[];
   /** Main-thread turns that run long get mirrored into Tasks so the work is visible there. */
@@ -298,6 +300,7 @@ async function launch(l: Lane, spec: RunSpec) {
     abort: new AbortController(),
     lastSave: 0,
     metaAt: 0,
+    stopUnconfirmed: false,
     reuse: [],
     fgTaskId: null,
     steers: [],
@@ -464,7 +467,19 @@ function stopIfHung(l: Lane, run: ActiveRun) {
   if (waitingOnUser) run.lastEventAt = Date.now();
   if (!runHung({ lastEventAt: run.lastEventAt, waitingOnUser }, Date.now(), config.runTimeoutMs)) return;
   console.log(`[runs] ${run.id} sent nothing for ${Math.round((Date.now() - run.lastEventAt) / 60_000)} min; stopping it`);
-  hermes.stop(run.id).catch(() => {});
+  void stopHung(l, run);
+}
+
+/**
+ * End a run the watchdog called hung. The stop is confirmed, within a bound, before the "Try again" card goes up: if
+ * the gateway never acknowledges it the run may still be finishing on its own, and a retry would put a second agent on
+ * the same turn. That case is said plainly on the card instead of being hidden.
+ */
+async function stopHung(l: Lane, run: ActiveRun) {
+  const how = await requestStop(run.id);
+  // Its own terminal event may have arrived while we were asking; that outcome is better than ours.
+  if (run.finished) return;
+  run.stopUnconfirmed = how === 'unknown';
   finish(l, run, 'error', undefined, TIMED_OUT);
 }
 
@@ -804,7 +819,7 @@ function finishBody(l: Lane, run: ActiveRun, status: 'done' | 'error' | 'stopped
         card: {
           type: 'choice',
           title: `Try “${firstLine(retryTitle(runTitle(spec)), 70)}” again?`,
-          body: failedTurnBody({ error, steps: run.steps, limitMin: Math.round(config.runTimeoutMs / 60_000) }),
+          body: failedTurnBody({ error, steps: run.steps, limitMin: Math.round(config.runTimeoutMs / 60_000), stopUnconfirmed: run.stopUnconfirmed }),
           options: [...RETRY_OPTIONS],
           status: 'pending',
           resume: true,
@@ -1414,6 +1429,19 @@ const STOP_GRACE_MS = 1_000;
 const STOP_POST_MS = 5_000;
 
 /**
+ * Ask Hermes to stop a run, bounded so a wedged gateway cannot hold anything hostage. `gone` means Hermes has already
+ * forgotten it (nothing can still be running); `unknown` means we could not tell, so a caller that offers a retry has
+ * to say so.
+ */
+async function requestStop(id: string): Promise<'stopped' | 'gone' | 'unknown'> {
+  const asked = hermes.stop(id).then(
+    () => 'stopped' as const,
+    (e) => (e instanceof HermesError && e.status === 404 ? ('gone' as const) : ('unknown' as const)),
+  );
+  return Promise.race([asked, Bun.sleep(STOP_POST_MS).then(() => 'unknown' as const)]);
+}
+
+/**
  * Stop one run and always release its lane. Hermes is asked to stop, and its terminal event normally finishes the run
  * for us, but a gateway that is down — or a run it has already forgotten and answers 404 for — never sends that
  * event, and the lane would stay blocked until the 45-minute watchdog, holding everything queued behind it. So the
@@ -1422,12 +1450,8 @@ const STOP_POST_MS = 5_000;
  */
 async function stopRun(l: Lane, run: ActiveRun): Promise<void> {
   if (run.finished || !run.id) return;
-  const asked = hermes.stop(run.id).then(
-    () => true,
-    () => false,
-  );
   // Unreachable, refused or too slow: there is nothing left to wait for.
-  if ((await Promise.race([asked, Bun.sleep(STOP_POST_MS).then(() => 'timeout' as const)])) !== true) {
+  if ((await requestStop(run.id)) !== 'stopped') {
     finish(l, run, 'stopped');
     return;
   }
@@ -1953,6 +1977,7 @@ export function recoverOrphans() {
       abort: new AbortController(),
       lastSave: 0,
       metaAt: 0,
+    stopUnconfirmed: false,
       reuse: resumed ? [] : segments,
       fgTaskId: meta.fgTaskId ?? null,
       // A steer Hermes has not delivered yet comes back as `pending_steer`; keeping the list across a restart is what

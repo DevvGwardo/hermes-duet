@@ -51,7 +51,7 @@ export const MOVED_ON = 'You carried on in chat';
  * The "Try … again?" card for a chat turn that failed (a model error, or the run timeout). Without it a reply that
  * never came left only a grey note: no push, unlike a reply that did come, and nothing to tap.
  */
-export function failedTurnBody(run: { error?: string; steps: ToolStep[]; limitMin: number }): string {
+export function failedTurnBody(run: { error?: string; steps: ToolStep[]; limitMin: number; stopUnconfirmed?: boolean }): string {
   const error = clip(run.error ?? '', 160).replace(/[.\s]+$/, '');
   const parts = [
     run.error === TIMED_OUT
@@ -60,6 +60,8 @@ export function failedTurnBody(run: { error?: string; steps: ToolStep[]; limitMi
         ? `It stopped with an error: ${error}.`
         : 'It stopped with an error.',
   ];
+  // The stop was never acknowledged: the run may still be going on Hermes's side, so a retry could run it twice.
+  if (run.stopUnconfirmed) parts.push('Hermes never confirmed that it stopped, so it may still be finishing on its own — give it a minute before trying again, or the work may run twice.');
   const done = lastDone(run);
   parts.push(done ? `The last step that finished: ${done}${/[.!?…]$/.test(done) ? '' : '.'}` : 'Nothing had finished yet.');
   parts.push("Trying again continues the same conversation, and I'll check what already went through before redoing anything.");

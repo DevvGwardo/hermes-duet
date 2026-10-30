@@ -38,6 +38,14 @@ describe('failed chat turn card', () => {
     expect(failedTurnBody({ steps: [], limitMin: 45 })).toStartWith('It stopped with an error. ');
   });
 
+  test('a timeout whose stop Hermes never confirmed warns before a retry', () => {
+    const body = failedTurnBody({ error: TIMED_OUT, steps: [], limitMin: 45, stopUnconfirmed: true });
+    expect(body).toContain('never confirmed that it stopped');
+    expect(body).toContain('may run twice');
+    // The ordinary timeout says nothing about the agent still running.
+    expect(failedTurnBody({ error: TIMED_OUT, steps: [], limitMin: 45 })).not.toContain('never confirmed');
+  });
+
   test('a retry that fails again names the original work', () => {
     expect(retryTitle('Answered: Try “Book the 7 AM flight” again?')).toBe('Book the 7 AM flight');
     expect(retryTitle('Answered: Pick “Plan the offsite” back up?')).toBe('Plan the offsite');
