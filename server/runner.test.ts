@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import type { FileEntry, Item, Page, Task } from '../shared/types';
-import { items, newId, runs, tasks } from './db';
+import { items, kv, newId, runs, tasks } from './db';
 import { HermesError, hermes } from './hermes';
 import { GENERAL_CHANNEL } from './schema';
 import { agentState, cancelTask, deliverableAction, deliverableApproval, executeTool, mainSessionId, pageRefreshing, recoverOrphans, settleHermesAsk, startUserTask, stopMain } from './runner';
@@ -344,8 +344,13 @@ test('a steer a restart interrupted is replayed into a new turn, not lost', asyn
     // An earlier test can leave a real main-lane run behind; reattaching is skipped while a lane is busy.
     await stopMain().catch(() => {});
     recoverOrphans();
-    await until(() => inputs.some((i) => i.includes('rework the deck')));
-    expect(inputs.some((i) => i.includes('rework the deck'))).toBe(true);
+    // The replayed message is either launched straight away or waiting in the lane's queue (pumpAll skips a lane whose
+    // Hermes was seen going down); both mean it survived the restart.
+    const replayed = () =>
+      inputs.some((i) => i.includes('rework the deck')) ||
+      kv.get<{ input?: string }[]>('queues', []).some((s) => String(s.input ?? '').includes('rework the deck'));
+    await until(replayed);
+    expect(replayed()).toBe(true);
   } finally {
     await stopMain().catch(() => {});
     restore();
