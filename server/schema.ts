@@ -19,7 +19,14 @@ function addColumn(db: Database, table: string, name: string, decl: string) {
   db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${decl}`);
 }
 
+/**
+ * Bumped whenever a shape change needs more than an idempotent CREATE. Kept in `PRAGMA user_version`, so a checkout
+ * that has been running for months applies the step it is missing instead of guessing from the tables it can see.
+ */
+export const SCHEMA_VERSION = 2;
+
 export function applySchema(db: Database) {
+  const from = db.query<{ user_version: number }, []>('PRAGMA user_version').get()?.user_version ?? 0;
   db.exec(`
 CREATE TABLE IF NOT EXISTS items (
   id TEXT PRIMARY KEY, kind TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
@@ -37,6 +44,8 @@ CREATE TABLE IF NOT EXISTS runs (
   id TEXT PRIMARY KEY, kind TEXT NOT NULL, session_id TEXT NOT NULL, task_id TEXT, status TEXT NOT NULL,
   started_at INTEGER NOT NULL, ended_at INTEGER, error TEXT, meta TEXT
 );
+CREATE INDEX IF NOT EXISTS runs_status ON runs(status);
+CREATE INDEX IF NOT EXISTS tasks_status_updated ON tasks(status, updated_at);
 CREATE TABLE IF NOT EXISTS pages (id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS devices (
@@ -59,9 +68,13 @@ CREATE TABLE IF NOT EXISTS channels (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
+CREATE INDEX IF NOT EXISTS channels_session ON channels(session_id);
 `);
   addColumn(db, 'items', 'channel_id', `TEXT DEFAULT '${GENERAL_CHANNEL}'`);
   db.exec(`CREATE INDEX IF NOT EXISTS items_channel ON items(channel_id, created_at)`);
+  // Pending cards are read on every snapshot build, every badge count and every steer. An expression index on the
+  // JSON path (partial to kind='card') turns that from a scan of the whole thread into a range read.
+  db.exec(`CREATE INDEX IF NOT EXISTS items_card_status ON items(json_extract(json, '$.card.status'), created_at) WHERE kind = 'card'`);
 
   // Camera photos, voice memos and documents the user hands over from the composer.
   db.exec(`
@@ -142,7 +155,10 @@ CREATE TRIGGER IF NOT EXISTS items_fts_delete AFTER DELETE ON items BEGIN
 END;
 `);
 
-  backfillItems(db);
+  // One reconcile per schema version rather than an anti-join over the whole thread on every boot. The rewrite is
+  // also NOT EXISTS, which stops at the first index hit instead of materialising the subquery.
+  if (from < SCHEMA_VERSION) backfillItems(db);
+  db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
 }
 
 /**
@@ -150,12 +166,11 @@ END;
  * ids absent from the index are touched, so it costs one scan of the ids on a normal boot.
  */
 export function backfillItems(db: Database) {
-  const missing = db.query<{ n: number }, []>('SELECT COUNT(*) n FROM items WHERE id NOT IN (SELECT item_id FROM fts_items)').get();
-  if (!missing?.n) return;
   db.exec(`
 INSERT INTO fts_items(item_id, channel_id, kind, text, card_title, card_body)
 SELECT id, coalesce(channel_id, '${GENERAL_CHANNEL}'), kind,
        json_extract(json, '$.text'), json_extract(json, '$.card.title'), json_extract(json, '$.card.body')
-FROM items WHERE id NOT IN (SELECT item_id FROM fts_items);
+FROM items i
+WHERE NOT EXISTS (SELECT 1 FROM fts_items f WHERE f.item_id = i.id);
 `);
 }

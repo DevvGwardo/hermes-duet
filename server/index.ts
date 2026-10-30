@@ -8,7 +8,7 @@ import { createPairCode, deviceCookie, deviceFor, internalToken, isHttps, redeem
 import { listConnectors, testConnector } from './connectors';
 import { sseResponse } from './bus';
 import { config } from './config';
-import { type AttachmentRow, attachments, channels, db, devices, files, items, kv, newId, pages, settings, tasks, toAttachment, triggers } from './db';
+import { type AttachmentRow, attachments, channels, db, devices, files, items, kv, newId, pages, prune, settings, tasks, toAttachment, triggers } from './db';
 import { hermes } from './hermes';
 import { presence } from './presence';
 import { hasSubscriptions, notify, publicKey, saveSubscription } from './push';
@@ -736,6 +736,18 @@ const appServer = import.meta.main ? Bun.serve({
 const internalServer = import.meta.main ? Bun.serve({ hostname: '127.0.0.1', port: config.internalPort, fetch: handleInternal, idleTimeout: 120 }) : null;
 
 if (import.meta.main) {
+  try {
+    prune();
+    setInterval(() => {
+      try {
+        prune();
+      } catch (e: any) {
+        console.error('[db] prune failed', e?.message ?? e);
+      }
+    }, 86_400_000).unref?.();
+  } catch (e: any) {
+    console.error('[db] prune failed', e?.message ?? e);
+  }
   recoverOrphans();
   startHermesWatch();
   startConnectorWatch();

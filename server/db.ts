@@ -1,17 +1,48 @@
 import { Database } from 'bun:sqlite';
-import { mkdirSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { type Attachment, type Channel, type FileEntry, type Item, type Page, type Settings, type Task, attachmentKind } from '../shared/types';
 import { type ChannelInput, slugFor } from './channels';
 import { config } from './config';
 import { lockDownDataDir } from './permissions';
-import { GENERAL_CHANNEL, applySchema } from './schema';
+import { GENERAL_CHANNEL, SCHEMA_VERSION, applySchema } from './schema';
 
 mkdirSync(config.dataDir, { recursive: true });
 lockDownDataDir(config.dataDir);
 export const db = new Database(join(config.dataDir, 'duet.db'), { create: true });
-db.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;');
+db.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON; PRAGMA journal_size_limit = 16777216;');
 lockDownDataDir(config.dataDir);
+
+/**
+ * The database the last version left behind, copied before any ALTER runs. A bad migration is then recoverable by
+ * hand instead of being a boot loop with no path back.
+ */
+function backupBeforeMigration(from: number) {
+  const src = join(config.dataDir, 'duet.db');
+  if (!existsSync(src)) return;
+  // A brand-new checkout has an empty file and nothing to lose; only an install with real tables is worth copying.
+  const tables = db.query<{ n: number }, []>(`SELECT COUNT(*) n FROM sqlite_master WHERE type = 'table' AND name = 'items'`).get()?.n ?? 0;
+  if (!tables) return;
+  try {
+    db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    const dir = join(config.dataDir, 'backups');
+    mkdirSync(dir, { recursive: true });
+    copyFileSync(src, join(dir, `duet-v${from}-${new Date().toISOString().replace(/[:.]/g, '-')}.db`));
+    // Keep the three most recent; older copies are the ones nobody would reach for.
+    const stale = readdirSync(dir)
+      .filter((f) => f.startsWith('duet-v') && f.endsWith('.db'))
+      .sort()
+      .slice(0, -3);
+    for (const f of stale) rmSync(join(dir, f), { force: true });
+  } catch (e: any) {
+    console.error('[db] could not back up before migrating', e?.message ?? e);
+  }
+}
+
+{
+  const from = db.query<{ user_version: number }, []>('PRAGMA user_version').get()?.user_version ?? 0;
+  if (from < SCHEMA_VERSION) backupBeforeMigration(from);
+}
 
 applySchema(db);
 
@@ -347,6 +378,8 @@ export const files = {
   },
   update(entry: FileEntry) {
     fileUpdate.run(JSON.stringify(entry), entry.id);
+    // Titles are searchable: a rename that didn't reach the index would keep the old title findable forever.
+    searchIndex.put(entry.id, 'file', entry.title, entry.name);
     return entry;
   },
   get(id: string): { entry: FileEntry; path: string } | null {
@@ -422,6 +455,22 @@ export const runs = {
     return db.query<RunRow, []>(`SELECT id, kind, session_id, task_id, status, started_at, meta FROM runs WHERE status = 'running'`).all();
   },
 };
+
+/**
+ * Unattended housekeeping. Run rows are bookkeeping (`running` is recovery's and is never touched) and expired pair
+ * codes are dead weight. Thread items, files, attachments and TTS clips are kept: the history is the product, so
+ * reclaiming bytes by deleting a user's conversation is not a trade this app makes behind their back.
+ */
+export function prune(now = Date.now()): { runs: number; codes: number } {
+  const cut = now - 30 * 86400_000;
+  const runs = db.query('DELETE FROM runs WHERE status != ? AND coalesce(ended_at, started_at) < ?').run('running', cut).changes;
+  const codes = db.query('DELETE FROM pair_codes WHERE expires_at < ?').run(now).changes;
+  // Cheaper than VACUUM and safe while the app is live: lets SQLite refresh its own statistics and query plans.
+  try {
+    db.exec('PRAGMA optimize');
+  } catch {}
+  return { runs, codes };
+}
 
 // ---------- devices ----------
 export interface DeviceRow {
