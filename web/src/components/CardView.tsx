@@ -128,7 +128,7 @@ export function CardView({ item, onOpenFile }: { item: Item; onOpenFile: (id: st
         ) : (
           <Decision card={card} />
         ))}
-      {(err || card.error) && <p className="card-error">{err ?? card.error}</p>}
+      {(err || card.error) && <p className="card-error" role="alert">{err ?? card.error}</p>}
     </article>
   );
 }
@@ -201,7 +201,7 @@ function ListenButton({ item }: { item: Item }) {
         {state === 'playing' ? <Icon.stop size={14} /> : <Icon.play size={14} />}
         {state === 'playing' ? 'Pause' : state === 'loading' ? 'Getting audio…' : 'Listen'}
       </button>
-      {err && <p className="card-error">{err}</p>}
+      {err && <p className="card-error" role="alert">{err}</p>}
     </>
   );
 }
@@ -392,7 +392,7 @@ function BriefList({ id, card, onOpenFile }: { id: string; card: CardData; onOpe
           );
         })}
       </ol>
-      {(err || skipErr) && <p className="card-error">{err || skipErr}</p>}
+      {(err || skipErr) && <p className="card-error" role="alert">{err || skipErr}</p>}
     </>
   );
 }
@@ -436,7 +436,7 @@ function FollowUps({ id, list }: { id: string; list: FollowUp[] }) {
           </button>
         ))}
       </div>
-      {err && <p className="card-error">{err}</p>}
+      {err && <p className="card-error" role="alert">{err}</p>}
     </>
   );
 }

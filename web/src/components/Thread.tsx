@@ -36,6 +36,16 @@ export function Thread({
   // useSyncExternalStore compares snapshots by identity, so the filter runs here rather than inside the selector.
   const items = useMemo(() => (channelId ? all.filter((i) => (i.channel_id ?? generalId) === channelId) : all), [all, channelId, generalId]);
   const hasMore = useStore((s) => s.hasMore);
+  // What changed at the tail of the thread, said out loud once per change.
+  const newest = items[items.length - 1];
+  const [announce, setAnnounce] = useState('');
+  useEffect(() => {
+    if (!newest) return;
+    if (newest.kind === 'assistant') setAnnounce('Hermes replied.');
+    else if (newest.kind === 'card' && newest.card?.status === 'pending') setAnnounce(`Needs you: ${newest.card.title}`);
+    else if (newest.kind === 'card' && newest.card) setAnnounce(`${newest.card.type}: ${newest.card.title}`);
+    else if (newest.kind === 'system' && newest.text) setAnnounce(newest.text);
+  }, [newest?.id, newest?.kind, newest?.card?.status, newest?.text]);
   const ref = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const [loading, setLoading] = useState(false);
@@ -140,6 +150,11 @@ export function Thread({
   let lastDay = '';
   return (
     <>
+      {/* One polite announcer for the whole thread: a reply arriving or a card needing the user is otherwise a silent
+          DOM change for anyone on a screen reader. Visually hidden, never focusable. */}
+      <div className="sr-only" role="status" aria-live="polite">
+        {announce}
+      </div>
       <div className="thread" ref={ref} onScroll={onScroll}>
         {hasMore && (
           <button className="load-older" onClick={older} disabled={loading}>

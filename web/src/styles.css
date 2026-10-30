@@ -3338,3 +3338,26 @@ li.done .tick {
     display: inline;
   }
 }
+
+/* The render boundary: a failure in one screen should look like a message, not a blank page. */
+.crash {
+  max-width: 520px;
+  margin: 18vh auto 0;
+  padding: 0 22px;
+  text-align: center;
+}
+.crash h1 {
+  font-family: var(--font-display, inherit);
+  font-size: 22px;
+  margin: 0 0 10px;
+}
+.crash p {
+  margin: 0 0 18px;
+  line-height: 1.5;
+  opacity: 0.75;
+}
+.crash-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+}
