@@ -1894,9 +1894,13 @@ function deliverFile(a: { path: string; title: string; summary?: string }, o: Or
     ...(version && { page_id: version.id }),
     created_at: Date.now(),
   };
-  files.add(entry, dest);
+  // The new file and the standing page's pointer to it are one unit: a crash between them leaves the page serving a
+  // version the file table has already replaced.
+  tx(() => {
+    files.add(entry, dest);
+    if (version) putPage({ ...version, file_id: id, refreshed_at: entry.created_at });
+  });
   broadcast({ type: 'file', file: entry });
-  if (version) putPage({ ...version, file_id: id, refreshed_at: entry.created_at });
   // A background task's files arrive together on its handover card instead of one card each mid-run.
   if (!backgroundTask(o.taskId)) postCard({ type: 'file', title: a.title, body: a.summary || undefined, file_id: id, status: 'info' }, o);
   return entry;

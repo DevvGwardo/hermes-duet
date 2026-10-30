@@ -372,8 +372,10 @@ const filesAll = db.query<{ json: string }, []>('SELECT json FROM files ORDER BY
 const fileUpdate = db.query('UPDATE files SET json = ? WHERE id = ?');
 export const files = {
   add(entry: FileEntry, path: string) {
-    fileInsert.run(entry.id, path, entry.created_at, JSON.stringify(entry));
-    searchIndex.put(entry.id, 'file', entry.title, entry.name);
+    tx(() => {
+      fileInsert.run(entry.id, path, entry.created_at, JSON.stringify(entry));
+      searchIndex.put(entry.id, 'file', entry.title, entry.name);
+    });
     return entry;
   },
   update(entry: FileEntry) {
@@ -398,8 +400,10 @@ const pagesAll = db.query<{ json: string }, []>('SELECT json FROM pages ORDER BY
 export const pages = {
   save(page: Page) {
     page.updated_at = Date.now();
-    pageUpsert.run(page.id, page.created_at, JSON.stringify(page));
-    searchIndex.put(page.id, 'page', page.title, page.instructions);
+    tx(() => {
+      pageUpsert.run(page.id, page.created_at, JSON.stringify(page));
+      searchIndex.put(page.id, 'page', page.title, page.instructions);
+    });
     return page;
   },
   get(id: string): Page | null {
