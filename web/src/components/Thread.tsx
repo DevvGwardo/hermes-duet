@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Item } from '../../../shared/types';
 import { loadOlder, loadUntil } from '../api';
 import { useStore } from '../store';
@@ -171,7 +171,7 @@ export function Thread({
           return (
             <Fragment key={item.id}>
               {sep && <div className="day-sep">{day}</div>}
-              <ItemView item={item} onOpenFile={onOpenFile} onShowTasks={onShowTasks} avatar={avatar} />
+              <MemoItem item={item} onOpenFile={onOpenFile} onShowTasks={onShowTasks} avatar={avatar} />
             </Fragment>
           );
         })}
@@ -185,6 +185,12 @@ export function Thread({
     </>
   );
 }
+
+/**
+ * Memoised so a delta only re-renders the bubble being typed into: the store keeps the identity of every other item,
+ * so their props are unchanged and React can skip them.
+ */
+const MemoItem = memo(ItemView, (a, b) => a.item === b.item && a.avatar === b.avatar && a.onOpenFile === b.onOpenFile && a.onShowTasks === b.onShowTasks);
 
 function ItemView({ item, onOpenFile, onShowTasks, avatar }: { item: Item; onOpenFile: (id: string) => void; onShowTasks?: () => void; avatar: boolean }) {
   switch (item.kind) {

@@ -1,6 +1,6 @@
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
-import { useMemo } from 'react';
+import { memo, useMemo } from 'react';
 import { droppedImageHost, sameOriginImage } from '../../shared/media';
 
 marked.setOptions({ gfm: true, breaks: true });
@@ -37,13 +37,19 @@ const SANITIZE = {
   FORBID_TAGS: ['form', 'input', 'button', 'select', 'textarea', 'option', 'fieldset', 'legend', 'label', 'style'],
 };
 
-export function Markdown({ text, className }: { text: string; className?: string }) {
+function MarkdownBase({ text, className }: { text: string; className?: string }) {
   const html = useMemo(() => {
     const raw = marked.parse(text ?? '', { async: false }) as string;
     return DOMPurify.sanitize(raw, SANITIZE);
   }, [text]);
   return <div className={`md ${className ?? ''}`} dangerouslySetInnerHTML={{ __html: html }} />;
 }
+
+/**
+ * Memoised: a streaming delta re-renders the whole thread once per token, and without this every closed message above
+ * it re-runs marked + DOMPurify over text that has not changed.
+ */
+export const Markdown = memo(MarkdownBase);
 
 export function timeLabel(ts: number) {
   return new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });

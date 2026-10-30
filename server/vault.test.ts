@@ -84,3 +84,17 @@ describe('vaultPlan', () => {
     expect(plan[0].installed).toBe(true);
   });
 });
+
+describe('commandFor', () => {
+  test('substitutes only the domain, and never as a flag or an extra argv word', () => {
+    expect(commandFor('op item get {domain} --format json', 'mail.example.com')).toEqual({
+      cmd: 'op',
+      args: ['item', 'get', 'mail.example.com', '--format', 'json'],
+    });
+    // A domain can only ever be one argument: safeDomain has already refused anything with a space or a slash.
+    expect(commandFor('bw get item {domain} --raw', 'example.com')).toEqual({ cmd: 'bw', args: ['get', 'item', 'example.com', '--raw'] });
+    expect(safeDomain('example.com; rm -rf /')).toBeNull();
+    expect(safeDomain('--help')).toBeNull();
+    expect(safeDomain('http://mail.example.com/inbox')).toBe('mail.example.com');
+  });
+});
