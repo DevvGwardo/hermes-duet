@@ -448,7 +448,7 @@ function Checklist({ card }: { card: CardData }) {
   const shown = open ? list : [...list.filter((c) => !c.done).slice(0, 5)];
   return (
     <div className="checklist">
-      <div className="progress" role="progressbar" aria-valuenow={done} aria-valuemax={list.length}>
+      <div className="progress" role="progressbar" aria-valuemin={0} aria-valuenow={done} aria-valuemax={list.length} aria-valuetext={`${done} of ${list.length} done`} aria-label="Checklist progress">
         <div className="progress-bar" style={{ width: `${list.length ? (done / list.length) * 100 : 0}%` }} />
       </div>
       <div className="progress-label">

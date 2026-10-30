@@ -3250,7 +3250,8 @@ li.done .tick {
   border: 1.5px solid var(--line-2);
   border-radius: 6px;
   padding: 7px 9px;
-  font: 11.5px var(--mono);
+  /* 16px is the threshold below which iOS zooms the whole page when a field takes focus. */
+  font: 16px var(--mono);
   color: var(--dim);
 }
 

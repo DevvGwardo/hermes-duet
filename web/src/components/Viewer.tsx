@@ -101,7 +101,7 @@ export function Viewer({ fileId, compareId, onClose }: { fileId: string; compare
 
   return (
     <div className="sheet-backdrop" onClick={onClose}>
-      <div ref={dialog} className="sheet viewer" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+      <div ref={dialog} className="sheet viewer" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={`${file?.title ?? 'File'} viewer`}>
         <header className="sheet-head">
           <div className="sheet-title">
             <strong>{file?.title ?? 'File'}</strong>

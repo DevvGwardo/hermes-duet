@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { CARD_TTL_MS, cardExpired, money, parseIssuedCard, paymentCard, paymentDecision, paymentInput, paymentPrompt, providerFromEnv } from './payments';
+import { CARD_TTL_MS, cardExpired, issueCard, money, parseIssuedCard, paymentCard, paymentDecision, paymentInput, paymentPrompt, providerFromEnv } from './payments';
 
 const ITEMS = [
   { title: 'Sleeper ticket', price_cents: 2450 },
@@ -166,5 +166,84 @@ describe('money', () => {
     expect(money(0)).toBe('$0.00');
     expect(money(2450, 'EUR')).toBe('€24.50');
     expect(money(100, 'ZZZ')).toContain('1.00');
+  });
+});
+
+// The card API is real money: a wrong spend_limit or amount is not a rendering bug. These stub fetch and assert the
+// exact request each provider gets, so a refactor that widens the cap fails here.
+function stubFetch(handler: (url: string, init: any) => any) {
+  const calls: { url: string; init: any }[] = [];
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (url: any, init: any) => {
+    calls.push({ url: String(url), init });
+    return handler(String(url), init);
+  }) as any;
+  return { calls, restore: () => void (globalThis.fetch = real) };
+}
+const okJson = (json: unknown) => ({ ok: true, status: 200, text: async () => JSON.stringify(json) });
+const CARD = { pan: '4111111111111111', cvv: '123', exp_month: 12, exp_year: 2030 };
+
+describe('issueCard payloads', () => {
+  test('privacy: one single-use card capped at exactly the approved total', async () => {
+    const s = stubFetch(() => okJson(CARD));
+    try {
+      const card = await issueCard({ name: 'privacy', key: 'k', baseUrl: 'https://api.privacy.com' }, { amountCents: 64000, currency: 'USD', merchant: 'Health permit' });
+      expect(card.last4).toBe('1111');
+      expect(s.calls[0]!.url).toBe('https://api.privacy.com/v1/card');
+      expect(s.calls[0]!.init.headers.authorization).toBe('Bearer k');
+      expect(JSON.parse(s.calls[0]!.init.body)).toEqual({
+        type: 'SINGLE_USE',
+        memo: 'Hermes Duet: Health permit',
+        spend_limit: 64000,
+        spend_limit_duration: 'TRANSACTION',
+      });
+    } finally {
+      s.restore();
+    }
+  });
+
+  test('stripe: a virtual card with an all-time limit of the approved total', async () => {
+    const s = stubFetch((url) => (url.includes('/details') ? okJson(CARD) : okJson({ id: 'ic_1' })));
+    try {
+      await issueCard({ name: 'stripe', key: 'sk', baseUrl: 'https://api.stripe.com' }, { amountCents: 3150, currency: 'USD', merchant: 'Amtrak' });
+      const form = new URLSearchParams(s.calls[0]!.init.body);
+      expect(form.get('spending_controls[spending_limits][0][amount]')).toBe('3150');
+      expect(form.get('spending_controls[spending_limits][0][interval]')).toBe('all_time');
+      expect(form.get('currency')).toBe('usd');
+      expect(form.get('type')).toBe('virtual');
+      expect(s.calls[1]!.url).toContain('/v1/issuing/cards/ic_1/details');
+    } finally {
+      s.restore();
+    }
+  });
+
+  test('revolut and the generic proxy get the same cap', async () => {
+    const revolut = stubFetch(() => okJson(CARD));
+    try {
+      await issueCard({ name: 'revolut', key: 'r', baseUrl: 'https://b2b.revolut.com' }, { amountCents: 999, currency: 'EUR', merchant: 'Cafe' });
+      expect(JSON.parse(revolut.calls[0]!.init.body)).toEqual({ virtual: true, single_use: true, spend_limit: 999, currency: 'EUR' });
+    } finally {
+      revolut.restore();
+    }
+    const generic = stubFetch(() => okJson(CARD));
+    try {
+      await issueCard({ name: 'generic', key: 'g', baseUrl: 'http://127.0.0.1:9' }, { amountCents: 500, currency: 'USD', merchant: 'Shop' });
+      const body = JSON.parse(generic.calls[0]!.init.body);
+      expect(body.amount_cents).toBe(500);
+      expect(body.single_use).toBe(true);
+    } finally {
+      generic.restore();
+    }
+  });
+
+  test('a provider refusal is surfaced, never returned as a card', async () => {
+    const s = stubFetch(() => ({ ok: false, status: 402, text: async () => JSON.stringify({ error: { message: 'declined' } }) }));
+    try {
+      const err = await issueCard({ name: 'privacy', key: 'k', baseUrl: 'https://api.privacy.com' }, { amountCents: 1, currency: 'USD', merchant: 'x' }).catch((e) => e);
+      expect(err.message).toContain('privacy refused the card (402)');
+      expect(err.message).toContain('declined');
+    } finally {
+      s.restore();
+    }
   });
 });
