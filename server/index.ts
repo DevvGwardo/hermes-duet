@@ -8,7 +8,7 @@ import { createPairCode, deviceCookie, deviceFor, internalToken, isHttps, redeem
 import { listConnectors, testConnector } from './connectors';
 import { sseResponse } from './bus';
 import { config } from './config';
-import { type AttachmentRow, attachments, channels, db, devices, files, items, kv, pages, settings, tasks, toAttachment, triggers } from './db';
+import { type AttachmentRow, attachments, channels, db, devices, files, items, kv, newId, pages, settings, tasks, toAttachment, triggers } from './db';
 import { hermes } from './hermes';
 import { presence } from './presence';
 import { hasSubscriptions, notify, publicKey, saveSubscription } from './push';
@@ -17,7 +17,7 @@ import { ftsQuery, search } from './search';
 import { startScheduler } from './scheduler';
 import { downloadsPrompt, meetingPrompt, webhookMatches, webhookPrompt, type WatchedFile } from './triggers';
 import { checkMeetings, meetingPrepEnabled, recordWebhook, startFolderWatch, webhookReady, webhookToken } from './triggers-runtime';
-import { normalizeMime, saveUpload } from './uploads';
+import { MAX_UPLOAD_BYTES, normalizeMime, saveUpload } from './uploads';
 import { readLogin, vaults } from './vault';
 import { broadcast } from './bus';
 
@@ -36,6 +36,93 @@ async function body<T = any>(req: Request): Promise<T> {
 function tooLarge(req: Request, limit: number): boolean {
   const n = Number(req.headers.get('content-length') ?? 0);
   return Number.isFinite(n) && n > limit;
+}
+
+/** The build the phone is talking to (`/api/version`), so drift after an upgrade is visible. */
+const VERSION = (() => {
+  try {
+    return String(JSON.parse(readFileSync(join(config.root, 'package.json'), 'utf8')).version ?? '0');
+  } catch {
+    return '0';
+  }
+})();
+
+/** One rule for a chat message, wherever it arrives from: the app, the CLI, or the MCP shim's loopback call. */
+const MAX_MESSAGE = 20_000;
+function messageText(raw: unknown, hasFiles: boolean): string {
+  return String(raw ?? '').trim() || (hasFiles ? 'Here’s a file.' : '');
+}
+
+/**
+ * What the phone is told when a route throws. Validation messages we wrote ourselves ("no such channel", "empty
+ * message") are useful and stay; anything that looks like an errno path, a Hermes body or a stack fragment is replaced
+ * with a code, and the detail is logged against a request id the user can quote.
+ */
+const ERROR_CODES: Record<number, string> = { 400: 'bad_request', 401: 'not_paired', 403: 'forbidden', 404: 'not_found', 413: 'too_large', 429: 'too_many', 500: 'internal' };
+export function apiError(e: any, path: string): Response {
+  const msg = String(e?.message ?? e ?? 'error');
+  // An errno or a raw Error is an internal failure even when its text happens to say "no such file".
+  const status = /ENOENT|EACCES|EPERM|Error:/i.test(msg)
+    ? 500
+    : /\b(no such|not found)\b/i.test(msg)
+      ? 404
+      : /already|expected|invalid|bad|empty|too (large|long|many)|missing|refus/i.test(msg)
+        ? 400
+        : 500;
+  const id = newId().slice(-8);
+  if (status >= 500) console.error(`[api] ${id}`, path, e?.stack ?? e);
+  const code = ERROR_CODES[status] ?? 'error';
+  const safe =
+    (status === 400 || status === 404) &&
+    msg.length <= 140 &&
+    // Anything with a path, JSON, markup or a stack frame is an internal detail, not a sentence for a phone screen.
+    !/[/\\{}<>]|\bat\s+\S|ENOENT|EACCES|EPERM|Error:/i.test(msg);
+  return json({ error: safe ? msg : code, code, request_id: id }, status);
+}
+
+/**
+ * What each API path accepts, so a wrong method gets 405 + Allow instead of a 404 that reads like the route is gone.
+ * Only used after no branch matched; unknown paths still 404.
+ */
+const API_METHODS: [RegExp, string[]][] = [
+  [/^\/api\/health$/, ['GET']],
+  [/^\/api\/version$/, ['GET']],
+  [/^\/api\/pair$/, ['POST']],
+  [/^\/api\/state$/, ['GET']],
+  [/^\/api\/items$/, ['GET']],
+  [/^\/api\/channels$/, ['GET', 'POST']],
+  [/^\/api\/channels\/[\w-]+$/, ['DELETE']],
+  [/^\/api\/channels\/[\w-]+\/seen$/, ['POST']],
+  [/^\/api\/channels\/[\w-]+\/items$/, ['GET']],
+  [/^\/api\/search$/, ['GET']],
+  [/^\/api\/connectors$/, ['GET']],
+  [/^\/api\/connectors\/[\w-]+\/test$/, ['POST']],
+  [/^\/api\/triggers$/, ['GET']],
+  [/^\/api\/events$/, ['GET']],
+  [/^\/api\/capabilities$/, ['GET']],
+  [/^\/api\/browser\/(status|tabs|vaults)$/, ['GET']],
+  [/^\/api\/browser\/(open|input|viewport|autofill)$/, ['POST']],
+  [/^\/api\/messages$/, ['POST']],
+  [/^\/api\/tasks$/, ['POST']],
+  [/^\/api\/tasks\/[\w-]+\/cancel$/, ['POST']],
+  [/^\/api\/uploads$/, ['POST']],
+  [/^\/api\/uploads\/[\w-]+$/, ['GET']],
+  [/^\/api\/audio\/transcribe$/, ['POST']],
+  [/^\/api\/cards\/[\w-]+\/act$/, ['POST']],
+  [/^\/api\/runs\/stop$/, ['POST']],
+  [/^\/api\/pages\/[\w-]+$/, ['DELETE']],
+  [/^\/api\/files\/[\w-]+$/, ['GET']],
+  [/^\/api\/settings$/, ['PUT']],
+  [/^\/api\/brief\/run$/, ['POST']],
+  [/^\/api\/brief\/[\w-]+\/audio$/, ['GET']],
+  [/^\/api\/push\/(key)$/, ['GET']],
+  [/^\/api\/push\/(subscribe|test)$/, ['POST']],
+  [/^\/api\/presence$/, ['POST']],
+];
+function methodNotAllowed(path: string, method: string): Response | null {
+  const allowed = API_METHODS.find(([re]) => re.test(path))?.[1];
+  if (!allowed || allowed.includes(method)) return null;
+  return json({ error: 'method_not_allowed', code: 'method_not_allowed', allow: allowed }, 405, { allow: allowed.join(', ') });
 }
 
 const kb = (n: number) => (n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`);
@@ -76,14 +163,19 @@ const APP_CSP = [
 import * as browser from './browser';
 
 // ---------- public app server (the tunnel points here) ----------
-async function handleApp(req: Request, server?: any): Promise<Response> {
+export async function handleApp(req: Request, server?: any): Promise<Response> {
   const url = new URL(req.url);
-  const path = url.pathname;
+  // A trailing slash is the same route. Without this, `/api/items/` missed every branch and fell out of the API block
+  // as an opaque 404 (and non-API paths fell through to the app shell), which the client reported as a parse error.
+  const rawPath = url.pathname;
+  const path = rawPath.length > 1 ? rawPath.replace(/\/+$/, '') : rawPath;
 
-  if (!path.startsWith('/api/')) return serveStatic(path);
+  if (path !== '/api' && !path.startsWith('/api/')) return serveStatic(rawPath);
 
   // Liveness for Docker, launchd and anything else watching this process. It reveals nothing and needs no pairing.
   if (path === '/api/health' && req.method === 'GET') return json({ ok: true, at: Date.now() });
+  // Which build the phone is talking to, so client/server drift after an upgrade is visible instead of mysterious.
+  if (path === '/api/version' && req.method === 'GET') return json({ version: VERSION });
 
   if (path === '/api/pair' && req.method === 'POST') {
     const { code } = await body<{ code?: string }>(req);
@@ -209,7 +301,8 @@ async function handleApp(req: Request, server?: any): Promise<Response> {
     if (path === '/api/browser/open' && req.method === 'POST') return json({ tabs: await browser.open() });
     if (path === '/api/browser/input' && req.method === 'POST') {
       const evt = await body<Record<string, unknown>>(req);
-      await browser.input(evt as any);
+      // browser.input validates and clamps the payload (normalizeInput); nothing raw reaches CDP.
+      await browser.input(evt);
       return json({ ok: true });
     }
     if (path === '/api/browser/viewport' && req.method === 'POST') {
@@ -243,9 +336,9 @@ async function handleApp(req: Request, server?: any): Promise<Response> {
       if (attachment_ids && !Array.isArray(attachment_ids)) return err(400, 'attachment_ids must be a list');
       const rows = ids.map((id) => attachments.get(id)).filter((r): r is AttachmentRow => !!r);
       if (rows.length !== ids.length) return err(400, 'unknown attachment');
-      const t = String(text ?? '').trim() || (rows.length ? 'Here’s a file.' : '');
+      const t = messageText(text, rows.length > 0);
       if (!t) return err(400, 'empty message');
-      if (t.length > 20_000) return err(400, 'message too long');
+      if (t.length > MAX_MESSAGE) return err(400, 'message too long');
       const note = attachmentNote(rows);
       const item = submitUser(t, note ? `${t}${note}` : undefined, channel_id, rows.map(toAttachment));
       if (rows.length) attachments.link(ids, item.id);
@@ -261,7 +354,9 @@ async function handleApp(req: Request, server?: any): Promise<Response> {
 
     // ---- uploads, voice memos and spoken briefs (see server/uploads.ts, server/audio.ts) ----
     if (path === '/api/uploads' && req.method === 'POST') {
-      if (tooLarge(req, 40 * 1024 * 1024)) return err(413, 'that file is too large');
+      // One limit: the same number uploads.ts enforces after reading, so a file can't pass the gate and then be
+      // rejected deeper after it has been fully buffered.
+      if (tooLarge(req, MAX_UPLOAD_BYTES)) return err(413, 'that file is too large');
       const form = await req.formData().catch(() => null);
       const file = form?.get('file');
       if (!(file instanceof File)) return err(400, 'send the file in a "file" field');
@@ -273,7 +368,7 @@ async function handleApp(req: Request, server?: any): Promise<Response> {
     if (uploadMatch && req.method === 'GET') return serveUpload(uploadMatch[1]);
 
     if (path === '/api/audio/transcribe' && req.method === 'POST') {
-      if (tooLarge(req, 40 * 1024 * 1024)) return err(413, 'that recording is too large');
+      if (tooLarge(req, MAX_UPLOAD_BYTES)) return err(413, 'that recording is too large');
       let bytes: Uint8Array;
       let mime: string;
       if ((req.headers.get('content-type') ?? '').includes('multipart/form-data')) {
@@ -372,12 +467,9 @@ async function handleApp(req: Request, server?: any): Promise<Response> {
       const sent = await notify({ title: 'Hermes Duet', body: 'Notifications are working.', always: true }, { ignoreQuiet: true });
       return json({ sent });
     }
-    return err(404, 'not found');
+    return methodNotAllowed(path, req.method) ?? err(404, 'not found');
   } catch (e: any) {
-    const msg = e?.message ?? String(e);
-    const status = /not found/i.test(msg) ? 404 : /already|expected|invalid|bad|empty|too/i.test(msg) ? 400 : 500;
-    if (status === 500) console.error('[api]', path, e);
-    return err(status, msg);
+    return apiError(e, path);
   }
 }
 
@@ -528,7 +620,7 @@ const tokenFile = join(config.dataDir, 'internal.token');
 writeFileSync(tokenFile, INTERNAL);
 chmodSync(tokenFile, 0o600);
 
-async function handleInternal(req: Request): Promise<Response> {
+export async function handleInternal(req: Request): Promise<Response> {
   if (req.headers.get('authorization') !== `Bearer ${INTERNAL}`) return err(401, 'unauthorized');
   // cloudflared also connects from loopback, so refuse anything that looks proxied.
   if (req.headers.get('cf-connecting-ip') || req.headers.get('x-forwarded-for')) return err(403, 'forbidden');
@@ -557,8 +649,12 @@ async function handleInternal(req: Request): Promise<Response> {
       return json({ ok: true });
     }
     if (url.pathname === '/internal/message' && req.method === 'POST') {
+      // The same rule as the public route: the shim and CLI must not be able to enqueue an empty or unbounded turn.
       const { text } = await body<{ text?: string }>(req);
-      return json({ item: submitUser(String(text ?? '')) });
+      const t = messageText(text, false);
+      if (!t) return err(400, 'empty message');
+      if (t.length > MAX_MESSAGE) return err(400, 'message too long');
+      return json({ item: submitUser(t) });
     }
     return err(404, 'not found');
   } catch (e: any) {
@@ -571,7 +667,7 @@ async function handleInternal(req: Request): Promise<Response> {
  * JSON header), pointer/keyboard events in. Frames are dropped rather than queued when a phone
  * can't keep up, so a slow link degrades the picture instead of lagging behind reality.
  */
-Bun.serve({
+if (import.meta.main) Bun.serve({
   hostname: config.host,
   port: config.port,
   fetch: (req, srv) => handleApp(req, srv),
@@ -637,14 +733,16 @@ Bun.serve({
   },
   idleTimeout: 0,
 });
-Bun.serve({ hostname: '127.0.0.1', port: config.internalPort, fetch: handleInternal, idleTimeout: 120 });
+if (import.meta.main) Bun.serve({ hostname: '127.0.0.1', port: config.internalPort, fetch: handleInternal, idleTimeout: 120 });
 
-recoverOrphans();
-startHermesWatch();
-startConnectorWatch();
-startScheduler();
-startTriggerLoops();
-console.log(`[hermes-duet] app http://${config.host}:${config.port}  internal http://127.0.0.1:${config.internalPort}  hermes ${config.hermesUrl}`);
+if (import.meta.main) {
+  recoverOrphans();
+  startHermesWatch();
+  startConnectorWatch();
+  startScheduler();
+  startTriggerLoops();
+  console.log(`[hermes-duet] app http://${config.host}:${config.port}  internal http://127.0.0.1:${config.internalPort}  hermes ${config.hermesUrl}`);
+}
 
 // launchd sends SIGTERM on stop and restart. Closing the database checkpoints the WAL, so a restart never depends on
 // recovery picking up a half-written file; runs that were in flight are reattached by recoverOrphans on the next boot.
