@@ -1,0 +1,10 @@
+# The workflow actions are floating major tags (checkout@v7, setup-bun@v2), which is the right trade here: no CI
+# secrets, no publish step, read-only token. This keeps a major from silently going stale without adding a pin nobody
+# would verify by hand.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
