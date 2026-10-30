@@ -1,8 +1,9 @@
 import { expect, test } from 'bun:test';
 import type { FileEntry, Item, Page, Task } from '../shared/types';
 import { newId, items, tasks } from './db';
+import { HermesError, hermes } from './hermes';
 import { GENERAL_CHANNEL } from './schema';
-import { deliverableAction, deliverableApproval, pageRefreshing, settleHermesAsk } from './runner';
+import { agentState, cancelTask, deliverableAction, deliverableApproval, pageRefreshing, settleHermesAsk, startUserTask } from './runner';
 
 const task = (status: Task['status']): Task => ({
   id: newId(),
@@ -166,4 +167,59 @@ test('a double tap sends the decision once, not twice', async () => {
   release();
   expect((await first).card!.status).toBe('approved');
   expect(sends).toBe(1);
+});
+
+// Stopping must free the lane on our own clock: a gateway that is down (or answers 404 because it already forgot the
+// run) never sends the terminal event, and everything queued behind that run would otherwise wait out the watchdog.
+function stubHermes(over: Record<string, unknown>): () => void {
+  const saved: Record<string, unknown> = {};
+  for (const k of Object.keys(over)) saved[k] = (hermes as any)[k];
+  Object.assign(hermes, over);
+  return () => Object.assign(hermes, saved);
+}
+
+/** A run that starts, then streams nothing until it is aborted. */
+const silentRun = (runId: string) => ({
+  hasKey: () => true,
+  startRun: async () => ({ run_id: runId, status: 'running' }),
+  events: (_id: string, _seq: number, _on: unknown, signal: AbortSignal) =>
+    new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve())),
+});
+
+async function until(cond: () => boolean, ms = 2000) {
+  const deadline = Date.now() + ms;
+  while (!cond() && Date.now() < deadline) await Bun.sleep(10);
+}
+
+test('a stop Hermes refuses (404) still frees the lane right away', async () => {
+  const restore = stubHermes({
+    ...silentRun('r-stop-404'),
+    stop: async () => {
+      throw new HermesError(404, 'no such run');
+    },
+  });
+  try {
+    const { task } = startUserTask('build the deck');
+    await until(() => agentState().background_running === 1);
+    await cancelTask(task.id);
+    expect(agentState().background_running).toBe(0);
+    expect(tasks.get(task.id)!.status).toBe('cancelled');
+  } finally {
+    restore();
+  }
+});
+
+test('a stop Hermes accepts but never confirms still frees the lane within the grace', async () => {
+  const restore = stubHermes({ ...silentRun('r-stop-silent'), stop: async () => ({}) });
+  try {
+    const { task } = startUserTask('build the other deck');
+    await until(() => agentState().background_running === 1);
+    const startedAt = Date.now();
+    await cancelTask(task.id);
+    expect(agentState().background_running).toBe(0);
+    // Bounded by the grace, not by the 45-minute watchdog.
+    expect(Date.now() - startedAt).toBeLessThan(10_000);
+  } finally {
+    restore();
+  }
 });

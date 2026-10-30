@@ -1381,9 +1381,38 @@ function requeueTask(t: Task, previous?: string, auto = false): Task {
   return task;
 }
 
+/** How long Hermes gets to hear about a stop before the lane is settled locally anyway. The gateway is on this host,
+ * so its terminal event normally arrives in well under this; the grace exists for the run that never answers. */
+const STOP_GRACE_MS = 1_000;
+/** The stop POST itself: a gateway that doesn't answer must not hold the user's Stop button hostage. */
+const STOP_POST_MS = 5_000;
+
+/**
+ * Stop one run and always release its lane. Hermes is asked to stop, and its terminal event normally finishes the run
+ * for us, but a gateway that is down — or a run it has already forgotten and answers 404 for — never sends that
+ * event, and the lane would stay blocked until the 45-minute watchdog, holding everything queued behind it. So the
+ * lane is finished on our own bounded clock instead; a terminal event that arrives later is a no-op, because
+ * `finish` is idempotent.
+ */
+async function stopRun(l: Lane, run: ActiveRun): Promise<void> {
+  if (run.finished || !run.id) return;
+  const asked = hermes.stop(run.id).then(
+    () => true,
+    () => false,
+  );
+  // Unreachable, refused or too slow: there is nothing left to wait for.
+  if ((await Promise.race([asked, Bun.sleep(STOP_POST_MS).then(() => 'timeout' as const)])) !== true) {
+    finish(l, run, 'stopped');
+    return;
+  }
+  const deadline = Date.now() + STOP_GRACE_MS;
+  while (!run.finished && Date.now() < deadline) await Bun.sleep(50);
+  if (!run.finished) finish(l, run, 'stopped');
+}
+
 export async function stopMain() {
-  const a = mainLane().active;
-  if (a?.id) await hermes.stop(a.id).catch(() => {});
+  const l = mainLane();
+  if (l.active) await stopRun(l, l.active);
 }
 
 export async function cancelTask(id: string) {
@@ -1393,8 +1422,8 @@ export async function cancelTask(id: string) {
   putTask({ ...t, status: 'cancelled', progress: '' });
   if (!t.background) {
     // A mirrored main-thread turn: cancelling it means stopping that turn.
-    const a = mainLane().active;
-    if (a?.fgTaskId === id && a.id) await hermes.stop(a.id).catch(() => {});
+    const l = mainLane();
+    if (l.active?.fgTaskId === id) await stopRun(l, l.active);
     return;
   }
   const sid = tasks.sessionOf(id);
@@ -1402,7 +1431,7 @@ export async function cancelTask(id: string) {
   if (l) {
     l.queue = [];
     persistQueues();
-    if (l.active?.id) await hermes.stop(l.active.id).catch(() => {});
+    if (l.active) await stopRun(l, l.active);
   }
   for (const c of items.pendingCards()) {
     if (c.card?.task_id === id) {
