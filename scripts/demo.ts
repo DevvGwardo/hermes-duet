@@ -179,6 +179,7 @@ if (import.meta.main) {
   const fresh = !existsSync(join(DEMO_DIR, 'duet.db'));
   mkdirSync(DEMO_DIR, { recursive: true });
   if (fresh) await seed();
-  await import('../server/index.ts');
+  const { startServers } = await import('../server/index.ts');
+  startServers();
   console.log(`[demo] ${fresh ? 'seeded' : 'reusing'} ${DEMO_DIR}. Pair with: bun scripts/demo.ts pair`);
 }

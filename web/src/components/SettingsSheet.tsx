@@ -63,7 +63,7 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="sheet-backdrop" onClick={onClose}>
-      <div ref={dialog} className="sheet settings" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+      <div ref={dialog} className="sheet settings" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Settings">
         <header className="sheet-head">
           <div className="sheet-title">
             <strong>Settings</strong>

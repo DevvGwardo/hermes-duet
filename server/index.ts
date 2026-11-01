@@ -674,75 +674,79 @@ export async function handleInternal(req: Request): Promise<Response> {
  * JSON header), pointer/keyboard events in. Frames are dropped rather than queued when a phone
  * can't keep up, so a slow link degrades the picture instead of lagging behind reality.
  */
-const appServer = import.meta.main ? Bun.serve({
-  hostname: config.host,
-  port: config.port,
-  fetch: (req, srv) => handleApp(req, srv),
-  websocket: {
-    open(ws: any) {
-      if (process.env.DUET_CHROME_DEBUG) console.error('[ws] open', JSON.stringify(ws.data));
-      if (ws.data?.kind !== 'browser') return;
-      const stopFrame = browser.onFrame((f) => {
-        // A phone on a bad link must never make the server buffer megabytes of stale frames:
-        // drop the frame instead of queueing it behind a stalled socket.
-        const buffered = typeof (ws as any).getBufferedAmount === 'function' ? (ws as any).getBufferedAmount() : 0;
-        if (buffered > 1_500_000) return;
-        const meta = new TextEncoder().encode(
-          JSON.stringify({ w: f.width, h: f.height, tab: f.tabId }),
-        );
-        const buf = new Uint8Array(4 + meta.length + f.jpeg.length);
-        new DataView(buf.buffer).setUint32(0, meta.length, true);
-        buf.set(meta, 4);
-        buf.set(f.jpeg, 4 + meta.length);
-        try {
-          ws.send(buf);
-        } catch (e: any) {
-          console.error('[ws] frame send failed', e?.message);
-        }
-      });
-      const stopTabs = browser.onTabs((tabs) => {
-        try {
-          ws.send(JSON.stringify({ type: 'tabs', tabs }));
-        } catch (e: any) {
-          console.error('[ws] tabs send failed', e?.message);
-        }
-      });
-      ws.data.stop = () => {
-        stopFrame();
-        stopTabs();
-      };
-      browser.open().catch((e: Error) => {
-        try {
-          ws.send(JSON.stringify({ type: 'error', message: e.message }));
-        } catch {}
-      });
-    },
-    async message(ws: any, raw: any) {
-      if (ws.data?.kind !== 'browser') return;
-      let evt: any;
-      try {
-        evt = JSON.parse(typeof raw === 'string' ? raw : new TextDecoder().decode(raw));
-      } catch {
-        return;
-      }
-      if (!evt?.type) return;
-      try {
-        await browser.input(evt);
-      } catch (e: any) {
-        try {
-          ws.send(JSON.stringify({ type: 'error', message: e?.message ?? 'input failed' }));
-        } catch {}
-      }
-    },
-    close(ws: any) {
-      ws.data?.stop?.();
-    },
-  },
-  idleTimeout: 0,
-}) : null;
-const internalServer = import.meta.main ? Bun.serve({ hostname: '127.0.0.1', port: config.internalPort, fetch: handleInternal, idleTimeout: 120 }) : null;
+let appServer: any = null;
+let internalServer: any = null;
 
-if (import.meta.main) {
+export function startServers() {
+  if (appServer && internalServer) return { appServer, internalServer };
+  appServer = Bun.serve({
+    hostname: config.host,
+    port: config.port,
+    fetch: (req, srv) => handleApp(req, srv),
+    websocket: {
+      open(ws: any) {
+        if (process.env.DUET_CHROME_DEBUG) console.error('[ws] open', JSON.stringify(ws.data));
+        if (ws.data?.kind !== 'browser') return;
+        const stopFrame = browser.onFrame((f) => {
+          // A phone on a bad link must never make the server buffer megabytes of stale frames:
+          // drop the frame instead of queueing it behind a stalled socket.
+          const buffered = typeof (ws as any).getBufferedAmount === 'function' ? (ws as any).getBufferedAmount() : 0;
+          if (buffered > 1_500_000) return;
+          const meta = new TextEncoder().encode(
+            JSON.stringify({ w: f.width, h: f.height, tab: f.tabId }),
+          );
+          const buf = new Uint8Array(4 + meta.length + f.jpeg.length);
+          new DataView(buf.buffer).setUint32(0, meta.length, true);
+          buf.set(meta, 4);
+          buf.set(f.jpeg, 4 + meta.length);
+          try {
+            ws.send(buf);
+          } catch (e: any) {
+            console.error('[ws] frame send failed', e?.message);
+          }
+        });
+        const stopTabs = browser.onTabs((tabs) => {
+          try {
+            ws.send(JSON.stringify({ type: 'tabs', tabs }));
+          } catch (e: any) {
+            console.error('[ws] tabs send failed', e?.message);
+          }
+        });
+        ws.data.stop = () => {
+          stopFrame();
+          stopTabs();
+        };
+        browser.open().catch((e: Error) => {
+          try {
+            ws.send(JSON.stringify({ type: 'error', message: e.message }));
+          } catch {}
+        });
+      },
+      async message(ws: any, raw: any) {
+        if (ws.data?.kind !== 'browser') return;
+        let evt: any;
+        try {
+          evt = JSON.parse(typeof raw === 'string' ? raw : new TextDecoder().decode(raw));
+        } catch {
+          return;
+        }
+        if (!evt?.type) return;
+        try {
+          await browser.input(evt);
+        } catch (e: any) {
+          try {
+            ws.send(JSON.stringify({ type: 'error', message: e?.message ?? 'input failed' }));
+          } catch {}
+        }
+      },
+      close(ws: any) {
+        ws.data?.stop?.();
+      },
+    },
+    idleTimeout: 0,
+  });
+  internalServer = Bun.serve({ hostname: '127.0.0.1', port: config.internalPort, fetch: handleInternal, idleTimeout: 120 });
+
   try {
     prune();
     setInterval(() => {
@@ -761,6 +765,11 @@ if (import.meta.main) {
   startScheduler();
   startTriggerLoops();
   console.log(`[hermes-duet] app http://${config.host}:${config.port}  internal http://127.0.0.1:${config.internalPort}  hermes ${config.hermesUrl}`);
+  return { appServer, internalServer };
+}
+
+if (import.meta.main) {
+  startServers();
 }
 
 /**

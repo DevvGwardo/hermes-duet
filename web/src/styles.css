@@ -2378,7 +2378,8 @@ li.done .tick {
       opacity: 0;
     }
   }
-  .sheet.settings {
+  .sheet.settings,
+  .sheet.channels-sheet {
     max-width: 520px;
   }
   .sheet.search-sheet {
@@ -2856,6 +2857,10 @@ li.done .tick {
   padding: 10px 4px;
   text-align: left;
 }
+.channel-row-main > svg {
+  flex: none;
+  color: var(--gold);
+}
 .channel-hash {
   width: 28px;
   height: 28px;
@@ -2873,13 +2878,17 @@ li.done .tick {
   margin: 6px 0 2px;
 }
 .channel-form input {
-  flex: 1 1 140px;
+  flex: 1 1 130px;
   min-width: 0;
   background: #0d0d0d;
   border: 1.5px solid var(--line-2);
   border-radius: 6px;
   padding: 8px 10px;
   font-size: 16px; /* >=16px stops iOS zoom-on-focus */
+  color: var(--paper);
+}
+.channel-form input:nth-child(2) {
+  flex: 2 1 180px;
 }
 .channel-form input:focus {
   outline: 0;

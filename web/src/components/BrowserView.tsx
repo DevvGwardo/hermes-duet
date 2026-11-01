@@ -244,7 +244,7 @@ export function BrowserView({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <div ref={dialog} className="browser-pane" role="dialog" aria-label="Live browser">
+    <div ref={dialog} className="browser-pane" role="dialog" aria-modal="true" aria-label="Live browser">
       <div className="browser-bar">
         <button className="icon-btn" aria-label="Back" onClick={() => send({ type: 'back' })}>
           <span style={{ display: 'inline-flex', transform: 'rotate(180deg)' }}>

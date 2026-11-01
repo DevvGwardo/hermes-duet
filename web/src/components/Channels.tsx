@@ -90,7 +90,7 @@ export function ChannelsSheet({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="sheet-backdrop" onClick={onClose}>
-      <div ref={dialog} className="sheet channels-sheet" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+      <div ref={dialog} className="sheet channels-sheet" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Channels">
         <header className="sheet-head">
           <div className="sheet-title">
             <strong>Channels</strong>
@@ -248,7 +248,7 @@ export function SearchOverlay({
 
   return (
     <div className="sheet-backdrop" onClick={onClose}>
-      <div ref={dialog} className="sheet search-sheet" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+      <div ref={dialog} className="sheet search-sheet" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Search">
         <header className="sheet-head search-head">
           <Icon.search size={18} />
           <input
