@@ -154,6 +154,24 @@ export function BrowserView({ onClose }: { onClose: () => void }) {
     };
   }, []);
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (document.activeElement === keyRef.current) return;
+      if (urlOpen) {
+        setUrlOpen(false);
+        return;
+      }
+      if (tabsOpen) {
+        setTabsOpen(false);
+        return;
+      }
+      onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose, urlOpen, tabsOpen]);
+
   /** Canvas pixels are the page's CSS pixels: scale the touch back into that space. */
   const toPage = (clientX: number, clientY: number) => {
     const canvas = canvasRef.current;

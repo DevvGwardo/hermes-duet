@@ -2592,6 +2592,21 @@ li.done .tick {
   }
 }
 @media (max-width: 420px) {
+  .topbar {
+    gap: 6px;
+    padding: 10px 8px;
+  }
+  .top-brand {
+    gap: 6px;
+  }
+  .topbar .icon-btn {
+    width: 36px;
+    height: 36px;
+  }
+  .status-pill {
+    padding: 0 8px;
+    gap: 6px;
+  }
   .suggestions {
     grid-template-columns: 1fr;
   }
@@ -2874,12 +2889,14 @@ li.done .tick {
 .channel-form {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
   margin: 6px 0 2px;
 }
 .channel-form input {
   flex: 1 1 130px;
   min-width: 0;
+  height: 38px;
   background: #0d0d0d;
   border: 1.5px solid var(--line-2);
   border-radius: 6px;
@@ -2887,12 +2904,18 @@ li.done .tick {
   font-size: 16px; /* >=16px stops iOS zoom-on-focus */
   color: var(--paper);
 }
+.channel-form input:first-child {
+  font-family: var(--mono);
+}
 .channel-form input:nth-child(2) {
   flex: 2 1 180px;
 }
 .channel-form input:focus {
   outline: 0;
   border-color: var(--gold);
+}
+.channel-form .btn {
+  height: 38px;
 }
 
 /* ---------------------------------------------------------------- search */

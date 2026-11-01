@@ -19,7 +19,7 @@ export function tabbables(root: HTMLElement): HTMLElement[] {
 let lastOutside: HTMLElement | null = null;
 
 function isInsideDialog(t: EventTarget | null): boolean {
-  return t instanceof HTMLElement && !!t.closest?.('.sheet,.browser-pane');
+  return t instanceof Element && !!t.closest?.('.sheet,.browser-pane');
 }
 
 /** Call once from the app root: remembers the last interacted control outside dialogs. */
