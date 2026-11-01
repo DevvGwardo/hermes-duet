@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 const root = resolve(import.meta.dir, '..');
@@ -57,14 +57,14 @@ function positiveNumber(name: string, fallback: number): number {
 
 export const config = {
   root,
-  dataDir: env.DUET_DATA_DIR ?? join(root, 'data'),
+  dataDir: env.DUET_DATA_DIR ?? (env.NODE_ENV === 'test' || env.VITEST ? mkdtempSync(join(tmpdir(), 'duet-test-')) : join(root, 'data')),
   webDir: join(root, 'web', 'dist'),
   host: env.DUET_HOST ?? '127.0.0.1',
   port: positiveNumber('DUET_PORT', 7456),
   /** Loopback-only listener for the MCP shim and the CLI. Never point the tunnel here. */
   internalPort: positiveNumber('DUET_INTERNAL_PORT', 7457),
   publicUrl: env.DUET_PUBLIC_URL ?? '',
-  hermesUrl: (env.DUET_HERMES_URL ?? 'http://127.0.0.1:8642').replace(/\/$/, ''),
+  hermesUrl: (env.DUET_HERMES_URL ?? (env.NODE_ENV === 'test' ? 'http://127.0.0.1:0' : 'http://127.0.0.1:8642')).replace(/\/$/, ''),
   hermesKey: env.DUET_HERMES_KEY ?? env.API_SERVER_KEY ?? '',
   hermesHome: env.HERMES_HOME ?? join(homedir(), '.hermes'),
   hermesModel: env.DUET_HERMES_MODEL ?? 'hermes-agent',

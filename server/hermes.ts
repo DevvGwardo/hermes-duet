@@ -5,6 +5,7 @@ import { config } from './config';
 /** API key: explicit env first, then the gateway's own ~/.hermes/.env (read-only). */
 function apiKey(): string {
   if (config.hermesKey) return config.hermesKey;
+  if (process.env.NODE_ENV === 'test') return '';
   const envPath = join(config.hermesHome, '.env');
   if (existsSync(envPath)) {
     const m = readFileSync(envPath, 'utf8').match(/^\s*API_SERVER_KEY\s*=\s*['"]?([^'"\n]+)['"]?\s*$/m);

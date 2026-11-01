@@ -5,6 +5,9 @@ import { HermesError, hermes } from './hermes';
 import { GENERAL_CHANNEL } from './schema';
 import { agentState, cancelTask, deliverableAction, deliverableApproval, executeTool, mainSessionId, pageRefreshing, recoverOrphans, settleHermesAsk, startUserTask, stopMain } from './runner';
 
+// Tests must never trigger real Hermes gateway turns unless explicitly stubbed
+hermes.hasKey = () => false;
+
 const task = (status: Task['status']): Task => ({
   id: newId(),
   title: `hc refresh ${status}`,
