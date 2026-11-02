@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, normalize } from 'node:path';
 import type { Snapshot } from '../shared/types';
 import { briefSpeech, speak, transcribeFile } from './audio';
@@ -241,6 +241,9 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
       const before = url.searchParams.get('before') ?? '';
       const channel = url.searchParams.get('channel') ?? '';
       if (channel && !channels.get(channel)) return err(404, 'no such channel');
+      // No cursor means "the newest page". Passing an empty id used to fall through to `items.get('')`, which is null,
+      // so the route answered 200 with an empty thread — indistinguishable from an empty conversation.
+      if (!before) return json(items.latest(100, channel || undefined));
       return json(items.before(before, 100, channel || undefined));
     }
 
@@ -539,22 +542,39 @@ async function serveFile(id: string, download: boolean): Promise<Response> {
   return new Response(Bun.file(f.path), { headers });
 }
 
-async function serveStatic(path: string): Promise<Response> {
-  const rel = normalize(decodeURIComponent(path)).replace(/^(\.\.[/\\])+/, '');
+/** True only for a regular file: a directory is not something the app shell can serve as a body. */
+function isFile(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+async function serveStatic(path: string): Promise<Response> {  // `decodeURIComponent` throws on a malformed escape (`/%`, `/%zz`). This runs before the route try/catch, so an
+  // unhandled throw here reached Bun's error page — a 500 carrying a stack and a source path, for a URL anyone can
+  // type. A bad escape is simply not a file we have.
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(path);
+  } catch {
+    return new Response('Bad request', { status: 400, headers: SECURITY_HEADERS });
+  }
+  const rel = normalize(decoded).replace(/^(\.\.[/\\])+/, '');
   const candidate = join(config.webDir, rel);
-  if (candidate.startsWith(config.webDir) && rel !== '/' && existsSync(candidate)) {
+  // `isFile`, not `existsSync`: a directory passes existence and a nonzero stat size, so `GET /assets/` used to be
+  // served as a body and died with EISDIR instead of falling back to the app shell.
+  if (candidate.startsWith(config.webDir) && rel !== '/' && isFile(candidate)) {
     const file = Bun.file(candidate);
-    if (file.size > 0 || (await file.exists())) {
-      const immutable = rel.startsWith('/assets/');
-      return new Response(file, {
-        headers: {
-          ...SECURITY_HEADERS,
-          ...(rel.endsWith('.html') ? { 'content-security-policy': APP_CSP } : {}),
-          'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache',
-          ...(rel === '/sw.js' ? { 'service-worker-allowed': '/' } : {}),
-        },
-      });
-    }
+    const immutable = rel.startsWith('/assets/');
+    return new Response(file, {
+      headers: {
+        ...SECURITY_HEADERS,
+        ...(rel.endsWith('.html') ? { 'content-security-policy': APP_CSP } : {}),
+        'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache',
+        ...(rel === '/sw.js' ? { 'service-worker-allowed': '/' } : {}),
+      },
+    });
   }
   const index = Bun.file(join(config.webDir, 'index.html'));
   if (!(await index.exists())) return new Response('Web app not built. Run: bun run build', { status: 503 });

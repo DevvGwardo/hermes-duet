@@ -2,7 +2,8 @@
 // needed beyond a paired cookie.
 import { describe, expect, test } from 'bun:test';
 import { createPairCode, deviceCookie, internalToken, redeemPairCode } from './auth';
-import { kv } from './db';
+import { items, kv, newId } from './db';
+import { GENERAL_CHANNEL } from './schema';
 import { apiError, handleApp, handleInternal } from './index';
 import { MAX_UPLOAD_BYTES } from './uploads';
 
@@ -161,4 +162,36 @@ test('a locked-out pair attempt is told how long to wait', async () => {
   } finally {
     kv.set('pair_failures', []);
   }
+});
+
+describe('static shell', () => {
+  test('a malformed percent escape is a bad request, not a 500', async () => {
+    // `decodeURIComponent('/%')` throws, and this runs before the route try/catch: it used to escape as an unhandled
+    // rejection and surface Bun's error page for a URL anyone can type.
+    for (const path of ['/%', '/%zz']) {
+      const res = await app(path);
+      expect(res.status).toBe(400);
+    }
+  });
+});
+
+describe('thread paging', () => {
+  test('the items route without a cursor returns the newest page, not an empty thread', async () => {
+    const now = Date.now();
+    items.save({ id: newId(), kind: 'user', channel_id: GENERAL_CHANNEL, created_at: now, updated_at: now, text: 'hc paging probe' });
+    const res = await authed('/api/items');
+    expect(res.status).toBe(200);
+    const page = (await res.json()) as any;
+    expect(page.items.length).toBeGreaterThan(0);
+    expect(page.items.at(-1).text).toBe('hc paging probe');
+  });
+
+  test('a cursor still pages backwards from that item', async () => {
+    const first = (await (await authed('/api/items')).json()) as any;
+    const oldest = first.items[0];
+    const res = await authed(`/api/items?before=${encodeURIComponent(oldest.id)}`);
+    expect(res.status).toBe(200);
+    const older = (await res.json()) as any;
+    expect(older.items.every((i: any) => i.created_at <= oldest.created_at)).toBe(true);
+  });
 });
