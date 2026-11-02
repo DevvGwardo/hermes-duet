@@ -149,12 +149,17 @@ export const Composer = forwardRef<ComposerHandle, { onSent?: () => void }>(func
     setErr(null);
     onSent?.();
     const ids = files.map((f) => f.id);
+    // Clear optimistically. Waiting for the round trip meant a message typed while the POST was in flight was wiped
+    // when it finally resolved; on failure the draft goes back, but never over something newer.
+    setText('');
+    setFiles([]);
+    setBg(false);
     try {
       await (background ? api.startTask(t, ids) : api.send(t, ids));
-      setText('');
-      setFiles([]);
-      setBg(false);
     } catch (e: any) {
+      setText((cur) => (cur.trim() ? cur : t));
+      setFiles((cur) => (cur.length ? cur : files));
+      setBg(background);
       setErr(e.message ?? 'Could not send');
     } finally {
       setSending(false);

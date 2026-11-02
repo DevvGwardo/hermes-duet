@@ -120,7 +120,12 @@ export function Thread({
       await loadOlder();
     } finally {
       setLoading(false);
-      requestAnimationFrame(() => (el.scrollTop = el.scrollHeight - prevHeight));
+      // Compensate only for height that actually arrived. A failed page adds nothing, and the old arithmetic then set
+      // scrollTop to 0 — the reader was thrown to the top of the thread for tapping "Earlier messages" offline.
+      requestAnimationFrame(() => {
+        const added = el.scrollHeight - prevHeight;
+        if (added > 0) el.scrollTop = added;
+      });
     }
   }
 

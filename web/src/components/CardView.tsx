@@ -23,6 +23,13 @@ export function CardView({ item, onOpenFile }: { item: Item; onOpenFile: (id: st
   const [err, setErr] = useState<string | null>(null);
   const pending = card.status === 'pending';
   const [draft, setDraft] = useState(card.draft ?? '');
+  const [serverDraft, setServerDraft] = useState(card.draft ?? '');
+  // The agent can redraft a card that is already on screen (`replaces`). Re-sync when the server's draft changes, so
+  // Approve never sends text the agent has since replaced — `draftEdited` compared the new draft against a stale copy.
+  if ((card.draft ?? '') !== serverDraft) {
+    setServerDraft(card.draft ?? '');
+    setDraft(card.draft ?? '');
+  }
   const draftEdited = !!card.draft && draft.trim() !== card.draft.trim();
   const tz = useStore((s) => s.settings?.timezone);
   // An ask left waiting since yesterday may no longer hold ("tomorrow" in its draft, an errand already done).

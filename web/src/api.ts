@@ -107,32 +107,50 @@ export async function openChannel(id: string) {
 
 let es: EventSource | null = null;
 let retry = 0;
+/**
+ * A connect already in flight. Two overlapping calls each take a snapshot and open a source: the slower snapshot then
+ * overwrites live state (a streaming reply visibly shortens, a card you just decided flips back to pending), and the
+ * loser's `onerror` closes the winner's stream. The backoff timer and the visibilitychange handler can both fire.
+ */
+let connecting = false;
 
 export async function connect() {
+  if (connecting) return;
+  connecting = true;
   try {
-    applySnapshot(await api.snapshot());
-    reportPresence();
-    resyncPush();
+    const snap = await api.snapshot();
+    connecting = false;
+    applySnapshot(snap);
   } catch (e) {
+    connecting = false;
     if (e instanceof HttpError && e.status === 401) return;
     setState({ connected: false, ready: getState().ready });
     setTimeout(connect, Math.min(15000, 1000 * 2 ** retry++));
     return;
   }
+  reportPresence();
+  resyncPush();
+
+  const next = new EventSource('/api/events', { withCredentials: true });
   es?.close();
-  es = new EventSource('/api/events', { withCredentials: true });
-  es.onopen = () => {
+  es = next;
+  // Every handler checks it still owns `es`: a superseded source must not report connected, apply its events a second
+  // time, or tear down the stream that replaced it.
+  next.onopen = () => {
+    if (es !== next) return;
     retry = 0;
     setState({ connected: true });
   };
-  es.onmessage = (m) => {
+  next.onmessage = (m) => {
+    if (es !== next) return;
     try {
       applyEvent(JSON.parse(m.data) as ServerEvent);
     } catch {}
   };
-  es.onerror = () => {
+  next.onerror = () => {
+    if (es !== next) return;
     setState({ connected: false });
-    es?.close();
+    next.close();
     es = null;
     // Resync from a fresh snapshot: deltas missed while offline are not replayed.
     setTimeout(connect, Math.min(15000, 1000 * 2 ** retry++));
