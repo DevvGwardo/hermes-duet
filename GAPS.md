@@ -222,6 +222,42 @@ smoke run. `scripts/smoke.ts` needs a Hermes gateway, so it belongs in a nightly
 
 ---
 
+## Round 2 — findings after the audit
+
+A second pass over the same ground, after the fixes above landed. None of these repeats a finding from sections 1–6; the
+items those sections still mark open were left open for the reasons given there.
+
+| # | Finding | Status |
+|---|---|---|
+| 7.1 | The Downloads watcher could never announce a file | **Fixed** `1c71c44` |
+| 7.2 | `files.update` and `pages.remove` wrote the row and the index separately | **Fixed** `ad7e20c` |
+| 7.3 | `files.update` indexed ids the file table does not have | **Fixed** `ad7e20c` |
+| 7.4 | The test preload set an env flag nothing read | **Fixed** `344eb60` |
+
+**7.1** The loop advanced its snapshot past the whole folder on every 15 s poll and only then asked whether a file was
+ready. A file is not read until it has been still for 20 s, so the first sighting of every download is always too
+fresh, and `previous = current` had already swallowed it: nothing downloaded while the app was running was ever
+announced, only files that appeared during a poll gap longer than the settle window (a sleep/wake). A batch held back
+by the one-a-minute gap was lost the same way. `folderPass` now returns the files to hand over *and* the snapshot for
+the next pass, and only advances past files whose fate is settled — announced, or dropped by quiet hours.
+
+**7.2** GAPS 4.3 says every asset write indexes its search row in the same transaction as the row. Two of the five did
+not. That claim is now true rather than nearly true.
+
+**7.3** The asset index is not joined back to the files it describes, so a row for a file that is not in the table is a
+search hit that opens a 404. `files.update` now checks that it updated something before indexing it.
+
+**7.4** Harmless, but it made test isolation look stronger than it was: the real guard is `DUET_HERMES_URL` pointing at
+port 0.
+
+Left alone on purpose, after checking: the folder watcher drops a batch that lands during quiet hours instead of holding
+it (a receipt downloaded at 2am is not news at 7am, and the brief reads the folder anyway); `run.text` would be applied
+twice on a reconnect if the gateway ever sent frames with no `id:`, which is a guess about a protocol this app does not
+control; and `dayLabel` is recomputed for every row on each streaming delta, which is real work but not worth a cache
+without a measurement on a phone.
+
+---
+
 ## Rejected findings — do not re-open without new evidence
 
 The crew asserted these confidently; the gate checked and they are wrong or already handled.
