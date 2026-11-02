@@ -86,13 +86,53 @@ export function listFolder(dir: string): WatchedFile[] {
   return out;
 }
 
+/** How long a file must sit unchanged before it counts as finished, so a download in pieces isn't read half-written. */
+export const SETTLE_MS = 20_000;
+
+const fileKey = (f: WatchedFile) => `${f.name}:${f.size}:${f.mtime}`;
+
 /**
  * New files since the previous snapshot. A file that changed in the last `settleMs` is still being written (a bank
  * statement that downloads in pieces), so it is left for the next pass instead of being handed to the agent half-read.
  */
-export function newDownloads(previous: WatchedFile[], current: WatchedFile[], now: number, settleMs = 20_000): WatchedFile[] {
-  const seen = new Set(previous.map((f) => `${f.name}:${f.size}:${f.mtime}`));
-  return current.filter((f) => !seen.has(`${f.name}:${f.size}:${f.mtime}`) && now - f.mtime >= settleMs);
+export function newDownloads(previous: WatchedFile[], current: WatchedFile[], now: number, settleMs = SETTLE_MS): WatchedFile[] {
+  const seen = new Set(previous.map(fileKey));
+  return current.filter((f) => !seen.has(fileKey(f)) && now - f.mtime >= settleMs);
+}
+
+export interface FolderPass {
+  /** Files to hand to the agent now. */
+  fire: WatchedFile[];
+  /** The snapshot the next pass compares against: only files whose fate is already settled. */
+  next: WatchedFile[];
+}
+
+/**
+ * One poll of the watched folder, as a decision over two snapshots.
+ *
+ * The snapshot may only advance past a file once something has been decided about it — announced, or dropped because
+ * quiet hours say so. Advancing past a file that is merely *new but not ready* loses it for good: the poll (15 s) is
+ * faster than the settle window (20 s), so the first sighting of every download is always too fresh, and `previous`
+ * swallowing it there meant nothing downloaded while the app was running was ever announced. A batch held back by the
+ * gap between two announcements has the same shape, and is kept the same way.
+ */
+export function folderPass(
+  previous: WatchedFile[],
+  current: WatchedFile[],
+  now: number,
+  opts: { due: boolean; quiet: boolean; settleMs?: number },
+): FolderPass {
+  // Quiet hours drop the batch rather than holding it: a receipt downloaded at 2am is not news at 7am, and the
+  // morning brief already reads what is in the folder.
+  if (opts.quiet) return { fire: [], next: current };
+  const ready = newDownloads(previous, current, now, opts.settleMs);
+  if (!opts.due) {
+    // Nothing goes out this pass: keep the files we already knew about, and leave the new ones new.
+    const known = new Set(previous.map(fileKey));
+    return { fire: [], next: current.filter((f) => known.has(fileKey(f))) };
+  }
+  const settled = new Set([...previous.map(fileKey), ...ready.map(fileKey)]);
+  return { fire: ready, next: current.filter((f) => settled.has(fileKey(f))) };
 }
 
 /** The queued line for one batch of new files. */

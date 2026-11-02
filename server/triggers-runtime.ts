@@ -6,9 +6,9 @@ import { inQuietHours } from './clock';
 import { kv, settings, triggers } from './db';
 import {
   type WatchedFile,
+  folderPass,
   meetingsSoon,
   meetingKey,
-  newDownloads,
   folderDue,
   listFolder,
   recentHits,
@@ -54,13 +54,17 @@ export function startFolderWatch(fire: (files: WatchedFile[]) => Promise<void>) 
   setInterval(async () => {
     try {
       const current = listFolder(config.watchDir);
-      const fresh = newDownloads(previous, current, Date.now());
-      previous = current;
-      if (!fresh.length || !folderDue(lastFired, Date.now())) return;
-      if (inQuietHours(settings.get())) return;
-      lastFired = Date.now();
+      const now = Date.now();
+      // `folderPass` decides what is announced and what stays new; the snapshot is advanced only past settled files.
+      const pass = folderPass(previous, current, now, {
+        due: folderDue(lastFired, now),
+        quiet: inQuietHours(settings.get()),
+      });
+      previous = pass.next;
+      if (!pass.fire.length) return;
+      lastFired = now;
       triggers.save({ id: 'trigger-downloads', kind: 'file_watch', config: { dir: config.watchDir }, last_triggered_at: lastFired });
-      await fire(fresh);
+      await fire(pass.fire);
     } catch (e: any) {
       console.warn('[downloads]', e?.message ?? e);
     }

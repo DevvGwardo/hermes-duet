@@ -3,6 +3,7 @@ import type { CalendarEvent } from './connectors';
 import {
   downloadsPrompt,
   folderDue,
+  folderPass,
   meetingKey,
   meetingPrompt,
   meetingsSoon,
@@ -96,6 +97,49 @@ describe('newDownloads', () => {
   test('nothing new is nothing', () => {
     const list = [file('a.pdf', 1, now - 60_000)];
     expect(newDownloads(list, list, now)).toEqual([]);
+  });
+});
+
+// The watcher polls every 15 s but will not read a file until it has been still for 20 s, so the first sighting of
+// every download is always too fresh. What the snapshot does with a file it is not ready to announce is the whole
+// question: advancing past it means nothing downloaded while the app is running is ever announced.
+describe('folderPass', () => {
+  const t0 = 1_000_000;
+  const receipt = (mtime = t0) => file('receipt.pdf', 900, mtime);
+  const poll = (previous: WatchedFile[], current: WatchedFile[], at: number, due = true, quiet = false) =>
+    folderPass(previous, current, at, { due, quiet });
+
+  test('a file first seen inside the settle window is announced on a later pass, not lost', () => {
+    const first = poll([], [receipt()], t0 + 15_000);
+    expect(first.fire).toEqual([]);
+    // Still new: the next pass has to see it again to ever announce it.
+    expect(first.next).toEqual([]);
+    const second = poll(first.next, [receipt()], t0 + 30_000);
+    expect(second.fire.map((f) => f.name)).toEqual(['receipt.pdf']);
+  });
+
+  test('an announced file is not announced again', () => {
+    const pass = poll([], [receipt()], t0 + 60_000);
+    expect(pass.fire).toHaveLength(1);
+    expect(poll(pass.next, [receipt()], t0 + 75_000).fire).toEqual([]);
+  });
+
+  test('a batch held back by the gap between announcements goes out on the next pass', () => {
+    const seen = file('seen.pdf', 1, t0 - 600_000);
+    const now = [seen, receipt()];
+    const held = poll([seen], now, t0 + 60_000, false);
+    expect(held.fire).toEqual([]);
+    expect(poll(held.next, now, t0 + 75_000).fire.map((f) => f.name)).toEqual(['receipt.pdf']);
+  });
+
+  test('quiet hours drop the batch rather than holding it for the morning', () => {
+    const pass = poll([], [receipt()], t0 + 60_000, true, true);
+    expect(pass.fire).toEqual([]);
+    expect(pass.next.map((f) => f.name)).toEqual(['receipt.pdf']);
+  });
+
+  test('a file that disappeared leaves the snapshot', () => {
+    expect(poll([file('gone.pdf', 1, t0 - 600_000)], [], t0, false).next).toEqual([]);
   });
 });
 
