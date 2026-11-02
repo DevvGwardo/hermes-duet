@@ -4,7 +4,7 @@ A 10-agent audit of `hermes-duet` (architect, backend, frontend, api, data, test
 produced the findings below. This file is now the record of what happened to each one: **fixed**, **still open** (with
 why), or **rejected** (the crew was wrong — do not re-investigate without new evidence).
 
-**Baseline at audit time:** 348 tests pass, `tsc` clean. **Now:** 393 tests pass, `tsc` clean, `bun run build` clean.
+**Baseline at audit time:** 348 tests pass, `tsc` clean. **Now:** 400 tests pass, `tsc` clean, `bun run build` clean.
 
 Line numbers in the original findings refer to commit `8fbabc7`; they have moved.
 
@@ -30,8 +30,13 @@ Tests fail against the old fire-and-forget ordering.
 
 **1.2** `stopRun` settles the lane on our own clock: `finish` immediately on refusal/404, after a 1 s grace if Hermes
 accepts but never sends a terminal event, at 5 s if the POST does not answer. `finish` was already idempotent.
-*Residual:* a Stop tapped in the window between a lane going active and `run.id` arriving is still dropped; fixing it
-needs a "stop requested" flag checked inside `launch` after `startRun`.
+*Residual closed* `4074432`: the window between a lane going active and `run.id` arriving is exactly the length of the
+start POST, and a Stop tapped inside it used to do nothing — worse, `cancelTask` had already written `cancelled`, so
+the agent kept posting cards under a task the user believed was stopped. `stopRun` now sets `stopRequested` when there
+is no id yet, `launchRun` honours it the moment the id lands, and a transient start failure behind a stop is dropped
+instead of quietly re-queued. The same commit closed a harder failure: everything `launch` did after `l.active = run`
+was outside its try, and `pumpAll` calls it fire-and-forget, so a throw there left the lane held forever with no
+watchdog to release it. It now funnels through `finish`, which always releases the lane.
 
 **1.3** Step matching is still tried first. With two or more live turns and no unique match, the call is **refused**
 ("nothing was posted", the candidate ids, and the `task_id` to retry with) instead of falling back to the main lane.
