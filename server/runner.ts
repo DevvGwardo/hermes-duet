@@ -88,6 +88,11 @@ interface ActiveRun {
   leftoverSteer: string;
   /** When the run last sent an event (keepalives don't count), for the hung-run watchdog. */
   lastEventAt: number;
+  /**
+   * Stop tapped before Hermes answered with a `run_id`. There is nothing to cancel yet, so the request is remembered
+   * and honoured the moment the id arrives — otherwise the agent keeps working on a turn the user believes is over.
+   */
+  stopRequested: boolean;
 }
 
 interface Lane {
@@ -314,6 +319,7 @@ async function launch(l: Lane, spec: RunSpec) {
     lastSave: 0,
     metaAt: 0,
     stopUnconfirmed: false,
+    stopRequested: false,
     reuse: [],
     fgTaskId: null,
     steers: [],
@@ -323,6 +329,19 @@ async function launch(l: Lane, spec: RunSpec) {
   l.active = run;
   broadcastAgent();
 
+  // `pumpAll` skips any lane whose `active` is set, and this call is fire-and-forget, so anything thrown below would
+  // strand the thread for the life of the process: there is no consume loop yet, so no watchdog either, and nothing
+  // would ever clear `l.active`. Everything funnels through `finish`, which is idempotent and always releases the lane.
+  try {
+    await launchRun(l, run, spec);
+  } catch (e: any) {
+    console.error('[runs] launch failed', e?.message ?? e);
+    finish(l, run, 'error', undefined, `Couldn't start: ${e?.message ?? e}`);
+  }
+}
+
+/** The rest of a launch, once the lane is claimed. Split out so a throw here cannot leave the lane held. */
+async function launchRun(l: Lane, run: ActiveRun, spec: RunSpec) {
   // A brief can wait behind a long chat turn or a Hermes outage, and a check-in behind an outage. Meanwhile cards
   // get decided and page refreshes finish, so the waiting list and page lines are read now, not when it was queued.
   // A transient start failure re-queues the spec and this runs again on the next launch.
@@ -356,6 +375,12 @@ async function launch(l: Lane, spec: RunSpec) {
     });
     run.id = r.run_id;
     if (notes) kv.set('context_notes', []);
+    // Stop was tapped while this POST was in flight. There was no id to cancel then, so honour it now, before the
+    // consume loop starts: `stopRun` finishes the lane itself.
+    if (run.stopRequested) {
+      void stopRun(l, run);
+      return;
+    }
     if (l.main && spec.kind !== 'checkin') setTimeout(() => trackForeground(l, run), FG_AFTER_MS);
   } catch (e: any) {
     l.active = null;
@@ -363,6 +388,11 @@ async function launch(l: Lane, spec: RunSpec) {
     const unreachable = !(e instanceof HermesError) && !String(e?.message).startsWith('no Hermes API key');
     const restarting = e instanceof HermesError && [502, 503, 504].includes(e.status);
     if (busy || unreachable || restarting) {
+      // A stop request means this turn must not run at all: drop it instead of re-queueing it behind the user's back.
+      if (run.stopRequested) {
+        broadcastAgent();
+        return;
+      }
       // Transient: keep the work at the front of its lane instead of dropping it.
       l.queue.unshift(spec);
       persistQueues();
@@ -1470,7 +1500,14 @@ async function requestStop(id: string): Promise<'stopped' | 'gone' | 'unknown'> 
  * `finish` is idempotent.
  */
 async function stopRun(l: Lane, run: ActiveRun): Promise<void> {
-  if (run.finished || !run.id) return;
+  if (run.finished) return;
+  // Hermes has not answered with a run_id yet, so there is nothing to cancel. Remember the request instead of
+  // returning silently: `launchRun` honours it the moment the id lands. This is the Stop tapped in the first seconds
+  // of a turn — the one window where a cancel used to be dropped and the agent kept working anyway.
+  if (!run.id) {
+    run.stopRequested = true;
+    return;
+  }
   // Unreachable, refused or too slow: there is nothing left to wait for.
   if ((await requestStop(run.id)) !== 'stopped') {
     finish(l, run, 'stopped');
@@ -2002,7 +2039,8 @@ export function recoverOrphans() {
       abort: new AbortController(),
       lastSave: 0,
       metaAt: 0,
-    stopUnconfirmed: false,
+      stopUnconfirmed: false,
+      stopRequested: false,
       reuse: resumed ? [] : segments,
       fgTaskId: meta.fgTaskId ?? null,
       // A steer Hermes has not delivered yet comes back as `pending_steer`; keeping the list across a restart is what

@@ -3,7 +3,7 @@ import type { FileEntry, Item, Page, Task } from '../shared/types';
 import { items, kv, newId, runs, tasks } from './db';
 import { HermesError, hermes } from './hermes';
 import { GENERAL_CHANNEL } from './schema';
-import { agentState, cancelTask, deliverableAction, deliverableApproval, executeTool, mainSessionId, pageRefreshing, recoverOrphans, settleHermesAsk, startUserTask, stopMain } from './runner';
+import { agentState, cancelTask, deliverableAction, deliverableApproval, executeTool, mainSessionId, pageRefreshing, recoverOrphans, settleHermesAsk, startUserTask, stopMain, submitUser } from './runner';
 
 // Tests must never trigger real Hermes gateway turns unless explicitly stubbed
 hermes.hasKey = () => false;
@@ -404,5 +404,38 @@ test('a resumed run continues the message it was writing instead of duplicating 
   } finally {
     await stopMain().catch(() => {});
     restore();
+  }
+});
+
+// A Stop tapped before Hermes answers with a run_id had nothing to cancel yet, and was dropped silently: the agent
+// kept working on a turn the user had already stopped, and the lane stayed busy until the run finished on its own.
+test('a stop tapped before the run id arrives is honoured once it does', async () => {
+  let release: (v: { run_id: string; status: string }) => void = () => {};
+  const started = new Promise<{ run_id: string; status: string }>((r) => (release = r));
+  const stopped: string[] = [];
+  const restore = stubHermes({
+    ...silentRun('r-stop-early'),
+    startRun: () => started,
+    stop: async (id: string) => {
+      stopped.push(id);
+      return {};
+    },
+  });
+  try {
+    submitUser('stop me before it starts');
+    // The lane is claimed and parked on the start POST: active, but with no run id to cancel yet.
+    expect(agentState().busy).toBe(true);
+    await stopMain();
+    expect(stopped).toEqual([]);
+
+    release({ run_id: 'r-stop-early', status: 'running' });
+    await until(() => stopped.length === 1);
+    expect(stopped).toEqual(['r-stop-early']);
+    // Hermes sends no terminal event for a run it was told to stop, so the lane is released on our own clock.
+    await until(() => agentState().busy === false, 4000);
+    expect(agentState().busy).toBe(false);
+  } finally {
+    restore();
+    await stopMain().catch(() => {});
   }
 });
