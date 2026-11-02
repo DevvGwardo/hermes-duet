@@ -383,9 +383,14 @@ export const files = {
     return entry;
   },
   update(entry: FileEntry) {
-    fileUpdate.run(JSON.stringify(entry), entry.id);
-    // Titles are searchable: a rename that didn't reach the index would keep the old title findable forever.
-    searchIndex.put(entry.id, 'file', entry.title, entry.name);
+    // The row and its search row are one unit. Indexing outside the write meant a failed index left the file table
+    // updated with the error thrown at the caller, and an update for a file the table doesn't have used to leave a
+    // search hit that opens a 404.
+    tx(() => {
+      if (fileUpdate.run(JSON.stringify(entry), entry.id).changes === 0) return;
+      // Titles are searchable: a rename that didn't reach the index would keep the old title findable forever.
+      searchIndex.put(entry.id, 'file', entry.title, entry.name);
+    });
     return entry;
   },
   get(id: string): { entry: FileEntry; path: string } | null {
@@ -418,8 +423,11 @@ export const pages = {
     return pagesAll.all().map((r) => JSON.parse(r.json) as Page);
   },
   remove(id: string) {
-    db.query('DELETE FROM pages WHERE id = ?').run(id);
-    searchIndex.remove(id);
+    // Row and index together: a page deleted from one and not the other is searchable but gone.
+    tx(() => {
+      db.query('DELETE FROM pages WHERE id = ?').run(id);
+      searchIndex.remove(id);
+    });
   },
 };
 
