@@ -151,7 +151,11 @@ export const channels = {
     const reuse = () => {
       const existing = channels.bySlug(slug);
       if (!existing) return null;
-      channelTouch.run(input.name, input.topic ?? null, now, existing.id);
+      // A channel that is still open is not being "reused", it is the same channel: return it untouched. Touching it
+      // here would let `POST /api/channels {"name":"Work"}` silently erase the topic of the live #work.
+      if (existing.archived_at == null) return existing;
+      // Archived: bring it back, keeping its topic when the caller did not name a new one.
+      channelTouch.run(input.name, input.topic ?? existing.topic ?? null, now, existing.id);
       return channelGet.get(existing.id)!;
     };
     const found = reuse();
