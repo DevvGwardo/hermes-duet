@@ -14,6 +14,8 @@ import {
   recentHits,
   webhookAllowed,
   WEBHOOK_WINDOW_MS,
+  WEBHOOK_IP_WINDOW_MS,
+  webhookIpAllowed,
 } from './triggers';
 import type { CalendarEvent } from './connectors';
 
@@ -40,6 +42,20 @@ export function webhookReady(now = Date.now()): boolean {
 
 export function recordWebhook(now = Date.now()) {
   kv.set(WEBHOOK_RECORD, [...recentHits(kv.get<number[]>(WEBHOOK_RECORD, []), now, WEBHOOK_WINDOW_MS), now]);
+}
+
+const WEBHOOK_IP_RECORD = 'webhook_ip_hits';
+export function webhookIpReady(ip: string, now = Date.now()): boolean {
+  const all = kv.get<Record<string, number[]>>(WEBHOOK_IP_RECORD, {});
+  return webhookIpAllowed(all[ip] ?? [], now);
+}
+export function recordWebhookIp(ip: string, now = Date.now()) {
+  const all = kv.get<Record<string, number[]>>(WEBHOOK_IP_RECORD, {});
+  const mine = recentHits(all[ip] ?? [], now, WEBHOOK_IP_WINDOW_MS);
+  all[ip] = [...mine, now];
+  // Bound the map so a scanner cannot grow it forever.
+  const keys = Object.keys(all).slice(-64);
+  kv.set(WEBHOOK_IP_RECORD, Object.fromEntries(keys.map((k) => [k, all[k]])));
 }
 
 /**

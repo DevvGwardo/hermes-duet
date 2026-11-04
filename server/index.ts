@@ -15,8 +15,8 @@ import { hasSubscriptions, notify, publicKey, saveSubscription } from './push';
 import { abortActiveRuns, actOnCard, agentState, cancelTask, deliverableAction, deliverableApproval, executeTool, recoverOrphans, runBrief, runCheckin, startConnectorWatch, startHermesWatch, startUserTask, stopMain, stopPage, submitSystem, submitUser } from './runner';
 import { ftsQuery, search } from './search';
 import { startScheduler } from './scheduler';
-import { downloadsPrompt, meetingPrompt, webhookMatches, webhookPrompt, type WatchedFile } from './triggers';
-import { checkMeetings, meetingPrepEnabled, recordWebhook, startFolderWatch, webhookReady, webhookToken } from './triggers-runtime';
+import { downloadsPrompt, inboundIp, meetingPrompt, webhookMatches, webhookPrompt, type WatchedFile } from './triggers';
+import { checkMeetings, meetingPrepEnabled, recordWebhook, recordWebhookIp, startFolderWatch, webhookIpReady, webhookReady, webhookToken } from './triggers-runtime';
 import { MAX_UPLOAD_BYTES, checkBodySize, normalizeMime, saveUpload } from './uploads';
 import { readLogin, vaults } from './vault';
 import { broadcast } from './bus';
@@ -197,7 +197,11 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
    */
   const hookMatch = path.match(/^\/api\/webhooks\/([\w-]{8,64})$/);
   if (hookMatch && req.method === 'POST') {
+    // The token is the only credential on this route: count it, throttle it per source, and never log it.
     if (!webhookMatches(webhookToken(), hookMatch[1])) return err(401, 'bad webhook token');
+    const ip = inboundIp(req);
+    if (!webhookIpReady(ip)) return err(429, 'too many webhooks');
+    recordWebhookIp(ip);
     if (tooLarge(req, 256_000)) return err(413, 'payload too large');
     if (!webhookReady()) return err(429, 'too many webhooks');
     const kindRaw = url.searchParams.get('kind') ?? '';

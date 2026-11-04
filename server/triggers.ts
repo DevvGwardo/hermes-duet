@@ -160,6 +160,17 @@ export const FOLDER_GAP_MS = 60_000;
 /** Webhooks are cheap to send, so this is only a runaway guard. */
 export const WEBHOOK_WINDOW_MS = 10 * 60_000;
 export const WEBHOOK_MAX = 60;
+/** Per source the webhooks are throttled harder than globally: an unpaired token guess must decay quickly. */
+export const WEBHOOK_IP_WINDOW_MS = 60_000;
+export const WEBHOOK_IP_MAX = 30;
+
+/** Client for a request: X-Forwarded-For is only trusted from loopback proxies, so the socket IP wins. */
+export function inboundIp(req: Request, fallback = 'unknown'): string {
+  const raw = String(req.headers.get('x-forwarded-for') ?? '').split(',')[0]?.trim() ?? '';
+  const privateNet = /^(127\.0\.0\.1|::1|192\.168\.|10\.|100\.(6[4-9]|7[0-9]|8[0-9]|9[0-9]|10[0-9]|11[0-9]|12[0-7])\.).*/.test(raw);
+  if (privateNet) return raw;
+  return fallback;
+}
 
 export function folderDue(lastAt: number, now: number, gap = FOLDER_GAP_MS): boolean {
   return now - lastAt >= gap;
@@ -172,4 +183,9 @@ export function recentHits(hits: number[], now: number, window = WEBHOOK_WINDOW_
 
 export function webhookAllowed(hits: number[], now: number): boolean {
   return recentHits(hits, now).length < WEBHOOK_MAX;
+}
+
+/** Per-IP throttle for the unauthenticated webhook route. Counts only that source's attempts in the window. */
+export function webhookIpAllowed(hits: number[], now: number): boolean {
+  return recentHits(hits, now, WEBHOOK_IP_WINDOW_MS).length < WEBHOOK_IP_MAX;
 }

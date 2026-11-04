@@ -11,6 +11,7 @@ import {
   recentHits,
   watchableFile,
   webhookAllowed,
+  webhookIpAllowed,
   webhookMatches,
   webhookPrompt,
   type WatchedFile,
@@ -199,5 +200,19 @@ describe('rate limits', () => {
     expect(recentHits(hits, now + 11 * 60_000)).toEqual([]);
     expect(webhookAllowed(hits, now + 11 * 60_000)).toBe(true);
     expect(webhookAllowed([], now)).toBe(true);
+  });
+});
+describe("webhookIpAllowed", () => {
+  test("allows up to the per-IP cap, then throttles that source", () => {
+    const now = 5_000_000;
+    const hits = Array.from({ length: 29 }, (_, i) => now - (i + 1) * 1000);
+    expect(webhookIpAllowed(hits, now)).toBe(true);
+    expect(webhookIpAllowed([...hits, now], now)).toBe(false);
+  });
+
+  test("hits outside the minute window do not count", () => {
+    const now = 5_000_000;
+    const hits = Array.from({ length: 31 }, () => now - 61_000);
+    expect(webhookIpAllowed(hits, now)).toBe(true);
   });
 });
