@@ -458,8 +458,8 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
       return json({ settings: next });
     }
     if (path === '/api/brief/run' && req.method === 'POST') {
-      runBrief('manual');
-      return json({ ok: true });
+      const queued = runBrief('manual');
+      return json({ ok: true, queued });
     }
     if (path === '/api/push/key' && req.method === 'GET') return json({ key: publicKey });
     if (path === '/api/push/subscribe' && req.method === 'POST') {

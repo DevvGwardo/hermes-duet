@@ -3,7 +3,7 @@ import type { FileEntry, Item, Page, Task } from '../shared/types';
 import { items, kv, newId, runs, tasks } from './db';
 import { HermesError, hermes } from './hermes';
 import { GENERAL_CHANNEL } from './schema';
-import { agentState, cancelTask, deliverableAction, deliverableApproval, executeTool, mainSessionId, pageRefreshing, recoverOrphans, settleHermesAsk, startUserTask, stopMain, submitUser } from './runner';
+import { agentState, briefDedupeAllowed, cancelTask, deliverableAction, deliverableApproval, executeTool, mainSessionId, pageRefreshing, recoverOrphans, runBrief, settleHermesAsk, startUserTask, stopMain, submitUser, __resetBriefDedupe } from './runner';
 
 // Tests must never trigger real Hermes gateway turns unless explicitly stubbed
 hermes.hasKey = () => false;
@@ -438,4 +438,22 @@ test('a stop tapped before the run id arrives is honoured once it does', async (
     restore();
     await stopMain().catch(() => {});
   }
+});
+
+test("manual brief dedupe collapses double taps within the window", () => {
+  __resetBriefDedupe();
+  const now = 1_000_000;
+  expect(briefDedupeAllowed(now)).toBe(true);
+  expect(briefDedupeAllowed(now + 1)).toBe(false);
+  expect(briefDedupeAllowed(now + 9_999)).toBe(false);
+  expect(briefDedupeAllowed(now + 10_000)).toBe(true);
+  expect(briefDedupeAllowed(now + 10_001)).toBe(false);
+});
+
+test("scheduled briefs are never deduped by the manual window", () => {
+  __resetBriefDedupe();
+  const now = 2_000_000;
+  expect(briefDedupeAllowed(now)).toBe(true);
+  // runBrief with scheduled source must not consult the manual dedupe clock.
+  __resetBriefDedupe();
 });

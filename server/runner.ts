@@ -1583,7 +1583,26 @@ function checkinInput(since?: string): string {
   });
 }
 
+/**
+ * Narrow double-work guard for the manual brief: two taps or a double network
+ * retry within 10s collapse to one `runBrief` call. `runBrief` itself already
+ * dedupes a queued/active brief; this only covers the instant between two
+ * HTTP POSTs landing before either has queued anything.
+ */
+export const BRIEF_MIN_GAP_MS = 10_000;
+let lastManualBriefAt = 0;
+export function briefDedupeAllowed(now = Date.now()): boolean {
+  if (now - lastManualBriefAt < BRIEF_MIN_GAP_MS) return false;
+  lastManualBriefAt = now;
+  return true;
+}
+/** Test seam: reset the dedupe window without restarting the process. */
+export function __resetBriefDedupe() {
+  lastManualBriefAt = 0;
+}
+
 export function runBrief(source: 'scheduled' | 'manual') {
+  if (source === 'manual' && !briefDedupeAllowed()) return false;
   const m = mainLane();
   const queued = m.queue.find((q) => q.kind === 'brief');
   if (queued && source === 'manual' && queued.scheduled) {
@@ -1592,9 +1611,10 @@ export function runBrief(source: 'scheduled' | 'manual') {
     persistQueues();
     pumpAll();
   }
-  if (queued || m.active?.spec.kind === 'brief') return;
+  if (queued || m.active?.spec.kind === 'brief') return false;
   enqueue({ kind: 'brief', sessionId: m.sessionId, input: '', scheduled: source === 'scheduled' });
   console.log(`[brief] queued (${source})`);
+  return true;
 }
 
 export function runCheckin() {
