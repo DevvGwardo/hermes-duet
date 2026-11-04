@@ -1,5 +1,5 @@
-import { describe, expect, test } from 'bun:test';
-import { commandFor, parseLogin, safeDomain, vaultPlan } from './vault';
+import { afterEach, describe, expect, test } from 'bun:test';
+import { __setVaultHas, __setVaultRunner, commandFor, parseLogin, readLogin, safeDomain, vaultPlan } from './vault';
 
 const has = (present: string[]) => (cmd: string) => present.includes(cmd);
 
@@ -96,5 +96,46 @@ describe('commandFor', () => {
     expect(safeDomain('example.com; rm -rf /')).toBeNull();
     expect(safeDomain('--help')).toBeNull();
     expect(safeDomain('http://mail.example.com/inbox')).toBe('mail.example.com');
+  });
+});
+
+describe("readLogin with a fake executor", () => {
+  const saved = { op: process.env.DUET_OP_CMD, bw: process.env.DUET_BW_CMD };
+  afterEach(() => {
+    process.env.DUET_OP_CMD = saved.op;
+    process.env.DUET_BW_CMD = saved.bw;
+  });
+
+  test("passes the domain as exactly one argv word", async () => {
+    const seen: string[][] = [];
+    const prevRunner = __setVaultRunner(async (_cmd, args) => {
+      seen.push(args);
+      return { out: JSON.stringify({ username: "me@example.com", password: "hunter2" }), err: "", code: 0 };
+    });
+    const prevHas = __setVaultHas(() => true);
+    process.env.DUET_OP_CMD = "op item get {domain} --format json";
+    try {
+      const login = await readLogin("mail.example.com", "1password");
+      expect(login.password).toBe("hunter2");
+      expect(seen.length).toBe(1);
+      expect(seen[0]).toEqual(["item", "get", "mail.example.com", "--format", "json"]);
+    } finally {
+      __setVaultRunner(prevRunner);
+      __setVaultHas(prevHas);
+    }
+  });
+
+  test("a failed command never echoes a password into the error", async () => {
+    const prevRunner = __setVaultRunner(async () => ({ out: "", err: "password hunter2 failed", code: 1 }));
+    const prevHas = __setVaultHas(() => true);
+    process.env.DUET_OP_CMD = "op item get {domain}";
+    try {
+      const err = await readLogin("example.com", "1password").catch((e: Error) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect(String(err).toLowerCase()).not.toContain("hunter2");
+    } finally {
+      __setVaultRunner(prevRunner);
+      __setVaultHas(prevHas);
+    }
   });
 });

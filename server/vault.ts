@@ -106,6 +106,17 @@ function hasCommand(cmd: string) {
   }
 }
 
+/** Test seam: override the installed-command check so readLogin can be exercised without op/bw on PATH. */
+let planHas: (cmd: string) => boolean = hasCommand;
+export function __setVaultHas(next: (cmd: string) => boolean): (cmd: string) => boolean {
+  const prev = planHas;
+  planHas = next;
+  return prev;
+}
+export function __resetVaultHas() {
+  planHas = hasCommand;
+}
+
 async function run(cmd: string, args: string[], env: Env = {}): Promise<{ out: string; err: string; code: number }> {
   const proc = Bun.spawn([cmd, ...args], {
     stdin: 'ignore',
@@ -122,9 +133,19 @@ async function run(cmd: string, args: string[], env: Env = {}): Promise<{ out: s
   }
 }
 
+/** Executor seam: production runs the real CLI; tests install a fake. */
+type Runner = (cmd: string, args: string[], env?: Env) => Promise<{ out: string; err: string; code: number }>;
+let runner: Runner = run;
+/** Test seam: install a fake vault executor and restore it. */
+export function __setVaultRunner(next: Runner): Runner {
+  const prev = runner;
+  runner = next;
+  return prev;
+}
+
 /** Status of both vaults for the settings sheet: installed? signed in? */
 export async function vaults(): Promise<VaultStatus[]> {
-  const plan = vaultPlan(process.env, hasCommand);
+  const plan = vaultPlan(process.env, planHas);
   const out: VaultStatus[] = [];
   for (const p of plan) {
     if (!p.installed) {
@@ -132,11 +153,11 @@ export async function vaults(): Promise<VaultStatus[]> {
       continue;
     }
     if (p.id === '1password') {
-      const who = await run('op', ['whoami']).catch(() => ({ out: '', err: '', code: 1 }));
+      const who = await runner('op', ['whoami']).catch(() => ({ out: '', err: '', code: 1 }));
       const ready = who.code === 0 && !!who.out.trim();
       out.push({ id: p.id, name: p.name, installed: true, ready, detail: ready ? `Signed in as ${who.out.trim().slice(0, 60)}` : 'Installed, not signed in', hint: ready ? undefined : 'Run `op signin` on the Mac.' });
     } else {
-      const st = await run('bw', ['status']).catch(() => ({ out: '', err: '', code: 1 }));
+      const st = await runner('bw', ['status']).catch(() => ({ out: '', err: '', code: 1 }));
       let status = '';
       try {
         status = String(JSON.parse(st.out)?.status ?? '');
@@ -162,15 +183,17 @@ export async function vaults(): Promise<VaultStatus[]> {
 export async function readLogin(domain: string, which?: VaultId): Promise<{ vault: VaultId; username: string; password: string }> {
   const host = safeDomain(domain);
   if (!host) throw new Error('that page has no domain to look a login up by');
-  const plan = vaultPlan(process.env, hasCommand).filter((p) => p.installed && (!which || p.id === which));
+  const plan = vaultPlan(process.env, planHas).filter((p) => p.installed && (!which || p.id === which));
   if (!plan.length) throw new Error(which ? `${which} is not installed on this Mac` : 'No password vault CLI is installed (1Password `op` or Bitwarden `bw`).');
   const errors: string[] = [];
   for (const p of plan) {
     const template = p.id === '1password' ? (process.env.DUET_OP_CMD ?? 'op item get {domain} --format json') : (process.env.DUET_BW_CMD ?? 'bw get item {domain} --raw');
     const { cmd, args } = commandFor(template, host);
-    const r = await run(cmd, args, p.id === 'bitwarden' && process.env.BW_SESSION ? { BW_SESSION: process.env.BW_SESSION } : {}).catch((e) => ({ out: '', err: String(e?.message ?? e), code: 1 }));
+    const r = await runner(cmd, args, p.id === 'bitwarden' && process.env.BW_SESSION ? { BW_SESSION: process.env.BW_SESSION } : {}).catch((e) => ({ out: '', err: String(e?.message ?? e), code: 1 }));
     if (r.code !== 0) {
-      errors.push(`${p.name}: ${(r.err || r.out).trim().split('\n')[0]?.slice(0, 120) || `exit ${r.code}`}`);
+      // A vault error may echo the command; never let a credential ride into an error the UI shows.
+      const first = (r.err || r.out).trim().split('\n')[0]?.slice(0, 120) || `exit ${r.code}`;
+      errors.push(`${p.name}: ${/pass/i.test(first) ? 'the vault command failed' : first}`);
       continue;
     }
     let json: any = null;
