@@ -80,5 +80,10 @@ export function saveUpload(input: { bytes: Uint8Array; mime: string; filename?: 
   return toAttachment(attachments.add({ id, filename: displayName(input.filename, mime), mime, size: input.bytes.byteLength, path }));
 }
 
+/** Hard byte ceiling for a buffered request body the server reads whole. */
+export function checkBodySize(bytes: number): void {
+  if (!Number.isFinite(bytes) || bytes > MAX_UPLOAD_BYTES) throw new Error(`files are limited to ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)} MB`);
+}
+
 /** The extension a stored upload has; used only to keep a name the user recognizes. */
 export const uploadExtOf = (name: string) => extname(name).toLowerCase();

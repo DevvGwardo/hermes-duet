@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync, statSync } from 'node:fs';
 import { attachments } from './db';
-import { MAX_UPLOAD_BYTES, UPLOAD_TYPES, checkUpload, displayName, normalizeMime, saveUpload, uploadExt } from './uploads';
+import { MAX_UPLOAD_BYTES, UPLOAD_TYPES, checkBodySize, checkUpload, displayName, normalizeMime, saveUpload, uploadExt } from './uploads';
 
 describe('normalizeMime', () => {
   test('drops codec parameters and case', () => {
@@ -95,5 +95,16 @@ describe('saveUpload', () => {
   test('refuses what checkUpload refuses', () => {
     expect(() => saveUpload({ bytes: new Uint8Array([1]), mime: 'text/html' })).toThrow();
     expect(() => saveUpload({ bytes: new Uint8Array(0), mime: 'image/png' })).toThrow();
+  });
+});
+describe("checkBodySize", () => {
+  test("passes normal and exact-limit sizes", () => {
+    expect(() => checkBodySize(1024)).not.toThrow();
+    expect(() => checkBodySize(MAX_UPLOAD_BYTES)).not.toThrow();
+  });
+
+  test("refuses oversized and non-finite buffers", () => {
+    expect(() => checkBodySize(MAX_UPLOAD_BYTES + 1)).toThrow(/25 MB/);
+    expect(() => checkBodySize(Number.NaN)).toThrow(/25 MB/);
   });
 });

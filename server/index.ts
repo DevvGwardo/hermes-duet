@@ -17,7 +17,7 @@ import { ftsQuery, search } from './search';
 import { startScheduler } from './scheduler';
 import { downloadsPrompt, meetingPrompt, webhookMatches, webhookPrompt, type WatchedFile } from './triggers';
 import { checkMeetings, meetingPrepEnabled, recordWebhook, startFolderWatch, webhookReady, webhookToken } from './triggers-runtime';
-import { MAX_UPLOAD_BYTES, normalizeMime, saveUpload } from './uploads';
+import { MAX_UPLOAD_BYTES, checkBodySize, normalizeMime, saveUpload } from './uploads';
 import { readLogin, vaults } from './vault';
 import { broadcast } from './bus';
 
@@ -365,14 +365,21 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
     // ---- uploads, voice memos and spoken briefs (see server/uploads.ts, server/audio.ts) ----
     if (path === '/api/uploads' && req.method === 'POST') {
       // One limit: the same number uploads.ts enforces after reading, so a file can't pass the gate and then be
-      // rejected deeper after it has been fully buffered.
+      // rejected deeper after it has been fully buffered. A missing or chunked body reports no content-length, so
+      // the hard cap on the buffered File bytes is the real gate.
       if (tooLarge(req, MAX_UPLOAD_BYTES)) return err(413, 'that file is too large');
       const form = await req.formData().catch(() => null);
       const file = form?.get('file');
       if (!(file instanceof File)) return err(400, 'send the file in a "file" field');
       const listed = form?.get('mime');
       const mime = normalizeMime(listed ? String(listed) : file.type);
-      return json({ attachment: saveUpload({ bytes: new Uint8Array(await file.arrayBuffer()), mime, filename: String(form?.get('name') ?? file.name) }) });
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      try {
+        checkBodySize(bytes.byteLength);
+      } catch {
+        return err(413, 'that file is too large');
+      }
+      return json({ attachment: saveUpload({ bytes, mime, filename: String(form?.get('name') ?? file.name) }) });
     }
     const uploadMatch = path.match(/^\/api\/uploads\/([\w-]+)$/);
     if (uploadMatch && req.method === 'GET') return serveUpload(uploadMatch[1]);
@@ -390,6 +397,12 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
       } else {
         bytes = new Uint8Array(await req.arrayBuffer());
         mime = normalizeMime(req.headers.get('content-type'));
+      }
+      // A missing or chunked content-length bypasses tooLarge; the hard cap on the buffered bytes is the real gate.
+      try {
+        checkBodySize(bytes.byteLength);
+      } catch {
+        return err(413, 'that recording is too large');
       }
       if (!mime.startsWith('audio/')) return err(400, 'send an audio recording');
       // The memo is kept even when transcription is unavailable, so it can be replayed and retried later.
