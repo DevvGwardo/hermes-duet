@@ -4,7 +4,7 @@ A 10-agent audit of `hermes-duet` (architect, backend, frontend, api, data, test
 produced the findings below. This file is now the record of what happened to each one: **fixed**, **still open** (with
 why), or **rejected** (the crew was wrong — do not re-investigate without new evidence).
 
-**Baseline at audit time:** 348 tests pass, `tsc` clean. **Now:** 400 tests pass, `tsc` clean, `bun run build` clean.
+**Baseline at audit time:** 348 tests pass, `tsc` clean. **Now:** 416 tests pass, `tsc` clean, `bun run build` clean.
 
 Line numbers in the original findings refer to commit `8fbabc7`; they have moved.
 

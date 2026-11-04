@@ -32,3 +32,7 @@ jobs:
 
       - name: Build web app
         run: bun run build
+
+      # Advisory only: a new advisory never blocks the merge, but it is reported.
+      - name: Dependency audit (advisory)
+        run: bun audit --production --audit-level=moderate || true
