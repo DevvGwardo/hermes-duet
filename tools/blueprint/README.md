@@ -2,8 +2,8 @@
 
 Browser sweep that produces every screenshot and number in the blueprint
 (`docs/blueprint/hermes-duet-blueprint.html`). Latest full evidence run (2026-11-04):
-`sweep-9d2f10e2` / `live-b7255872` — 24/24 and 6/6; all ten scripts 99/99, 37 screenshots, reviewed.
-The suite was re-run after the compression, attachment and request-cap changes landed.
+`sweep-974e7af5` / `live-2b399536` — 24/24 and 6/6; all ten scripts 99/99, 37 screenshots, reviewed.
+The suite was re-run after the compression, attachment, request-cap and code-splitting changes landed.
 
 Not published as an Artifact. View locally:
 `python3 -m http.server 8765 -d docs/blueprint` →

@@ -1,20 +1,23 @@
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { cardOf, isSettledAsk } from '../../shared/links';
 import { api, clearSettledNotifications, connect, isStandalone, openChannel, pushSupported } from './api';
 import { isIOS } from './platform';
 import { ChannelsStrip, ChannelBar, ChannelsSheet, SearchOverlay } from './components/Channels';
 import { Composer, type ComposerHandle } from './components/Composer';
 import { trackDialogOpeners } from './hooks/useDialogTrap';
-import { BrowserView } from './components/BrowserView';
-import { MakeView } from './components/MakeView';
 import { BrandBadge, Decode, MangaBackdrop, Mascot, SpeechBubble, Wordmark } from './components/Manga';
 import { Rail } from './components/Rail';
-import { SettingsSheet } from './components/SettingsSheet';
-import { TasksView } from './components/TasksView';
 import { Thread } from './components/Thread';
-import { Viewer } from './components/Viewer';
 import { getState, useStore } from './store';
 import { Icon } from './ui';
+
+// The first paint is the thread. The two other tabs and the three on-demand overlays are their own chunks: a phone
+// that only reads chat never downloads the live pane, the settings sheet or the viewer.
+const TasksView = lazy(() => import('./components/TasksView').then((m) => ({ default: m.TasksView })));
+const MakeView = lazy(() => import('./components/MakeView').then((m) => ({ default: m.MakeView })));
+const Viewer = lazy(() => import('./components/Viewer').then((m) => ({ default: m.Viewer })));
+const SettingsSheet = lazy(() => import('./components/SettingsSheet').then((m) => ({ default: m.SettingsSheet })));
+const BrowserView = lazy(() => import('./components/BrowserView').then((m) => ({ default: m.BrowserView })));
 
 type Tab = 'chat' | 'tasks' | 'make';
 
@@ -266,8 +269,10 @@ function Shell() {
               <Thread onOpenFile={openFile} scrollToId={jump} onSuggest={startPrompt} followKey={sent} onShowTasks={() => setTab('tasks')} />
             </>
           )}
-          {tab === 'tasks' && <TasksView onJump={jumpTo} onOpenFile={openFile} />}
-          {tab === 'make' && <MakeView onOpenFile={openFile} onStart={startPrompt} onCompare={compareFile} />}
+          <Suspense fallback={null}>
+            {tab === 'tasks' && <TasksView onJump={jumpTo} onOpenFile={openFile} />}
+            {tab === 'make' && <MakeView onOpenFile={openFile} onStart={startPrompt} onCompare={compareFile} />}
+          </Suspense>
         </main>
 
         {tab === 'chat' && <Composer ref={composer} onSent={() => setSent((n) => n + 1)} />}
@@ -290,13 +295,15 @@ function Shell() {
 
       <Rail tab={tab} onJump={jumpTo} onOpenFile={openFile} onShowTasks={() => setTab('tasks')} />
 
-      {fileId && <Viewer fileId={fileId} compareId={compareId} onClose={() => (setFileId(null), setCompareId(null))} />}
-      {channelsOpen && <ChannelsSheet onClose={() => setChannelsOpen(false)} />}
-      {search && (
-        <SearchOverlay onClose={() => setSearch(false)} onJump={jumpTo} onShowTasks={() => setTab('tasks')} onOpenFile={openFile} />
-      )}
-      {browserOpen && <BrowserView onClose={() => setBrowserOpen(false)} />}
-      {settings && <SettingsSheet onClose={() => setSettings(false)} />}
+      <Suspense fallback={null}>
+        {fileId && <Viewer fileId={fileId} compareId={compareId} onClose={() => (setFileId(null), setCompareId(null))} />}
+        {channelsOpen && <ChannelsSheet onClose={() => setChannelsOpen(false)} />}
+        {search && (
+          <SearchOverlay onClose={() => setSearch(false)} onJump={jumpTo} onShowTasks={() => setTab('tasks')} onOpenFile={openFile} />
+        )}
+        {browserOpen && <BrowserView onClose={() => setBrowserOpen(false)} />}
+        {settings && <SettingsSheet onClose={() => setSettings(false)} />}
+      </Suspense>
     </div>
   );
 }

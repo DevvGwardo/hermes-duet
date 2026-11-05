@@ -61,6 +61,25 @@ reverse proxy with auth in front of it. Publish only 7456: the internal listener
 
 The healthcheck hits `/api/health`, which needs no pairing.
 
+## Logs
+
+The service appends stdout and stderr to `~/Library/Logs/hermes-duet/server.log` (override with `DUET_LOG_DIR`) under
+launchd and the systemd user unit. Duet does not rotate that file behind your back: a rename would leave the running
+service writing to the old inode while `hermes-duet logs` tails an empty new file. Rotate it with:
+
+```sh
+hermes-duet rotate-logs        # copytruncate, keep 5 generations
+hermes-duet rotate-logs 10     # keep 10
+```
+
+It copies `server.log` to `server.log.1`, shifts older generations, and truncates the live file in place, so the
+service keeps its descriptor. `hermes-duet doctor` warns once the log passes 50 MB. A weekly cron entry is enough
+for a personal install:
+
+```cron
+0 3 * * 0 /Users/you/.local/bin/hermes-duet rotate-logs 5
+```
+
 ## Environment
 
 Everything is optional except the Hermes key, which the server can also read from `~/.hermes/.env`.
