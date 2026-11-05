@@ -363,6 +363,22 @@ when `expand[]=number` and `expand[]=cvc` are requested. The Stripe branch creat
 already been issued — an orphaned card and no checkout. The request is now a GET to the card with both expansions;
 the existing provider tests assert the method, path and expand parameters (they failed against the old request).
 
+---
+
+## Round 5 — audit-loop iterations, 2026-11-05
+
+| # | Finding | Status |
+|---|---|---|
+| 10.1 | A delivered steer that is a substring of the undelivered one was replayed in its place, losing the user's real message | **Fixed** |
+
+**10.1** `undeliveredSteers` walked `run.steers` oldest-first and used a bare `indexOf` against `pending_steer`.
+With "send it" already delivered and "don't send it" returned pending, the delivered text matched at offset 6 of the
+pending one: the retracted instruction was replayed as a fresh chat turn and the real message was silently dropped
+(words that prefix a longer retraction — "yes" / "yes please", "do it" / "do it tomorrow" — behave the same way).
+Matching now requires a whole line of Hermes's newline-joined payload and consumes the longest steer first, while
+the returned list keeps send order. The same function serves the restart-reattach path. Tests:
+`server/steer.test.ts` (it failed against the old matcher).
+
 ### What is deliberately still open
 
 - **5.5** reconnect snapshot trimming: the compressed snapshot is 1.9 KB on the seed, so this needs a measurement on
