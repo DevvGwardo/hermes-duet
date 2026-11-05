@@ -7,4 +7,5 @@ One line per wake, newest last. Used to enforce the iteration cap and the empty-
 2026-11-05 | iter 2 | 10.1 | P1 | fixed | PR #11 | 439 tests
 2026-11-05 | iter 3 | 10.2 | P1 | fixed | PR #13 | 440 tests, harness 99/99
 2026-11-05 | iter 4 | 10.3 | P1 | fixed | PR #14 | 441 tests, harness 99/99
+2026-11-05 | iter 5 | 10.4 | P2 | fixed | PR #15 | 444 tests, curl-verified
 ```

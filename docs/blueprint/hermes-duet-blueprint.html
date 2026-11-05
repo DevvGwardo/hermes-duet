@@ -91,7 +91,7 @@ pre.cmd { background: var(--kpi-bg); color: var(--kpi-ink); font: 13px/1.6 var(-
   <p class="muted">Everything below came from a local run in real Chrome on this Mac. Screenshots are real captures by the harness in <code>tools/blueprint/</code>; the demo server (<code>bun scripts/demo.ts --reset</code>) holds seeded content, the scheduler off. Nothing is estimated.</p>
   <div class="kpis" role="list">
     <div class="kpi" role="listitem"><b><!--bp:checks-->99 / 99<!--/bp:checks--></b><span>browser checks passed</span></div>
-    <div class="kpi" role="listitem"><b>441/441</b><span>unit tests (<code>bun test</code>, 49 files)</span></div>
+    <div class="kpi" role="listitem"><b>444/444</b><span>unit tests (<code>bun test</code>, 49 files)</span></div>
     <div class="kpi" role="listitem"><b><!--bp:console-errors-->11<!--/bp:console-errors--></b><span>console errors, each the expected logged-out /api/state 401 probe (one per harness context that opens the pair screen)</span></div>
     <div class="kpi" role="listitem"><b><!--bp:shots-->37<!--/bp:shots--></b><span>screenshots captured &amp; reviewed</span></div>
     <div class="kpi" role="listitem"><b>100&nbsp;ms</b><span>first render of the pair screen</span></div>
@@ -100,7 +100,7 @@ pre.cmd { background: var(--kpi-bg); color: var(--kpi-ink); font: 13px/1.6 var(-
 
 <section id="fresh-pass">
   <h2>Fresh pass: gaps, fixes and optimizations (2026-11-04)</h2>
-  <p class="intro">All ten harness scripts were re-run against a fresh demo seed in real Chrome: <strong>99/99 checks, 37 screenshots reviewed</strong>, no unexpected console errors. <code>bun run typecheck</code> is clean, <code>bun test</code> is <strong>441/441 across 49 files</strong>, and <code>bun run build</code> produces a <strong>365 KB initial bundle</strong> plus five on-demand chunks and their precompressed siblings. On top of that evidence, this pass read the HTTP surface, runner, data layer, web client, CI and deploy docs, then fixed the highest-impact gaps. Nothing below is estimated: every claim names the code path or the command that produced it.</p>
+  <p class="intro">All ten harness scripts were re-run against a fresh demo seed in real Chrome: <strong>99/99 checks, 37 screenshots reviewed</strong>, no unexpected console errors. <code>bun run typecheck</code> is clean, <code>bun test</code> is <strong>444/444 across 49 files</strong>, and <code>bun run build</code> produces a <strong>365 KB initial bundle</strong> plus five on-demand chunks and their precompressed siblings. On top of that evidence, this pass read the HTTP surface, runner, data layer, web client, CI and deploy docs, then fixed the highest-impact gaps. Nothing below is estimated: every claim names the code path or the command that produced it.</p>
   <p class="intro">The first table covers the audit’s top findings, including the follow-up pass that closed mutation limits and code splitting. The second covers hardening; log rotation is now fixed there too.</p>
 
   <h3>Fixed first</h3>
@@ -318,7 +318,7 @@ flowchart LR
 
 <section id="tests">
   <h2>Test results</h2>
-  <p class="intro">The harness drives the real app in real Chrome with a disposable paired context per viewport and every non-local request aborted. Unit tests: <code>bun test</code>, 441 pass / 0 fail across 49 files. Build: <code>bun run build</code> clean, including the five lazy chunks and their precompressed siblings. The fresh pass above changed product code, so the browser suite was re-run afterwards: 99/99 again.</p>
+  <p class="intro">The harness drives the real app in real Chrome with a disposable paired context per viewport and every non-local request aborted. Unit tests: <code>bun test</code>, 444 pass / 0 fail across 49 files. Build: <code>bun run build</code> clean, including the five lazy chunks and their precompressed siblings. The fresh pass above changed product code, so the browser suite was re-run afterwards: 99/99 again.</p>
   <div class="table-box"><table>
     <thead><tr><th>Run</th><th>Check</th><th>Measured</th><th>Result</th></tr></thead>
     <tbody><!--bp:checks-rows-->
@@ -518,7 +518,7 @@ export APP_URL=http://127.0.0.1:7466/ BP_OUT=/Users/devgwardo/hermes-duet/bluepr
 for s in sweep live channels pairing a11y approvals recovery dialogs wheel polish; do
   node tools/blueprint/$s.mjs || echo "$s FAILED"
 done
-bun test   # 441 pass, 0 fail</pre>
+bun test   # 444 pass, 0 fail</pre>
 </section>
 </main>
 </div>

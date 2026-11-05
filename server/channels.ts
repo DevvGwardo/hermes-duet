@@ -1,6 +1,7 @@
 // Topic channels. Pure rules only: what a channel name may be, what its slug is, and how the agent is told which
 // thread it is talking in. The rows and sessions live in db.ts and runner.ts.
 import type { Channel } from '../shared/types';
+import { UserError } from './errors';
 
 export interface ChannelInput {
   name: string;
@@ -36,10 +37,10 @@ export function channelInput(raw: unknown): ChannelInput {
     .replace(/^#+/, '')
     .replace(/\s+/g, ' ')
     .trim();
-  if (!name) throw new Error('a channel needs a name');
-  if (name.length > CHANNEL_NAME_MAX) throw new Error(`channel names are at most ${CHANNEL_NAME_MAX} characters`);
-  if (!/[a-z0-9]/i.test(name)) throw new Error('a channel name needs at least one letter or number');
-  if (slugFor(name) === 'general') throw new Error('there is already a general channel');
+  if (!name) throw new UserError('a channel needs a name');
+  if (name.length > CHANNEL_NAME_MAX) throw new UserError(`channel names are at most ${CHANNEL_NAME_MAX} characters`);
+  if (!/[a-z0-9]/i.test(name)) throw new UserError('a channel name needs at least one letter or number');
+  if (slugFor(name) === 'general') throw new UserError('there is already a general channel');
   const topic = String(src.topic ?? '')
     .replace(/\s+/g, ' ')
     .trim()
