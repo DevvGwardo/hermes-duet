@@ -17,7 +17,9 @@ override with `BP_OUT=/path`, the app with `APP_URL=...`). Every script uses
 runs on Linux and in the nightly `Browser harness` workflow.
 
 `recovery.mjs` is local-only: it restarts the server through the blueprint
-helper on the machine that owns the app, so the CI workflow runs the other nine.
+helper on the machine that owns the app. `live.mjs` is local-only too: it needs
+a driven Chrome that actually paints frames, and the CI runner's headless
+Chromium produced none. The CI workflow runs the other eight.
 
 | Script | What it checks and captures |
 |---|---|

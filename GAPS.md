@@ -296,9 +296,12 @@ JS 388,251 → 103,185 B brotli, CSS 72,768 → 22,277 B, `/api/state` 7,404 →
 webhook use it; the webhook answers 413 instead of an unhandled throw. A 300 KB chunked body is refused in
 `index.test.ts`.
 
-**8.4** `ci.yml` gained a `docker build` job. `harness.yml` runs nine portable browser scripts nightly and on
+**8.4** `ci.yml` gained a `docker build` job. `harness.yml` runs eight portable browser scripts nightly and on
 demand on Linux, using `CHROME_PATH` (now honoured by every script) and uploading `blueprint-out`. `recovery.mjs`
-stays local-only because it restarts the app through the blueprint helper.
+stays local-only because it restarts the app through the blueprint helper. `live.mjs` is also local-only: the
+runner's headless Chromium delivered no screencast frames (`Non-black frames` failed on the first CI run), which is
+an environment limit rather than an app regression. A workflow that always fails is worse than one that names its
+blind spot.
 
 **8.6–8.8, 8.10–8.12** Shared `dropIdleLane` on every failure path; SSE drops a sink after 64 queued chunks and
 lets EventSource resync; meeting keys expire with their start time; all JSON is `no-store`; the Docker context
