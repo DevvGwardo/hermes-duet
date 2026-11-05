@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://devvgwardo.github.io/hermes-duet/sitemap.xml

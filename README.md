@@ -7,6 +7,7 @@
 </p>
 
 <p align="center">
+  <a href="https://devvgwardo.github.io/hermes-duet/"><img alt="Project site" src="https://img.shields.io/badge/site-live-ffd700?style=flat-square&labelColor=111111"></a>
   <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-ffd700?style=flat-square&labelColor=111111"></a>
   <img alt="Bun" src="https://img.shields.io/badge/runtime-Bun-f3eee3?style=flat-square&labelColor=111111">
   <img alt="PWA" src="https://img.shields.io/badge/app-PWA-ffbf00?style=flat-square&labelColor=111111">
