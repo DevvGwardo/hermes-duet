@@ -190,11 +190,11 @@ export async function issueCard(
 ): Promise<IssuedCard> {
   const memo = `Hermes Duet: ${input.merchant}`.slice(0, 60);
   const limit = String(input.amountCents);
-  const call = async (path: string, body: BodyInit, headers: Record<string, string> = {}) => {
+  const call = async (path: string, body?: BodyInit, headers: Record<string, string> = {}, method: 'GET' | 'POST' = 'POST') => {
     const res = await fetch(`${cfg.baseUrl}${path}`, {
-      method: 'POST',
+      method,
       headers: { authorization: `Bearer ${cfg.key}`, ...headers },
-      body,
+      ...(body === undefined ? {} : { body }),
       signal: AbortSignal.timeout(20_000),
     });
     const raw = await res.text();
@@ -226,7 +226,12 @@ export async function issueCard(
     const created = await call('/v1/issuing/cards', form);
     const id = created?.id;
     if (!id) throw new Error('stripe returned no card id');
-    const details = await call(`/v1/issuing/cards/${encodeURIComponent(id)}/details?expand[]=number&expand[]=cvc`, '');
+    // Stripe returns number/cvc only on "Retrieve a card" — a GET to the card itself — and only when the includable
+    // fields are requested with expand[]. There is no `/details` sub-resource.
+    const expand = new URLSearchParams();
+    expand.append('expand[]', 'number');
+    expand.append('expand[]', 'cvc');
+    const details = await call(`/v1/issuing/cards/${encodeURIComponent(id)}?${expand}`, undefined, {}, 'GET');
     return parseIssuedCard(details, now);
   }
   if (cfg.name === 'revolut') {

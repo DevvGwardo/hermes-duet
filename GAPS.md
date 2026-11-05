@@ -327,15 +327,17 @@ drops tests, dev scripts, `site/` and `tools/` (keeping `scripts/precompress.ts`
 
 ## Round 4 — closing the remaining tractable gaps, 2026-11-04
 
-After Round 3 shipped, the follow-up pass closed the three items that were safe to finish without a policy or
-architecture decision: mutation limits/idempotency (2.6), code splitting (5.6) and log rotation (8.9). The browser
-suite was re-run after the client change: **99/99 checks**, 37 screenshots. Unit tests: **438/438 across 49 files**.
+After Round 3 shipped, the follow-up pass closed the items that were safe to finish without a policy or
+architecture decision: mutation limits/idempotency (2.6), code splitting (5.6), log rotation (8.9) and the Stripe
+card-details request (9.4). The browser suite was re-run after the client change: **99/99 checks**, 37 screenshots.
+Unit tests: **438/438 across 49 files**.
 
 | # | Finding | Status |
 |---|---|---|
 | 9.1 | No per-device limits on messages, tasks, briefs or test pushes; a retried message could enqueue a second turn | **Fixed** |
 | 9.2 | The first paint parsed every overlay and both other tabs | **Fixed** |
 | 9.3 | launchd/systemd append to `server.log` forever | **Fixed** |
+| 9.4 | Stripe issuance POSTed to a `/details` sub-resource that Stripe does not have, abandoning the created card | **Fixed** |
 
 **9.1** `server/limits.ts` adds sliding windows per paired device: 60 messages/min, 20 tasks/min, 6 brief runs per
 10 minutes, 5 test pushes per 10 minutes. A refusal is `429` with `retry-after`. `POST /api/messages` accepts
@@ -354,6 +356,12 @@ use. The full harness opens every split view, so the chunk boundaries are exerci
 generations, then truncates in place so launchd/systemd keep writing to the same descriptor. `doctor` warns above
 50 MB, `DUET_LOG_DIR` overrides the location, and `DEPLOY.md` documents a weekly cron. `scripts/log-rotation.test.ts`
 spawns the real bash CLI against a temp directory.
+
+**9.4** Stripe exposes a card's number and CVC only on **Retrieve a card** (`GET /v1/issuing/cards/{id}`), and only
+when `expand[]=number` and `expand[]=cvc` are requested. The Stripe branch created the card, then POSTed to
+`/v1/issuing/cards/{id}/details`, which Stripe does not serve, so every Stripe purchase failed after the card had
+already been issued — an orphaned card and no checkout. The request is now a GET to the card with both expansions;
+the existing provider tests assert the method, path and expand parameters (they failed against the old request).
 
 ### What is deliberately still open
 
