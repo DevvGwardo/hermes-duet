@@ -1,9 +1,13 @@
 name: Browser harness
 
-# The unit suite cannot see a modal that traps focus, a phone layout that overflows or a live pane that stops
-# painting. This runs the real Chrome sweep against a throwaway demo server. It is deliberately not a merge gate:
-# a browser job is slower and noisier than the unit suite, so it runs nightly and on demand. `recovery.mjs` stays
-# local-only: it restarts the server through the blueprint helper on the machine that owns the app.
+# The unit suite cannot see a modal that traps focus or a phone layout that overflows. This runs the real Chrome
+# sweep against a throwaway demo server. It is deliberately not a merge gate: a browser job is slower and noisier
+# than the unit suite, so it runs nightly and on demand.
+#
+# Two scripts stay local-only:
+# - `live.mjs` needs a driven Chrome that actually paints frames. The runner's headless Chromium produced none
+#   (the `Non-black frames` check failed), which is an environment limit, not an app regression.
+# - `recovery.mjs` restarts the server through the blueprint helper on the machine that owns the app.
 on:
   workflow_dispatch:
   schedule:
@@ -18,7 +22,7 @@ concurrency:
 
 jobs:
   harness:
-    name: sweep, dialogs, a11y, live pane
+    name: sweep, dialogs, a11y, design
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -55,7 +59,7 @@ jobs:
 
       - name: Run the browser sweep
         run: |
-          for s in sweep live channels pairing a11y approvals dialogs wheel polish; do
+          for s in sweep channels pairing a11y approvals dialogs wheel polish; do
             echo "=== $s ==="
             node "tools/blueprint/$s.mjs"
           done
