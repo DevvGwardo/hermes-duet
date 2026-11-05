@@ -42,9 +42,16 @@ test('privacy issues a single-use card capped at the approved total', async () =
   }
 });
 
-test('stripe creates a virtual card with an all-time spending limit, then reads its details', async () => {
+test('stripe creates a virtual card with an all-time spending limit, then reads it with a GET expand', async () => {
+  // Stripe exposes number/cvc only on "Retrieve a card" (`GET /v1/issuing/cards/{id}?expand[]=...`), not on a
+  // `/details` sub-path. The stub returns the details for either shape so the assertions below, not the payload,
+  // are what fail when the request is wrong.
   const s = stubFetch((seen) =>
-    ok(seen.url.includes('/details') ? { number: '4242424242424242', cvc: '321', exp_month: 12, exp_year: 2030 } : { id: 'card_1' }),
+    ok(
+      seen.url.includes('/details') || seen.init.method === 'GET'
+        ? { number: '4242424242424242', cvc: '321', exp_month: 12, exp_year: 2030 }
+        : { id: 'card_1' },
+    ),
   );
   try {
     const card = await issueCard(cfg('stripe'), { amountCents: 2500, currency: 'USD', merchant: 'Deli' }, NOW);
@@ -52,6 +59,10 @@ test('stripe creates a virtual card with an all-time spending limit, then reads 
     const form = new URLSearchParams(s.calls[0].init.body);
     expect(form.get('spending_controls[spending_limits][0][amount]')).toBe('2500');
     expect(form.get('spending_controls[spending_limits][0][interval]')).toBe('all_time');
+    expect(s.calls[1].init.method).toBe('GET');
+    const details = new URL(s.calls[1].url);
+    expect(details.pathname).toBe('/v1/issuing/cards/card_1');
+    expect(details.searchParams.getAll('expand[]')).toEqual(['number', 'cvc']);
     expect(card.last4).toBe('4242');
   } finally {
     s.restore();

@@ -203,7 +203,7 @@ describe('issueCard payloads', () => {
   });
 
   test('stripe: a virtual card with an all-time limit of the approved total', async () => {
-    const s = stubFetch((url) => (url.includes('/details') ? okJson(CARD) : okJson({ id: 'ic_1' })));
+    const s = stubFetch((url, init) => (url.includes('/details') || init?.method === 'GET' ? okJson(CARD) : okJson({ id: 'ic_1' })));
     try {
       await issueCard({ name: 'stripe', key: 'sk', baseUrl: 'https://api.stripe.com' }, { amountCents: 3150, currency: 'USD', merchant: 'Amtrak' });
       const form = new URLSearchParams(s.calls[0]!.init.body);
@@ -211,7 +211,12 @@ describe('issueCard payloads', () => {
       expect(form.get('spending_controls[spending_limits][0][interval]')).toBe('all_time');
       expect(form.get('currency')).toBe('usd');
       expect(form.get('type')).toBe('virtual');
-      expect(s.calls[1]!.url).toContain('/v1/issuing/cards/ic_1/details');
+      // "Retrieve a card" is a GET; number/cvc are includable fields requested with expand[].
+      expect(s.calls[1]!.init.method).toBe('GET');
+      expect(s.calls[1]!.init.body).toBeUndefined();
+      const details = new URL(s.calls[1]!.url);
+      expect(details.pathname).toBe('/v1/issuing/cards/ic_1');
+      expect(details.searchParams.getAll('expand[]')).toEqual(['number', 'cvc']);
     } finally {
       s.restore();
     }
