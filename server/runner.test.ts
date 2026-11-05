@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import type { FileEntry, Item, Page, Task } from '../shared/types';
+import type { Attachment, FileEntry, Item, Page, Task } from '../shared/types';
 import { items, kv, newId, runs, tasks } from './db';
 import { HermesError, hermes } from './hermes';
 import { GENERAL_CHANNEL } from './schema';
@@ -61,6 +61,18 @@ const dash = (extra: Partial<FileEntry> = {}): FileEntry => ({
   size: 10,
   created_at: Date.now(),
   ...extra,
+});
+
+test('a user-started task keeps its attachment on the item and in the prompt', () => {
+  const attachment: Attachment = { id: newId(), name: 'receipt.pdf', mime: 'application/pdf', size: 1024, kind: 'file', created_at: Date.now() };
+  const { item, task } = startUserTask(
+    'look at this',
+    undefined,
+    [attachment],
+    '\n\nThe user attached 1 file with this message:\n- /tmp/receipt.pdf (application/pdf, 1 KB)',
+  );
+  expect(item.attachments).toEqual([attachment]);
+  expect(task.instructions).toContain('/tmp/receipt.pdf');
 });
 
 test('a dashboard approval is only ever a proposal: pending card, nothing acted on', () => {

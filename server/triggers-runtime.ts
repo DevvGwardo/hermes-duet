@@ -99,7 +99,12 @@ export function meetingPrepEnabled(): boolean {
  * dropped, so the set tracks only the near future.
  */
 export function meetingsToPrep(events: CalendarEvent[], now = Date.now()): CalendarEvent[] {
-  for (const e of events) if (e.start <= now) announcedMeetings.delete(meetingKey(e));
+  // The key starts with the event's start time. Pruning by that, not by what the current calendar read contains,
+  // also forgets an event that was cancelled or moved before it started, so the set cannot grow for the process life.
+  for (const key of announcedMeetings) {
+    const start = Number(key.slice(0, key.indexOf('|')));
+    if (!Number.isFinite(start) || start <= now) announcedMeetings.delete(key);
+  }
   const due = meetingsSoon(events, now, config.meetingLeadMinutes * 60_000, announcedMeetings);
   for (const e of due) announcedMeetings.add(meetingKey(e));
   return due;

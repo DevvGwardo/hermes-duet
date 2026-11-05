@@ -35,6 +35,19 @@ test('sse stream opens with retry + hello and tracks client count', async () => 
   expect(chunk).toContain('"type":"hello"');
 });
 
+test('a stalled client is disconnected instead of buffering forever', async () => {
+  const before = clientCount();
+  const res = sseResponse(new Request('http://x/events'));
+  expect(clientCount()).toBe(before + 1);
+  // The reader never runs while these pile up; the sink must drop itself rather than grow without bound.
+  for (let i = 0; i < 100; i++) broadcast({ type: 'hello', at: i });
+  expect(clientCount()).toBe(before);
+  const reader = res.body!.getReader();
+  let done = false;
+  for (let i = 0; i < 200 && !done; i++) done = (await reader.read()).done;
+  expect(done).toBe(true);
+});
+
 test('broadcast reaches an open sse client', async () => {
   const res = sseResponse(new Request('http://x/events'));
   const reader = res.body!.getReader();

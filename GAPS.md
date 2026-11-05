@@ -258,6 +258,67 @@ without a measurement on a phone.
 
 ---
 
+## Round 3 — fresh pass, 2026-11-04
+
+A third pass re-ran the full blueprint suite (10 scripts, **99/99 checks, 37 screenshots reviewed**), typecheck
+(clean), `bun test` (**429/429, 47 files**) and the build (388 KB bundle plus precompressed siblings). It then
+audited the HTTP surface, runner, data layer, web client, CI and deploy docs, fixed the high-impact findings, and
+re-ran the browser suite after the changes (99/99 again). Findings are listed in
+`docs/blueprint/hermes-duet-blueprint.html#fresh-pass`; this is the ledger.
+
+| # | Finding | Severity | Status |
+|---|---|---|---|
+| 8.1 | Background task attachments were silently dropped (`POST /api/tasks` ignored `attachment_ids`; `startUserTask` never linked or prompted them; file-only sends 400 "empty message") | High | **Fixed** |
+| 8.2 | Static assets and API JSON served with no compression (388,251 B JS; 7,404 B `/api/state`) | Medium | **Fixed** |
+| 8.3 | JSON request bodies buffered before the 256 KB cap; chunked bodies bypassed the header gate | Medium | **Fixed** |
+| 8.4 | CI ran no browser harness and never built the Docker image | Medium | **Fixed** |
+| 8.5 | Dependabot covered `github-actions` only, not the Bun dependency tree | Medium | **Fixed** |
+| 8.6 | `launchRun`'s failure path left an idle non-main lane in `lanes` | Low | **Fixed** |
+| 8.7 | SSE sink enqueued without backpressure (live-browser frames already drop above 1.5 MB) | Low | **Fixed** |
+| 8.8 | `announcedMeetings` only shrank when an event started; cancelled/rescheduled keys persisted | Low | **Fixed** |
+| 8.9 | No log rotation for launchd/systemd append-only `server.log` | Low | **Open** |
+| 8.10 | Authenticated JSON had no `cache-control: no-store` | Low | **Fixed** |
+| 8.11 | Webhook 256 KB cap trusted `content-length`; chunked requests bypassed it (still token-gated) | Low | **Fixed** |
+| 8.12 | Docker runtime copied tests, `scripts/`, `site/` and `tools/` into the image | Low | **Fixed** |
+| 8.13 | Docker pairing command was `bun bin/hermes-duet`, which cannot parse the bash CLI | Medium | **Fixed** |
+| 8.14 | Report/harness docs quoted stale counts (348 tests/43 files, 119 ms, `sweep-530da497` 20/20) | Low | **Fixed** |
+
+**8.1** The route now reads `attachment_ids` with the same validation as `/api/messages`, links the rows to the
+user item, and passes `attachmentNote(rows)` into `startUserTask`, which stores `attachments` and appends the file
+paths to the task instructions. A file-only background send starts a task with "Look at the file I attached."
+instead of returning "empty message". Covered by `index.test.ts` and `runner.test.ts`.
+
+**8.2** `bun run build` now writes `.br`/`.gz` siblings (`scripts/precompress.ts`); `serveStatic` negotiates
+`br` → `gzip` → raw and always sets `vary: accept-encoding`; `compressJson` compresses JSON over 1 KB. Measured:
+JS 388,251 → 103,185 B brotli, CSS 72,768 → 22,277 B, `/api/state` 7,404 → 1,884 B.
+
+**8.3** `readTextCapped` checks `content-length` first and stops a stream at the byte cap. `body()` and the
+webhook use it; the webhook answers 413 instead of an unhandled throw. A 300 KB chunked body is refused in
+`index.test.ts`.
+
+**8.4** `ci.yml` gained a `docker build` job. `harness.yml` runs nine portable browser scripts nightly and on
+demand on Linux, using `CHROME_PATH` (now honoured by every script) and uploading `blueprint-out`. `recovery.mjs`
+stays local-only because it restarts the app through the blueprint helper.
+
+**8.6–8.8, 8.10–8.12** Shared `dropIdleLane` on every failure path; SSE drops a sink after 64 queued chunks and
+lets EventSource resync; meeting keys expire with their start time; all JSON is `no-store`; the Docker context
+drops tests, dev scripts, `site/` and `tools/` (keeping `scripts/precompress.ts` for the build).
+
+**8.13** was proven by running `bun bin/hermes-duet --help` — a syntax error at line 2. `docs/DEPLOY.md` and the
+`Dockerfile` comment now call the script directly.
+
+### Left alone on purpose
+
+- `noUncheckedIndexedAccess` is off. Turning it on would surface hundreds of sites in `runner.ts`; it belongs with
+  the planned runner split, not a docs pass.
+- The single 388 KB chunk and the reconnect snapshot are tracked as 5.5/5.6. This pass compressed both on the
+  wire (8.2) but did not split the bundle or trim what the snapshot carries; those are client-shape decisions.
+- Encryption at rest (3.3) still needs the key-holding decision; no new evidence.
+- The pairing lockout remains global by design. A reachable attacker can make pairing wait; the server is private by
+  default, and the alternative (per-IP brakes) is weaker behind a tunnel.
+
+---
+
 ## Rejected findings — do not re-open without new evidence
 
 The crew asserted these confidently; the gate checked and they are wrong or already handled.

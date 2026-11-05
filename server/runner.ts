@@ -127,6 +127,11 @@ function lane(sessionId: string): Lane {
 }
 
 const mainLane = () => lane(mainSessionId());
+
+/** A non-main lane with nothing running and nothing queued holds nothing; `lane()` recreates it on demand. */
+function dropIdleLane(l: Lane) {
+  if (!l.main && !l.active && !l.queue.length) lanes.delete(l.sessionId);
+}
 const activeRuns = () => [...lanes.values()].map((l) => l.active).filter((r): r is ActiveRun => !!r && !r.finished);
 const backgroundActive = () => [...lanes.values()].filter((l) => !l.main && l.active && l.active.spec.kind === 'task').length;
 
@@ -391,6 +396,7 @@ async function launchRun(l: Lane, run: ActiveRun, spec: RunSpec) {
       // A stop request means this turn must not run at all: drop it instead of re-queueing it behind the user's back.
       if (run.stopRequested) {
         broadcastAgent();
+        dropIdleLane(l);
         return;
       }
       // Transient: keep the work at the front of its lane instead of dropping it.
@@ -405,6 +411,7 @@ async function launchRun(l: Lane, run: ActiveRun, spec: RunSpec) {
         }
       }
       broadcastAgent();
+      dropIdleLane(l);
       return;
     }
     const msg = `Couldn't start: ${e?.message ?? e}`;
@@ -418,6 +425,7 @@ async function launchRun(l: Lane, run: ActiveRun, spec: RunSpec) {
     }
     broadcastAgent();
     setTimeout(pumpAll, 2000);
+    dropIdleLane(l);
     return;
   }
 
@@ -743,9 +751,9 @@ function finish(l: Lane, run: ActiveRun, status: 'done' | 'error' | 'stopped', o
     l.active = null;
     broadcastAgent();
     pumpAll();
-    // A lane with nothing running and nothing queued holds nothing: without this the map grows by one entry per task
-    // session for the life of the process, and pumpAll scans every one of them on each wake. `lane()` recreates it.
-    if (!l.main && !l.active && !l.queue.length) lanes.delete(l.sessionId);
+    // Without this the map grows by one entry per task session for the life of the process, and pumpAll scans every
+    // one of them on each wake.
+    dropIdleLane(l);
   }
 }
 
@@ -1158,14 +1166,21 @@ export function submitUser(text: string, input?: string, channelId?: string, att
  * runs alongside whatever the chat is doing. The message stays in the thread, tagged with its task; the main session
  * hears about it on its next turn, and the usual handover card lands when the task finishes.
  */
-export function startUserTask(text: string, channelId?: string): { item: Item; task: Task } {
+export function startUserTask(text: string, channelId?: string, attachmentList?: Attachment[], attachmentNote?: string): { item: Item; task: Task } {
   const shown = text.trim();
   if (!shown) throw new Error('empty message');
   const channel = channelId ? channels.get(channelId) : channels.general();
   if (!channel) throw new Error('no such channel');
-  const instructions = userTaskInstructions(shown, items.latest(30).items);
+  const instructions = userTaskInstructions(shown, items.latest(30).items, attachmentNote);
   const task = startTask(userTaskTitle(shown), instructions, [], undefined, channel.id);
-  const item = put(newItem('user', { text: shown, task_id: task.id, channel_id: channel.id }));
+  const item = put(
+    newItem('user', {
+      text: shown,
+      task_id: task.id,
+      channel_id: channel.id,
+      ...(attachmentList?.length ? { attachments: attachmentList } : {}),
+    }),
+  );
   addContextNote(`The user started a background task themselves: "${task.title}" (${task.id}). It runs separately; its result reaches you when it finishes.`);
   return { item, task };
 }

@@ -12,10 +12,20 @@ export function broadcast(ev: ServerEvent) {
 /** An SSE response that receives every broadcast until the client goes away. */
 export function sseResponse(req: Request): Response {
   let sink: Sink;
-  let ping: ReturnType<typeof setInterval>;
+  let ping: ReturnType<typeof setInterval> | null = null;
   const stream = new ReadableStream({
     start(ctrl) {
       sink = (chunk) => {
+        // A stalled client must not grow the stream buffer without bound. At 64 queued chunks, drop the sink and let
+        // EventSource reconnect: the client takes a fresh snapshot, exactly like the live-browser frame path.
+        if (typeof ctrl.desiredSize === 'number' && ctrl.desiredSize < -64) {
+          sinks.delete(sink);
+          if (ping) clearInterval(ping);
+          try {
+            ctrl.close();
+          } catch {}
+          return;
+        }
         try {
           ctrl.enqueue(enc.encode(chunk));
         } catch {
@@ -27,7 +37,7 @@ export function sseResponse(req: Request): Response {
       // Comment pings keep proxies (Cloudflare closes idle streams at ~100s) from dropping us.
       ping = setInterval(() => sink(': ping\n\n'), 25_000);
       req.signal.addEventListener('abort', () => {
-        clearInterval(ping);
+        if (ping) clearInterval(ping);
         sinks.delete(sink);
         try {
           ctrl.close();
@@ -35,7 +45,7 @@ export function sseResponse(req: Request): Response {
       });
     },
     cancel() {
-      clearInterval(ping);
+      if (ping) clearInterval(ping);
       sinks.delete(sink);
     },
   });

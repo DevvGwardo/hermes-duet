@@ -18,7 +18,7 @@ export function userTaskTitle(text: string, max = 80): string {
  * The task's instructions: the request verbatim, plus the tail of the main chat, because "look into that error"
  * usually points at something said there and the task's fresh session can't see it.
  */
-export function userTaskInstructions(text: string, recent: Item[]): string {
+export function userTaskInstructions(text: string, recent: Item[], attachmentNote = ''): string {
   const lines = recent
     .filter((i) => (i.kind === 'user' || i.kind === 'assistant') && i.text?.trim())
     .slice(-6)
@@ -26,7 +26,9 @@ export function userTaskInstructions(text: string, recent: Item[]): string {
   const context = lines.length
     ? `\n\nThe last few messages of their main chat with you, in case the request refers to them (they may be unrelated):\n${lines.join('\n')}`
     : '';
-  return `The user started this as a background task themselves, so their main chat with you stays free. Their request, in their own words:\n\n${text.trim()}${context}`;
+  // The same file paths /api/messages gives the agent, so a task opened from a photo or PDF knows where it lives.
+  const files = attachmentNote.trim() ? `\n\n${attachmentNote.trim()}` : '';
+  return `The user started this as a background task themselves, so their main chat with you stays free. Their request, in their own words:\n\n${text.trim()}${context}${files}`;
 }
 
 function clip(s: string, n: number) {

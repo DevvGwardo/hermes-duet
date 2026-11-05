@@ -2,9 +2,10 @@
 // needed beyond a paired cookie.
 import { describe, expect, test } from 'bun:test';
 import { createPairCode, deviceCookie, internalToken, redeemPairCode } from './auth';
-import { items, kv, newId } from './db';
+import { attachments, items, kv, newId, tasks } from './db';
+import { hermes } from './hermes';
 import { GENERAL_CHANNEL } from './schema';
-import { apiError, handleApp, handleInternal } from './index';
+import { apiError, handleApp, handleInternal, readTextCapped } from './index';
 import { MAX_UPLOAD_BYTES } from './uploads';
 
 const BASE = 'http://127.0.0.1:7456';
@@ -42,9 +43,35 @@ describe('paired routes', () => {
   test('a paired request gets the snapshot', async () => {
     const res = await authed('/api/state');
     expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('no-store');
     const snap = (await res.json()) as any;
     expect(Array.isArray(snap.items)).toBe(true);
     expect(Array.isArray(snap.pending)).toBe(true);
+  });
+
+  test('a background task carries its attachment into the thread and the prompt', async () => {
+    const id = newId();
+    const path = `/tmp/hermes-duet-test-${id}.pdf`;
+    attachments.add({ id, filename: 'receipt.pdf', mime: 'application/pdf', size: 10, path });
+    const real = hermes.hasKey;
+    hermes.hasKey = () => false;
+    try {
+      const res = await authed('/api/tasks', jsonPost({ text: '', attachment_ids: [id] }));
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as any;
+      expect(body.item.text).toBe('Look at the file I attached.');
+      expect(body.item.attachments?.[0]?.id).toBe(id);
+      expect(attachments.get(id)?.item_id).toBe(body.item.id);
+      expect(tasks.get(body.task.id)?.instructions).toContain(path);
+    } finally {
+      hermes.hasKey = real;
+    }
+  });
+
+  test('a background task refuses an unknown attachment before starting anything', async () => {
+    const res = await authed('/api/tasks', jsonPost({ text: 'x', attachment_ids: ['no-such-upload'] }));
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as any).error).toBe('unknown attachment');
   });
 
   test('a trailing slash is the same route, not a fall-through', async () => {
@@ -79,6 +106,23 @@ describe('paired routes', () => {
     const res = await authed('/api/uploads', { method: 'POST', headers: { 'content-length': String(MAX_UPLOAD_BYTES + 1) } });
     expect(res.status).toBe(413);
     expect((await res.json()) as any).toMatchObject({ error: 'that file is too large' });
+  });
+
+  test('a chunked body is capped while it is read, not after it is buffered', async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"text":"'));
+        controller.enqueue(new TextEncoder().encode('a'.repeat(300_000)));
+        controller.close();
+      },
+    });
+    const req = new Request(`${BASE}/api/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: stream,
+      duplex: 'half',
+    } as RequestInit & { duplex: 'half' });
+    await expect(readTextCapped(req, 256_000)).rejects.toThrow('body too large');
   });
 
   test('a card error keeps its sentence but never gains internals', async () => {

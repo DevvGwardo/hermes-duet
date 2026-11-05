@@ -1,9 +1,11 @@
 import { chmodSync, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, normalize } from 'node:path';
+import { brotliCompressSync, gzipSync } from 'node:zlib';
 import type { Snapshot } from '../shared/types';
 import { briefSpeech, speak, transcribeFile } from './audio';
 import { capabilities } from './capabilities';
 import { channelInput } from './channels';
+import { encodedPath, encodingHeaders, preferredEncoding } from './compress';
 import { createPairCode, deviceCookie, deviceFor, internalToken, isHttps, pairBlocked, redeemPairCode, sameOrigin } from './auth';
 import { listConnectors, testConnector } from './connectors';
 import { sseResponse } from './bus';
@@ -22,13 +24,38 @@ import { readLogin, vaults } from './vault';
 import { broadcast } from './bus';
 
 const json = (data: unknown, status = 200, headers: Record<string, string> = {}) =>
-  new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json', ...headers } });
+  new Response(JSON.stringify(data), {
+    status,
+    // Every JSON route carries thread content, device state or a secret-shaped response. Nothing here belongs in a
+    // browser or proxy cache; the static assets keep their explicit immutable cache instead.
+    headers: { 'content-type': 'application/json', 'cache-control': 'no-store', ...headers },
+  });
 const err = (status: number, error: string) => json({ error }, status);
+
+/** Read a request body with a hard byte cap, including chunked bodies that have no Content-Length. */
+export async function readTextCapped(req: Request, limit: number): Promise<string> {
+  const declared = Number(req.headers.get('content-length') ?? 0);
+  if (Number.isFinite(declared) && declared > limit) throw new Error('body too large');
+  if (!req.body) return '';
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > limit) {
+      await reader.cancel().catch(() => {});
+      throw new Error('body too large');
+    }
+    chunks.push(value);
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks));
+}
 
 async function body<T = any>(req: Request): Promise<T> {
   if (!(req.headers.get('content-type') ?? '').includes('application/json')) throw new Error('expected JSON');
-  const text = await req.text();
-  if (text.length > 256_000) throw new Error('body too large');
+  const text = await readTextCapped(req, 256_000);
   return (text ? JSON.parse(text) : {}) as T;
 }
 
@@ -170,7 +197,7 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
   const rawPath = url.pathname;
   const path = rawPath.length > 1 ? rawPath.replace(/\/+$/, '') : rawPath;
 
-  if (path !== '/api' && !path.startsWith('/api/')) return serveStatic(rawPath);
+  if (path !== '/api' && !path.startsWith('/api/')) return serveStatic(req, rawPath);
 
   // Liveness for Docker, launchd and anything else watching this process. It reveals nothing and needs no pairing.
   if (path === '/api/health' && req.method === 'GET') return json({ ok: true, at: Date.now() });
@@ -207,10 +234,21 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
     const kindRaw = url.searchParams.get('kind') ?? '';
     let payload: unknown = null;
     const type = req.headers.get('content-type') ?? '';
+    // A chunked webhook has no Content-Length, so the header gate above is not the cap: read with one too.
+    let raw: string;
+    try {
+      raw = await readTextCapped(req, 256_000);
+    } catch {
+      return err(413, 'payload too large');
+    }
     if (type.includes('application/json')) {
-      payload = await req.json().catch(() => null);
+      try {
+        payload = raw ? JSON.parse(raw) : null;
+      } catch {
+        payload = null;
+      }
     } else {
-      payload = await req.text();
+      payload = raw;
     }
     // GitHub names its event in a header; without it the URL's ?kind= is the label, else "webhook".
     const kind = (req.headers.get('x-github-event') ?? kindRaw ?? 'webhook').replace(/[^\w.-]/g, '').slice(0, 40) || 'webhook';
@@ -359,11 +397,19 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
       return json({ item });
     }
     if (path === '/api/tasks' && req.method === 'POST') {
-      const { text, channel_id } = await body<{ text?: string; channel_id?: string }>(req);
-      const t = String(text ?? '').trim();
+      const { text, channel_id, attachment_ids } = await body<{ text?: string; channel_id?: string; attachment_ids?: string[] }>(req);
+      // The same attachment contract as /api/messages: the task keeps the files, and its prompt names their paths so
+      // the agent can open them. A background send with a photo and no caption is a legitimate message.
+      const ids = Array.isArray(attachment_ids) ? attachment_ids.slice(0, 6).map(String) : [];
+      if (attachment_ids && !Array.isArray(attachment_ids)) return err(400, 'attachment_ids must be a list');
+      const rows = ids.map((id) => attachments.get(id)).filter((r): r is AttachmentRow => !!r);
+      if (rows.length !== ids.length) return err(400, 'unknown attachment');
+      const t = String(text ?? '').trim() || (rows.length ? 'Look at the file I attached.' : '');
       if (!t) return err(400, 'empty message');
-      if (t.length > 20_000) return err(400, 'message too long');
-      return json(startUserTask(t, channel_id));
+      if (t.length > MAX_MESSAGE) return err(400, 'message too long');
+      const started = startUserTask(t, channel_id, rows.map(toAttachment), attachmentNote(rows));
+      if (rows.length) attachments.link(ids, started.item.id);
+      return json(started);
     }
 
     // ---- uploads, voice memos and spoken briefs (see server/uploads.ts, server/audio.ts) ----
@@ -568,7 +614,7 @@ function isFile(path: string): boolean {
   }
 }
 
-async function serveStatic(path: string): Promise<Response> {  // `decodeURIComponent` throws on a malformed escape (`/%`, `/%zz`). This runs before the route try/catch, so an
+async function serveStatic(req: Request, path: string): Promise<Response> {  // `decodeURIComponent` throws on a malformed escape (`/%`, `/%zz`). This runs before the route try/catch, so an
   // unhandled throw here reached Bun's error page — a 500 carrying a stack and a source path, for a URL anyone can
   // type. A bad escape is simply not a file we have.
   let decoded: string;
@@ -582,21 +628,34 @@ async function serveStatic(path: string): Promise<Response> {  // `decodeURIComp
   // `isFile`, not `existsSync`: a directory passes existence and a nonzero stat size, so `GET /assets/` used to be
   // served as a body and died with EISDIR instead of falling back to the app shell.
   if (candidate.startsWith(config.webDir) && rel !== '/' && isFile(candidate)) {
-    const file = Bun.file(candidate);
+    // The build writes `.br`/`.gz` siblings; serve one when the client accepts it. The type comes from the original
+    // path, not the `.br` sibling (Bun would otherwise infer application/octet-stream).
+    const encoding = preferredEncoding(req);
+    const encoded = encoding ? encodedPath(candidate, encoding, isFile) : null;
     const immutable = rel.startsWith('/assets/');
-    return new Response(file, {
+    return new Response(Bun.file(encoded ?? candidate), {
       headers: {
         ...SECURITY_HEADERS,
+        ...encodingHeaders(encoded ? encoding : null),
+        'content-type': Bun.file(candidate).type,
         ...(rel.endsWith('.html') ? { 'content-security-policy': APP_CSP } : {}),
         'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache',
         ...(rel === '/sw.js' ? { 'service-worker-allowed': '/' } : {}),
       },
     });
   }
-  const index = Bun.file(join(config.webDir, 'index.html'));
-  if (!(await index.exists())) return new Response('Web app not built. Run: bun run build', { status: 503 });
-  return new Response(index, {
-    headers: { ...SECURITY_HEADERS, 'content-security-policy': APP_CSP, 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' },
+  const index = join(config.webDir, 'index.html');
+  if (!isFile(index)) return new Response('Web app not built. Run: bun run build', { status: 503 });
+  const encoding = preferredEncoding(req);
+  const encoded = encoding ? encodedPath(index, encoding, isFile) : null;
+  return new Response(Bun.file(encoded ?? index), {
+    headers: {
+      ...SECURITY_HEADERS,
+      ...encodingHeaders(encoded ? encoding : null),
+      'content-security-policy': APP_CSP,
+      'content-type': 'text/html; charset=utf-8',
+      'cache-control': 'no-cache',
+    },
   });
 }
 
@@ -714,12 +773,34 @@ export async function handleInternal(req: Request): Promise<Response> {
 let appServer: any = null;
 let internalServer: any = null;
 
+/**
+ * Compress a JSON response once the route has built it. Static files ride the precompressed siblings in
+ * `serveStatic`; this covers `/api/state`, `/api/items` and search, which are the large ones on a phone reconnect.
+ * SSE, uploads and delivered files are already streams or binary and are left alone.
+ */
+async function compressJson(req: Request, pending: Promise<Response>): Promise<Response> {
+  const res = await pending;
+  if (!res || !(res.headers.get('content-type') ?? '').startsWith('application/json')) return res;
+  if (res.headers.get('content-encoding')) return res;
+  const encoding = preferredEncoding(req);
+  if (!encoding) return res;
+  const text = await res.text();
+  // Below a kilobyte the frame headers cost more than the compression wins.
+  if (text.length < 1024) return new Response(text, { status: res.status, headers: res.headers });
+  const body = encoding === 'br' ? brotliCompressSync(text) : gzipSync(text, { level: 6 });
+  const headers = new Headers(res.headers);
+  headers.set('content-encoding', encoding);
+  headers.set('content-length', String(body.byteLength));
+  headers.set('vary', 'accept-encoding');
+  return new Response(body, { status: res.status, headers });
+}
+
 export function startServers() {
   if (appServer && internalServer) return { appServer, internalServer };
   appServer = Bun.serve({
     hostname: config.host,
     port: config.port,
-    fetch: (req, srv) => handleApp(req, srv),
+    fetch: (req, srv) => compressJson(req, handleApp(req, srv)),
     websocket: {
       open(ws: any) {
         if (process.env.DUET_CHROME_DEBUG) console.error('[ws] open', JSON.stringify(ws.data));

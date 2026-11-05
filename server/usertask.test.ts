@@ -41,3 +41,10 @@ test('only the last six chat messages are included, each clipped', () => {
 test('no recent chat means no context section', () => {
   expect(userTaskInstructions('go', [])).not.toContain('main chat with you, in case');
 });
+
+test('attachment paths reach the task prompt', () => {
+  const s = userTaskInstructions('look at this', [], '\n\nThe user attached 1 file with this message:\n- /tmp/receipt.pdf (application/pdf, 10 KB)');
+  expect(s).toContain('look at this');
+  expect(s).toContain('/tmp/receipt.pdf');
+  expect(s.trim().endsWith('/tmp/receipt.pdf (application/pdf, 10 KB)')).toBe(true);
+});
