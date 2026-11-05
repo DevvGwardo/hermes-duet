@@ -52,7 +52,7 @@ docker run -d --name hermes-duet \
   -v hermes-duet-data:/data \
   --env-file .env \
   hermes-duet
-docker exec hermes-duet bun bin/hermes-duet pair
+docker exec hermes-duet bin/hermes-duet pair   # bash CLI; don't run it with `bun`
 ```
 
 The image bundles Chromium for the live browser pane and reaps it with `tini`. `DUET_HOST=0.0.0.0` inside the

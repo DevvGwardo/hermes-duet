@@ -1,0 +1,69 @@
+name: Browser harness
+
+# The unit suite cannot see a modal that traps focus, a phone layout that overflows or a live pane that stops
+# painting. This runs the real Chrome sweep against a throwaway demo server. It is deliberately not a merge gate:
+# a browser job is slower and noisier than the unit suite, so it runs nightly and on demand. `recovery.mjs` stays
+# local-only: it restarts the server through the blueprint helper on the machine that owns the app.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 7 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: browser-harness
+  cancel-in-progress: false
+
+jobs:
+  harness:
+    name: sweep, dialogs, a11y, live pane
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      APP_URL: http://127.0.0.1:7466/
+      BP_OUT: ${{ github.workspace }}/blueprint-out
+      CHROME_PATH: /usr/bin/google-chrome
+      DUET_CHROME_BIN: /usr/bin/google-chrome
+      DUET_CHROME_PORT: '9334'
+      DUET_CHROME_PROFILE: ${{ github.workspace }}/blueprint-out/chrome-profile
+      DUET_HERMES_URL: http://127.0.0.1:9
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.21
+
+      - run: bun install --frozen-lockfile
+      - run: bun run build
+
+      - name: Start the demo app and the live-pane fixture
+        run: |
+          bun scripts/demo.ts --reset > /tmp/demo.log 2>&1 &
+          for _ in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:7466/api/health >/dev/null && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:7466/api/health
+          python3 -m http.server 7499 -d tools/blueprint/fixture > /tmp/fixture.log 2>&1 &
+          for _ in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:7499/tap.html >/dev/null && break
+            sleep 1
+          done
+
+      - name: Run the browser sweep
+        run: |
+          for s in sweep live channels pairing a11y approvals dialogs wheel polish; do
+            echo "=== $s ==="
+            node "tools/blueprint/$s.mjs"
+          done
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: blueprint-evidence
+          path: blueprint-out
+          retention-days: 14

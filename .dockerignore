@@ -5,8 +5,19 @@ web/dist
 data
 overnight
 .codegraph
+.workbuddy-ai
+dsh-plugins
+blueprint-out
 .env
 context.local.md
 docs
+site
+tools
+*.md
 *.log
 .DS_Store
+# Tests and dev-only scripts never run in the image. scripts/precompress.ts is part of `bun run build`.
+**/*.test.ts
+**/*.test.tsx
+scripts/*
+!scripts/precompress.ts

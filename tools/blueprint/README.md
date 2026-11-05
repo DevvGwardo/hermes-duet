@@ -1,8 +1,9 @@
 # Blueprint harness
 
 Browser sweep that produces every screenshot and number in the blueprint
-(`docs/blueprint/hermes-duet-blueprint.html`). Latest evidence run:
-`sweep-530da497` — 20/20 checks, 12 screenshots, all reviewed.
+(`docs/blueprint/hermes-duet-blueprint.html`). Latest full evidence run (2026-11-04):
+`sweep-9d2f10e2` / `live-b7255872` — 24/24 and 6/6; all ten scripts 99/99, 37 screenshots, reviewed.
+The suite was re-run after the compression, attachment and request-cap changes landed.
 
 Not published as an Artifact. View locally:
 `python3 -m http.server 8765 -d docs/blueprint` →
@@ -11,7 +12,12 @@ Not published as an Artifact. View locally:
 It drives the real app in Chrome (Playwright) against a throwaway demo server
 with seeded content (`bun scripts/demo.ts --reset`: data in a temp dir,
 scheduler off) and writes raw evidence to `blueprint-out/` (gitignored;
-override with `BP_OUT=/path`, the app with `APP_URL=...`).
+override with `BP_OUT=/path`, the app with `APP_URL=...`). Every script uses
+`CHROME_PATH` when set (default: Chrome in `/Applications`), so the same suite
+runs on Linux and in the nightly `Browser harness` workflow.
+
+`recovery.mjs` is local-only: it restarts the server through the blueprint
+helper on the machine that owns the app, so the CI workflow runs the other nine.
 
 | Script | What it checks and captures |
 |---|---|

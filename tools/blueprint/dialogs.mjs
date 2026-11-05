@@ -78,7 +78,7 @@ function seedLongDraft() {
   execFileSync("python3", ["-c", `import sqlite3;con=sqlite3.connect('${DEMO_DIR}/duet.db',timeout=15);con.execute(${JSON.stringify(sql)});con.commit()`]);
 }
 
-const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+const CHROME = process.env.CHROME_PATH ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const browser = await chromium.launch({ executablePath: CHROME, headless: true,
   args: ["--enable-unsafe-swiftshader", "--use-angle=swiftshader", "--hide-scrollbars"] });
 

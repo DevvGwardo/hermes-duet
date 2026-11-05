@@ -53,6 +53,7 @@ td.num { font: 13px var(--mono); font-variant-numeric: tabular-nums; }
 .pill { display: inline-block; font: 600 11px/1 var(--body); letter-spacing: .05em; text-transform: uppercase; padding: 4px 7px; border-radius: 99px; }
 .pill.ok { background: rgba(143, 227, 154, .16); color: var(--ok); }
 .pill.bad { background: rgba(255, 138, 128, .16); color: var(--bad); }
+.pill.warn { background: var(--warn-soft); color: var(--warn); }
 .arch, .module { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
 .arch { padding: 16px; margin-top: 16px; overflow-x: auto; }
 .modules { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin-top: 16px; }
@@ -68,10 +69,11 @@ pre.cmd { background: var(--kpi-bg); color: var(--kpi-ink); font: 13px/1.6 var(-
   <p>Blueprint</p>
   <ol>
     <li><a href="#status">Status</a></li>
+    <li><a href="#fresh-pass">Fresh pass: gaps</a></li>
+    <li><a href="#roadmap-done">Roadmap, finished</a></li>
     <li><a href="#round-two">Round two</a></li>
     <li><a href="#phone-polish">Phone polish</a></li>
     <li><a href="#new">New: polish</a></li>
-    <li><a href="#roadmap-done">Roadmap, finished</a></li>
     <li><a href="#tour">Tour</a></li>
     <li><a href="#architecture">Architecture</a></li>
     <li><a href="#outputs">Outputs</a></li>
@@ -83,18 +85,76 @@ pre.cmd { background: var(--kpi-bg); color: var(--kpi-ink); font: 13px/1.6 var(-
 </nav>
 <main>
 <header class="top" id="status">
-  <p class="eyebrow">Hermes Duet · blueprint · roadmap complete · <!--bp:generated-->2026-10-29 · 7746236<!--/bp:generated--></p>
+  <p class="eyebrow">Hermes Duet · blueprint · roadmap complete · <!--bp:generated-->2026-11-04 · post-fix<!--/bp:generated--></p>
   <h1>Your agent, in duet — on your phone.</h1>
   <p class="lede">Hermes Duet is a PWA front end for a Hermes agent: one thread for chat and approval cards, a morning brief, background tasks, standing pages, and a live view of the browser the agent drives. This page captures every screen and modal, driven in real Chrome against a seeded demo server.</p>
   <p class="muted">Everything below came from a local run in real Chrome on this Mac. Screenshots are real captures by the harness in <code>tools/blueprint/</code>; the demo server (<code>bun scripts/demo.ts --reset</code>) holds seeded content, the scheduler off. Nothing is estimated.</p>
   <div class="kpis" role="list">
     <div class="kpi" role="listitem"><b><!--bp:checks-->99 / 99<!--/bp:checks--></b><span>browser checks passed</span></div>
-    <div class="kpi" role="listitem"><b>348/348</b><span>unit tests (<code>bun test</code>, 43 files)</span></div>
+    <div class="kpi" role="listitem"><b>429/429</b><span>unit tests (<code>bun test</code>, 47 files)</span></div>
     <div class="kpi" role="listitem"><b><!--bp:console-errors-->11<!--/bp:console-errors--></b><span>console errors, each the expected logged-out /api/state 401 probe (one per harness context that opens the pair screen)</span></div>
     <div class="kpi" role="listitem"><b><!--bp:shots-->37<!--/bp:shots--></b><span>screenshots captured &amp; reviewed</span></div>
-    <div class="kpi" role="listitem"><b>119&nbsp;ms</b><span>first render of the pair screen</span></div>
+    <div class="kpi" role="listitem"><b>132&nbsp;ms</b><span>first render of the pair screen</span></div>
   </div>
 </header>
+
+<section id="fresh-pass">
+  <h2>Fresh pass: gaps, fixes and optimizations (2026-11-04)</h2>
+  <p class="intro">All ten harness scripts were re-run against a fresh demo seed in real Chrome: <strong>99/99 checks, 37 screenshots reviewed</strong>, no unexpected console errors. <code>bun run typecheck</code> is clean, <code>bun test</code> is <strong>429/429 across 47 files</strong>, and <code>bun run build</code> produces a 388 KB bundle plus its precompressed siblings. On top of that evidence, this pass read the HTTP surface, runner, data layer, web client, CI and deploy docs, and then fixed the highest-impact gaps. Nothing below is estimated: every claim names the code path or the command that produced it.</p>
+  <p class="intro">The five items in the first table landed in this pass, each with a test or a re-run of the browser suite. The smaller table records what changed and what is still open.</p>
+
+  <h3>Fixed first</h3>
+  <div class="table-box"><table>
+    <thead><tr><th>Finding</th><th>Severity</th><th>Evidence</th><th>Landed as</th></tr></thead>
+    <tbody>
+      <tr><td><strong>“Run in background” silently drops attachments</strong></td><td><span class="pill bad">high</span></td><td><code>Composer.tsx:158</code> sent <code>attachment_ids</code> to <code>POST /api/tasks</code>, but the route read only <code>text</code>/<code>channel_id</code>; <code>startUserTask</code> had no attachment parameter, never linked the rows, and never added their paths to the task prompt. A photo with no caption also reached the route as <code>text: ""</code> and got a 400 “empty message”.</td><td><code>startUserTask</code> now takes the same attachment path as <code>submitUser</code>: the route validates and links the ids, the item carries <code>attachments</code>, and <code>userTaskInstructions</code> appends <code>attachmentNote</code>. A file-only send says “Look at the file I attached.” Covered by <code>index.test.ts</code> and <code>runner.test.ts</code>.</td></tr>
+      <tr><td><strong>Static assets and API JSON are served uncompressed</strong></td><td><span class="pill warn">medium</span></td><td>Before this pass the 388,251-byte JS bundle came back with no <code>content-encoding</code>; <code>/api/state</code> was raw too. <code>serveStatic</code>/<code>json</code> set no compression.</td><td><code>bun run build</code> now writes <code>.br</code>/<code>.gz</code> siblings (<code>scripts/precompress.ts</code>); <code>serveStatic</code> picks the one matching <code>accept-encoding</code> and sets <code>vary</code>; <code>compressJson</code> compresses JSON over 1 KB. Measured below.</td></tr>
+      <tr><td><strong>JSON request bodies are buffered before the 256 KB cap</strong></td><td><span class="pill warn">medium</span></td><td><code>body()</code> did <code>await req.text()</code> and only then checked the length; chunked webhooks skipped the header gate entirely.</td><td><code>readTextCapped</code> checks <code>content-length</code> first and reads the stream with a hard cap. <code>body()</code> and the webhook both use it; a 300 KB chunked body is refused in <code>index.test.ts</code>.</td></tr>
+      <tr><td><strong>CI never runs the browser harness or builds the image</strong></td><td><span class="pill warn">medium</span></td><td><code>.github/workflows/ci.yml</code> ran typecheck, unit tests, build and an advisory audit. The browser checks and the Dockerfile were only exercised locally.</td><td><code>ci.yml</code> gained a <code>docker build</code> job; <code>harness.yml</code> runs nine browser scripts nightly and on demand on Linux (through <code>CHROME_PATH</code>) and uploads the evidence. <code>recovery.mjs</code> stays local-only.</td></tr>
+      <tr><td><strong>Dependabot ignores the Bun dependency tree</strong></td><td><span class="pill warn">medium</span></td><td><code>.github/dependabot.yml</code> listed only <code>github-actions</code>; <code>bun outdated</code> already showed patch and major drift.</td><td><code>dependabot.yml</code> now watches <code>package-ecosystem: bun</code> weekly on <code>/</code>.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Smaller correctness and hardening items</h3>
+  <p class="intro">Six of the seven landed in this pass; log rotation is the one deliberately left for an ops decision.</p>
+  <div class="table-box"><table>
+    <thead><tr><th>Finding</th><th>Severity</th><th>Evidence</th><th>Status / next</th></tr></thead>
+    <tbody>
+      <tr><td>Failed task start leaks a lane entry</td><td><span class="pill">low</span></td><td><code>launchRun</code>’s catch set <code>l.active = null</code> and returned; only <code>finish()</code> deleted an idle non-main lane.</td><td><span class="pill ok">fixed</span> A shared <code>dropIdleLane(l)</code> now runs on every catch branch and in <code>finish()</code>.</td></tr>
+      <tr><td>SSE sink has no backpressure</td><td><span class="pill">low</span></td><td><code>bus.ts</code> called <code>ctrl.enqueue</code> for every broadcast with no size check.</td><td><span class="pill ok">fixed</span> At 64 queued chunks the sink closes; EventSource reconnects into a fresh snapshot. Covered by <code>bus.test.ts</code>.</td></tr>
+      <tr><td>Meeting-announcement set only shrinks on start</td><td><span class="pill">low</span></td><td><code>triggers-runtime.ts</code> only removed a key when its event started; a cancelled event stayed for the process life.</td><td><span class="pill ok">fixed</span> Keys are pruned by the start time embedded in the key, so cancelled or moved events expire too.</td></tr>
+      <tr><td>No log rotation</td><td><span class="pill">low</span></td><td>launchd and systemd both append to one <code>server.log</code> forever.</td><td><span class="pill warn">open</span> Rotate at install time (newsyslog/logrotate) or document a size check in <code>doctor</code>; needs an ops choice, not a code guess.</td></tr>
+      <tr><td>Authenticated JSON has no <code>no-store</code></td><td><span class="pill">low</span></td><td><code>json()</code> set only <code>content-type</code>; <code>/api/state</code> carries the whole thread.</td><td><span class="pill ok">fixed</span> Every JSON response is <code>cache-control: no-store</code>; uploads/files keep their explicit cache headers.</td></tr>
+      <tr><td>Webhook byte cap trusts <code>content-length</code></td><td><span class="pill">low</span></td><td>A chunked webhook had no length, so the 256 KB gate was skipped. The token still gated it.</td><td><span class="pill ok">fixed</span> The webhook reads through <code>readTextCapped</code> and answers 413 when the stream exceeds the cap.</td></tr>
+      <tr><td>Docker runtime ships dev artifacts</td><td><span class="pill">low</span></td><td><code>COPY . .</code> put tests, <code>scripts/</code>, <code>site/</code> and <code>tools/</code> into the runtime image.</td><td><span class="pill ok">fixed</span> <code>.dockerignore</code> now drops tests, dev scripts, the site and tooling; <code>scripts/precompress.ts</code> is re-included for the build.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Measured: the bytes a phone actually pays</h3>
+  <div class="table-box"><table>
+    <thead><tr><th>Response</th><th>Raw</th><th>gzip -9</th><th>brotli -q 11</th><th>Served now</th></tr></thead>
+    <tbody>
+      <tr><td><code>assets/index-*.js</code></td><td>388,251 B</td><td>119,091 B</td><td>103,185 B</td><td><code>br</code>, gzip fallback</td></tr>
+      <tr><td><code>assets/index-*.css</code></td><td>72,768 B</td><td>23,700 B</td><td>22,277 B</td><td><code>br</code>, gzip fallback</td></tr>
+      <tr><td><code>index.html</code></td><td>941 B</td><td>433 B</td><td>297 B</td><td><code>br</code>, gzip fallback</td></tr>
+      <tr><td><code>GET /api/state</code> (seeded demo, post-fix)</td><td>7,404 B</td><td>2,285 B</td><td>1,884 B</td><td><code>br</code> or gzip</td></tr>
+    </tbody>
+  </table></div>
+  <p class="muted">Measured with <code>curl -H 'Accept-Encoding: br, gzip'</code> against the demo after <code>bun run build</code>; the response carried <code>content-encoding: br</code> and <code>vary: accept-encoding</code>. A client that asks for neither still gets the raw file, so nothing changes for an old browser.</p>
+
+  <h3>Fixed in this pass</h3>
+  <ul class="clean">
+    <li><strong>Background tasks keep their files.</strong> The route validates and links <code>attachment_ids</code>, the user item shows the attachment, and the task prompt names the stored path. A file-only send starts a task instead of returning “empty message”. Tests: <code>index.test.ts</code> (route + link + instructions) and <code>runner.test.ts</code> (item + prompt).</li>
+    <li><strong>Everything is compressed where it helps.</strong> Build-time <code>.br</code>/<code>.gz</code> siblings for the static app; negotiated in <code>serveStatic</code> with <code>vary</code>; dynamic JSON over 1 KB compressed in <code>compressJson</code>. Unit tests in <code>compress.test.ts</code>; curl measurements above.</li>
+    <li><strong>Bodies are capped while they stream.</strong> <code>readTextCapped</code> is the one reader for JSON routes and webhooks, so a chunked body can no longer bypass the 256 KB limit. Tested with a 300 KB stream.</li>
+    <li><strong>CI sees the image and the browser.</strong> A <code>docker build</code> job joins <code>ci.yml</code>; <code>harness.yml</code> runs the nine portable browser scripts nightly/on demand and uploads <code>blueprint-out</code>. The scripts honour <code>CHROME_PATH</code>, so the same suite runs on macOS and Linux.</li>
+    <li><strong>Smaller hardening:</strong> idle task lanes are dropped on every failure path; a stalled SSE client is disconnected instead of buffering; meeting-announcement keys expire with their start time; JSON is <code>no-store</code>; the Docker context no longer carries tests or tooling.</li>
+    <li><strong>The Docker pairing command could not run.</strong> <code>docs/DEPLOY.md</code> and the <code>Dockerfile</code> comment said <code>docker exec hermes-duet bun bin/hermes-duet pair</code>; <code>bin/hermes-duet</code> is a bash script, and <code>bun bin/hermes-duet --help</code> failed with a syntax error at line 2. Both now run the script directly.</li>
+    <li><strong>Stale evidence numbers.</strong> The report KPI and test section said 348 tests across 43 files and 119 ms first render; the fresh run measured 429/47 and 132 ms. The harness README now names the post-fix runs.</li>
+  </ul>
+
+  <div class="callout"><strong>Not yet tested:</strong> push delivery to a physical iPhone, the pairing lockout (deliberately not tripped on the shared seed), and a reconnect on a real phone over Tailscale. These remain blocked on hardware/network, not on code.</div>
+</section>
 
 <section id="roadmap-done">
   <h2>New in this pass: the roadmap, finished</h2>
@@ -156,7 +216,7 @@ pre.cmd { background: var(--kpi-bg); color: var(--kpi-ink); font: 13px/1.6 var(-
   <ul class="clean"><li>Limits: none found; the 390px bar fits with room (overflow 0px).</li></ul>
 
   <h3>How it was verified</h3>
-  <ul class="clean"><li>New harnesses <code>dialogs.mjs</code> (21 checks: 5× open/focus-in/80-stop containment/return-focus, draft heights both widths, empty-state and search-kind contrast guards) and <code>wheel.mjs</code> (6 checks: scroll-message shape, fresh-pane tab list, 5+ tabs at 390px, no overflow, scrolling dropdown). Pre-fix runs failed exactly the defect checks (focus escapes, draft <code>h=92</code>, no scroll message, 0 tabs); post-fix runs pass 21/21 and 6/6 on fresh seeds.</li><li>Full final sequence on one fresh seed: sweep 24/24, live 6/6, channels 6/6, pairing 7/7, a11y 10/10, approvals 7/7, recovery 4/4, polish 8/8, dialogs 21/21, wheel 6/6 — 99/99, no new console errors, <code>bun run typecheck</code> and <code>bun test</code> (348 pass) clean.</li><li>Audited without changes (all measured ≥ bar): empty “Nothing running” text at 5.37:1; search-kind on the active gold row at 4.52:1; compare slider fits desktop + 390px; long titles clamp, long file names ellipsis; 18-item checklist opens without page scroll at 390px; landscape search sheet stays within 310px max-height.</li></ul>
+  <ul class="clean"><li>New harnesses <code>dialogs.mjs</code> (21 checks: 5× open/focus-in/80-stop containment/return-focus, draft heights both widths, empty-state and search-kind contrast guards) and <code>wheel.mjs</code> (6 checks: scroll-message shape, fresh-pane tab list, 5+ tabs at 390px, no overflow, scrolling dropdown). Pre-fix runs failed exactly the defect checks (focus escapes, draft <code>h=92</code>, no scroll message, 0 tabs); post-fix runs pass 21/21 and 6/6 on fresh seeds.</li><li>Full final sequence on one fresh seed: sweep 24/24, live 6/6, channels 6/6, pairing 7/7, a11y 10/10, approvals 7/7, recovery 4/4, polish 8/8, dialogs 21/21, wheel 6/6 — 99/99, no new console errors, <code>bun run typecheck</code> and <code>bun test</code> (429 pass) clean.</li><li>Audited without changes (all measured ≥ bar): empty “Nothing running” text at 5.37:1; search-kind on the active gold row at 4.52:1; compare slider fits desktop + 390px; long titles clamp, long file names ellipsis; 18-item checklist opens without page scroll at 390px; landscape search sheet stays within 310px max-height.</li></ul>
 </section>
 
 <section id="phone-polish">
@@ -179,7 +239,7 @@ pre.cmd { background: var(--kpi-bg); color: var(--kpi-ink); font: 13px/1.6 var(-
   <ul class="clean"><li>Limits: only proven by computed style, not on a physical iPhone (blocked on user hardware — same standing limit as push delivery).</li></ul>
 
   <h3>How it was verified</h3>
-  <ul class="clean"><li>New harness <code>tools/blueprint/polish.mjs</code> (patterned on <code>sweep.mjs</code>): 8 checks, 5 captures. First run on a fresh seed failed the 4 defect checks and passed the 3 desktop controls; after the fixes the same script passes 8/8 on a fresh seed.</li><li>Full final sequence on one fresh seed: sweep 24/24, live 6/6, channels 6/6, pairing 7/7, a11y 10/10, approvals 7/7, recovery 4/4, polish 8/8 — 72/72, no new console errors, <code>bun run typecheck</code> and <code>bun test</code> (348 pass) clean.</li><li>Audit-only findings that were not defects: search-hit contrast re-measured with proper alpha blending (active row 4.52, rest ≥5.16 — passes); empty-channel topic truncates by design with ellipsis; viewer/settings sheets fit at 390px with no page-level sideways scroll.</li></ul>
+  <ul class="clean"><li>New harness <code>tools/blueprint/polish.mjs</code> (patterned on <code>sweep.mjs</code>): 8 checks, 5 captures. First run on a fresh seed failed the 4 defect checks and passed the 3 desktop controls; after the fixes the same script passes 8/8 on a fresh seed.</li><li>Full final sequence on one fresh seed: sweep 24/24, live 6/6, channels 6/6, pairing 7/7, a11y 10/10, approvals 7/7, recovery 4/4, polish 8/8 — 72/72, no new console errors, <code>bun run typecheck</code> and <code>bun test</code> (429 pass) clean.</li><li>Audit-only findings that were not defects: search-hit contrast re-measured with proper alpha blending (active row 4.52, rest ≥5.16 — passes); empty-channel topic truncates by design with ellipsis; viewer/settings sheets fit at 390px with no page-level sideways scroll.</li></ul>
 </section>
 
 <section id="new">
@@ -252,12 +312,12 @@ flowchart LR
 
 <section id="tests">
   <h2>Test results</h2>
-  <p class="intro">The harness drives the real app in real Chrome with a disposable paired context per viewport and every non-local request aborted. Unit tests: <code>bun test</code>, 348 pass / 0 fail across 43 files. Build: <code>bun run build</code> clean.</p>
+  <p class="intro">The harness drives the real app in real Chrome with a disposable paired context per viewport and every non-local request aborted. Unit tests: <code>bun test</code>, 429 pass / 0 fail across 47 files. Build: <code>bun run build</code> clean, including the precompressed siblings. The fresh pass above changed product code, so the browser suite was re-run afterwards: 99/99 again.</p>
   <div class="table-box"><table>
     <thead><tr><th>Run</th><th>Check</th><th>Measured</th><th>Result</th></tr></thead>
     <tbody><!--bp:checks-rows-->
 <tr><td>sweep</td><td>Pair screen asks for a code</td><td>inputs=1</td><td><span class="pill ok">pass</span></td></tr>
-<tr><td>sweep</td><td>Pairing with a real code lands in the thread</td><td>code JD… accepted</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>sweep</td><td>Pairing with a real code lands in the thread</td><td>code DP… accepted</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>sweep</td><td>Thread shows the morning brief</td><td>6 cards</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>sweep</td><td>Thread shows a pending approval</td><td></td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>sweep</td><td>Thread shows a pending question</td><td></td><td><span class="pill ok">pass</span></td></tr>
@@ -288,7 +348,7 @@ flowchart LR
 <tr><td>live</td><td>No unexpected console errors</td><td>clean</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>channels</td><td>Channel sheet creates #taxes and the topic bar follows</td><td>taxes Deductions and receipts</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>channels</td><td>General stays first in the strip</td><td>general</td><td><span class="pill ok">pass</span></td></tr>
-<tr><td>channels</td><td>Message posted in #taxes appears in its thread</td><td>Receipts to gather 13131</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>channels</td><td>Message posted in #taxes appears in its thread</td><td>Receipts to gather 97758</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>channels</td><td>Search finds the #taxes message</td><td>hits=1</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>channels</td><td>Jump lands on the message</td><td>visible</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>channels</td><td>No unexpected console errors</td><td>clean</td><td><span class="pill ok">pass</span></td></tr>
@@ -311,8 +371,8 @@ flowchart LR
 <tr><td>a11y</td><td>No unexpected console errors</td><td>clean</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>approvals</td><td>Seed holds a pending approval and a pending question</td><td>approvals=1 choices=1</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>approvals</td><td>Rail badge counts what needs you</td><td>badges=2,1</td><td><span class="pill ok">pass</span></td></tr>
-<tr><td>approvals</td><td>Approval decides and says what happened</td><td>SENT · 6:22 PM</td><td><span class="pill ok">pass</span></td></tr>
-<tr><td>approvals</td><td>Choice decides and names the chosen answer</td><td>YOU CHOSE “YES, MOVE IT” · 6:22 PM</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>approvals</td><td>Approval decides and says what happened</td><td>SENT · 8:12 PM</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>approvals</td><td>Choice decides and names the chosen answer</td><td>YOU CHOSE “YES, MOVE IT” · 8:12 PM</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>approvals</td><td>Nothing stays pending</td><td>pending=0</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>approvals</td><td>Needs-you badge clears, running-task badge stays</td><td>chat=0 tasks=1</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>approvals</td><td>No unexpected console errors</td><td>clean</td><td><span class="pill ok">pass</span></td></tr>
@@ -320,14 +380,6 @@ flowchart LR
 <tr><td>recovery</td><td>Dropped connection shows Reconnecting</td><td></td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>recovery</td><td>Thread resyncs without duplicating cards</td><td>before=12 after=13 dupes=0</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>recovery</td><td>No page errors across the outage</td><td>clean</td><td><span class="pill ok">pass</span></td></tr>
-<tr><td>polish</td><td>Settings time inputs are &gt;=16px (no iOS zoom)</td><td>time=16px</td><td><span class="pill ok">pass</span></td></tr>
-<tr><td>polish</td><td>Channel form inputs are &gt;=16px (no iOS zoom)</td><td>16px,16px</td><td><span class="pill ok">pass</span></td></tr>
-<tr><td>polish</td><td>Search footer hints show on desktop</td><td>h=35</td><td><span class="pill ok">pass</span></td></tr>
-<tr><td>polish</td><td>Live pane URL bar is &gt;=16px (no iOS zoom)</td><td>16px</td><td><span class="pill ok">pass</span></td></tr>
-<tr><td>polish</td><td>Status pill fits at 390px</td><td>Offline sw=54 cw=54</td><td><span class="pill ok">pass</span></td></tr>
-<tr><td>polish</td><td>Search footer hints hidden on touch</td><td>display=none h=0</td><td><span class="pill ok">pass</span></td></tr>
-<tr><td>polish</td><td>No sideways scroll at 390px</td><td></td><td><span class="pill ok">pass</span></td></tr>
-<tr><td>polish</td><td>No unexpected console errors</td><td>clean</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>dialogs</td><td>viewer: focus moves inside on open</td><td>BUTTON.btn btn-ghost small</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>dialogs</td><td>viewer: Tab stays inside (80 stops)</td><td>wrapped, 3 unique</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>dialogs</td><td>viewer: focus returns to the opener on close</td><td>Weekly metrics dashboardweekly-dashboard (want Weekly metrics dashboard)</td><td><span class="pill ok">pass</span></td></tr>
@@ -350,20 +402,28 @@ flowchart LR
 <tr><td>dialogs</td><td>No sideways scroll at 390px</td><td></td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>dialogs</td><td>No unexpected console errors</td><td>clean</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>wheel</td><td>Wheel over the stage sends scroll input</td><td>x=600 y=459 dy=300</td><td><span class="pill ok">pass</span></td></tr>
-<tr><td>wheel</td><td>Fresh pane lists current tabs</td><td>real=1 pill=127.0.0.1:7499/tap.html?run=1-1793313772</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>wheel</td><td>Fresh pane lists current tabs</td><td>real=1 pill=127.0.0.1:7499/tap.html?run=1-1793841184</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>wheel</td><td>Tab strip holds 5+ tabs at 390px</td><td>6 tabs</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>wheel</td><td>Toolbar never overflows at 390px</td><td>overflow=0px</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>wheel</td><td>Tab dropdown scrolls instead of growing</td><td>h=388 max=388.24px scroll=58</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>wheel</td><td>No unexpected console errors</td><td>clean</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>polish</td><td>Settings time inputs are &gt;=16px (no iOS zoom)</td><td>time=16px</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>polish</td><td>Channel form inputs are &gt;=16px (no iOS zoom)</td><td>16px,16px</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>polish</td><td>Search footer hints show on desktop</td><td>h=35</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>polish</td><td>Live pane URL bar is &gt;=16px (no iOS zoom)</td><td>16px</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>polish</td><td>Status pill fits at 390px</td><td>Offline sw=54 cw=54</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>polish</td><td>Search footer hints hidden on touch</td><td>display=none h=0</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>polish</td><td>No sideways scroll at 390px</td><td></td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>polish</td><td>No unexpected console errors</td><td>clean</td><td><span class="pill ok">pass</span></td></tr>
 <!--/bp:checks-rows--></tbody>
   </table></div>
   <h3>Performance</h3>
   <div class="table-box"><table>
     <thead><tr><th>Measure</th><th>Value</th></tr></thead>
     <tbody><!--bp:perf-rows-->
-<tr><td><code>sweep.jsHeapMB</code></td><td>6</td></tr>
+<tr><td><code>sweep.jsHeapMB</code></td><td>6.6</td></tr>
 <tr><td><code>sweep.screenshots</code></td><td>12</td></tr>
-<tr><td><code>sweep.firstRenderMs</code></td><td>103</td></tr>
+<tr><td><code>sweep.firstRenderMs</code></td><td>132</td></tr>
 <tr><td><code>live.tapRepaintDiff</code></td><td>75.6</td></tr>
 <tr><td><code>live.screenshots</code></td><td>3</td></tr>
 <tr><td><code>channels.screenshots</code></td><td>3</td></tr>
@@ -407,7 +467,7 @@ flowchart LR
 
 <section id="roadmap">
   <h2>Roadmap</h2>
-  <p class="intro">Everything below shipped in the roadmap-completion pass above — kept here as the ranked record. Size: S under half a day, M 1–2 days, L most of a week.</p>
+  <p class="intro">The P1/P2 tiers below shipped in the roadmap-completion pass — kept as the ranked record. The 2026-11-04 pass adds an open <em>Next</em> lane from the findings above. Size: S under half a day, M 1–2 days, L most of a week.</p>
   <div class="tier">
     <h3>P1 · Live browser, exercised <small>done</small></h3>
     <div class="items">
@@ -424,6 +484,17 @@ flowchart LR
       <div class="item"><h4><span class="pill ok">done</span> Accessibility pass</h4><dl><dt>Evidence</dt><dd><code>a11y.mjs</code> 10/10: keyboard operability, focus indicators, computed contrast ≥4.5 everywhere.</dd><dt>Size</dt><dd class="effort">S</dd></dl></div>
     </div>
   </div>
+  <div class="tier">
+    <h3>Next · from the 2026-11-04 pass <small>done</small></h3>
+    <div class="items">
+      <div class="item"><h4><span class="pill ok">done</span> Carry attachments into background tasks</h4><dl><dt>Landed</dt><dd>The route validates and links the ids; the item shows the files; the task prompt names their paths. Tests in <code>index.test.ts</code> and <code>runner.test.ts</code>.</dd><dt>Size</dt><dd class="effort">S</dd></dl></div>
+      <div class="item"><h4><span class="pill ok">done</span> Compress what the phone downloads</h4><dl><dt>Landed</dt><dd>Build-time <code>.br</code>/<code>.gz</code> siblings, negotiated in <code>serveStatic</code>; JSON over 1 KB compressed. JS 388,251 → 103,185 br; <code>/api/state</code> 7,404 → 1,884 br.</dd><dt>Size</dt><dd class="effort">S</dd></dl></div>
+      <div class="item"><h4><span class="pill ok">done</span> Cap JSON bodies before buffering</h4><dl><dt>Landed</dt><dd><code>readTextCapped</code> is the one reader for JSON routes and webhooks; a chunked 300 KB stream is refused.</dd><dt>Size</dt><dd class="effort">S</dd></dl></div>
+      <div class="item"><h4><span class="pill ok">done</span> Put the harness and image in CI</h4><dl><dt>Landed</dt><dd><code>docker build</code> on every push; nightly/manual browser sweep on Linux with <code>CHROME_PATH</code>; evidence uploaded.</dd><dt>Size</dt><dd class="effort">M</dd></dl></div>
+      <div class="item"><h4><span class="pill ok">done</span> Let Dependabot see the Bun tree</h4><dl><dt>Landed</dt><dd>Weekly <code>package-ecosystem: bun</code> block on <code>/</code>.</dd><dt>Size</dt><dd class="effort">S</dd></dl></div>
+      <div class="item"><h4><span class="pill warn">open</span> Log rotation</h4><dl><dt>Why it waits</dt><dd>It needs an ops choice (newsyslog/logrotate vs a <code>doctor</code> size check), not another code guess. Recording it here keeps it visible.</dd><dt>Size</dt><dd class="effort">S</dd></dl></div>
+    </div>
+  </div>
   <div class="callout"><strong>Not yet tested:</strong> push delivery to a real device — needs the user's paired iPhone (blocked on user hardware, not attempted).</div>
 </section>
 
@@ -436,10 +507,10 @@ python3 ~/.agents/skills/blueprint/scripts/devserver.py start \
   "DUET_CHROME_PROFILE=/Users/devgwardo/hermes-duet/blueprint-out/chrome-profile" \
   DUET_HERMES_URL=http://127.0.0.1:9 bun scripts/demo.ts --reset
 export APP_URL=http://127.0.0.1:7466/ BP_OUT=/Users/devgwardo/hermes-duet/blueprint-out
-for s in sweep live channels pairing a11y approvals recovery; do
+for s in sweep live channels pairing a11y approvals recovery dialogs wheel polish; do
   node tools/blueprint/$s.mjs || echo "$s FAILED"
 done
-bun test   # 274 pass, 0 fail</pre>
+bun test   # 429 pass, 0 fail</pre>
 </section>
 </main>
 </div>

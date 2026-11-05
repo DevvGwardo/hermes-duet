@@ -9,7 +9,8 @@
 #     -p 7456:7456 -v hermes-duet-data:/data \
 #     --env-file .env hermes-duet
 #
-# Then pair a device with: docker exec hermes-duet bun bin/hermes-duet pair
+# Then pair a device with: docker exec hermes-duet bin/hermes-duet pair
+# (bin/hermes-duet is a bash CLI; `bun bin/hermes-duet` cannot parse it.)
 
 # syntax=docker/dockerfile:1
 FROM oven/bun:1.2-debian AS deps
