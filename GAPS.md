@@ -373,6 +373,7 @@ the existing provider tests assert the method, path and expand parameters (they 
 | 10.2 | "Earlier messages" paged with the whole install's oldest item, not the open channel's, so a second channel's history could not load | **Fixed** |
 | 10.3 | Opening a channel skipped its page when a pre-channels item was loaded, so the channel stayed empty | **Fixed** |
 | 10.4 | Validation sentences from the upload and channel validators reached the phone as `500 internal` | **Fixed** |
+| 10.5 | A chat turn in a topic channel dropped the waiting-cards note, leaving that channel's approvals tappable after the user settled them in words | **Fixed** |
 
 **10.1** `undeliveredSteers` walked `run.steers` oldest-first and used a bare `indexOf` against `pending_steer`.
 With "send it" already delivered and "don't send it" returned pending, the delivered text matched at offset 6 of the
@@ -414,6 +415,15 @@ still do not leak. Tests: route-level in `server/index.test.ts` (both returned 5
 pinning that a plain `Error` with a path is still `internal`. Verified with `curl` against the demo: unsupported type
 → `400 {"error":"can't take image/avif; …"}`, bad channel name → `400 {"error":"a channel name needs at least one
 letter or number"}`, valid upload and channel creation unchanged, logged-out upload still `401`.
+
+**10.5** `launchRun` gated the waiting-cards note on `l.main`, but `turnNote`/`waitingNote` already select only the
+run's own session's pending cards. Topic channels are non-main lanes, so a chat turn in `#taxes` never carried "Cards
+of yours still waiting on the user's tap": the user could settle an approval in words there and the card stayed
+tappable in "Needs you" and in the brief, resuming the agent on a stale ask days later. The steer path
+(`runner.ts:1141`) was already ungated, so the same message got the note if it landed on a live turn and lost it if it
+started the next one. The gate is gone; `turnNote` still returns `''` for briefs, check-ins and tasks, and context
+notes stay main-only. Tests: `server/runner.test.ts` drives a real channel turn through `submitUser` → `launchRun`
+with a stubbed Hermes (it failed before), plus a `curl` smoke against the demo posting into a channel.
 
 ### What is deliberately still open
 

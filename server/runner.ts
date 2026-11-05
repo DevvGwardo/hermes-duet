@@ -357,7 +357,9 @@ async function launchRun(l: Lane, run: ActiveRun, spec: RunSpec) {
   const notes = l.main && spec.kind === 'chat' ? peekContextNotes() : '';
   const channelId = channelOfSpec(spec);
   // Read fresh at launch, not at enqueue, so a card decided while this message sat in the queue isn't listed.
-  const waiting = l.main ? turnNote(items.pendingCards(channelId), spec) : '';
+  // `turnNote` already picks only cards from the run's own session, so every channel's chat turns get it; gating it on
+  // the main lane left approvals posted in a channel tappable long after the user had settled them in words.
+  const waiting = turnNote(items.pendingCards(channelId), spec);
   const input = notes + waiting + spec.input;
 
   if (spec.taskId) {
