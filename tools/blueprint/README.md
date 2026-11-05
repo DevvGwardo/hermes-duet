@@ -16,10 +16,10 @@ override with `BP_OUT=/path`, the app with `APP_URL=...`). Every script uses
 `CHROME_PATH` when set (default: Chrome in `/Applications`), so the same suite
 runs on Linux and in the nightly `Browser harness` workflow.
 
-`recovery.mjs` is local-only: it restarts the server through the blueprint
-helper on the machine that owns the app. `live.mjs` is local-only too: it needs
-a driven Chrome that actually paints frames, and the CI runner's headless
-Chromium produced none. The CI workflow runs the other eight.
+Three scripts are local-only and named in the CI workflow: `recovery.mjs` restarts
+the server through the blueprint helper; `live.mjs` needs a driven Chrome that
+actually paints frames; `wheel.mjs` opens that same pane and waits for its stage.
+The CI runner's headless Chromium delivered no frames, so it runs the other seven.
 
 | Script | What it checks and captures |
 |---|---|
