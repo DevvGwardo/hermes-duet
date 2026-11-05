@@ -370,6 +370,7 @@ the existing provider tests assert the method, path and expand parameters (they 
 | # | Finding | Status |
 |---|---|---|
 | 10.1 | A delivered steer that is a substring of the undelivered one was replayed in its place, losing the user's real message | **Fixed** |
+| 10.2 | "Earlier messages" paged with the whole install's oldest item, not the open channel's, so a second channel's history could not load | **Fixed** |
 
 **10.1** `undeliveredSteers` walked `run.steers` oldest-first and used a bare `indexOf` against `pending_steer`.
 With "send it" already delivered and "don't send it" returned pending, the delivered text matched at offset 6 of the
@@ -378,6 +379,18 @@ pending one: the retracted instruction was replayed as a fresh chat turn and the
 Matching now requires a whole line of Hermes's newline-joined payload and consumes the longest steer first, while
 the returned list keeps send order. The same function serves the restart-reattach path. Tests:
 `server/steer.test.ts` (it failed against the old matcher).
+
+**10.2** The client keeps every channel's items in one list, and `loadOlder` used `items[0]` — the globally oldest
+row — as the `before` cursor. Once the user paged one channel, that cursor belonged to a different thread, so
+paging the next channel asked the server for a window holding none (or only part) of its unloaded history; an empty
+page also set `hasMore` false for every channel, hiding "Earlier messages" until the next reconnect. It now pages
+from the open channel's oldest loaded item, reusing `channelItems` so the legacy no-`channel_id` fallback stays in
+one place. Tests: `web/src/api.test.ts` (failed against the old cursor). The browser suite was re-run after the
+client change: **99/99** across all ten scripts, 37 screenshots.
+
+*Still open, next:* `hasMore` is a single boolean, so exhausting one channel's history also hides "Earlier
+messages" in another channel that still has more (`Thread.tsx` gates the button on it, `loadUntil` too). Fixing it
+needs per-channel paging state, which is a state-shape change; it is queued rather than half-fixed here.
 
 ### What is deliberately still open
 
