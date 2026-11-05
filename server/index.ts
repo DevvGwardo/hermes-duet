@@ -12,6 +12,7 @@ import { sseResponse } from './bus';
 import { config } from './config';
 import { type AttachmentRow, attachments, channels, db, devices, files, items, kv, newId, pages, prune, settings, tasks, toAttachment, triggers } from './db';
 import { hermes } from './hermes';
+import { idempotencyKey, idempotentItem, limits, rememberIdempotent, type SlidingWindow } from './limits';
 import { presence } from './presence';
 import { hasSubscriptions, notify, publicKey, saveSubscription } from './push';
 import { abortActiveRuns, actOnCard, agentState, cancelTask, deliverableAction, deliverableApproval, executeTool, recoverOrphans, runBrief, runCheckin, startConnectorWatch, startHermesWatch, startUserTask, stopMain, stopPage, submitSystem, submitUser } from './runner';
@@ -31,6 +32,15 @@ const json = (data: unknown, status = 200, headers: Record<string, string> = {})
     headers: { 'content-type': 'application/json', 'cache-control': 'no-store', ...headers },
   });
 const err = (status: number, error: string) => json({ error }, status);
+
+/** Refuse an expensive mutation when its device budget is spent; `retry-after` tells the client when to return. */
+function tooMany(bucket: SlidingWindow, device: string, what: string): Response | null {
+  const { allowed, retryAfterMs } = bucket.check(device);
+  if (allowed) return null;
+  return json({ error: `too many ${what}`, code: 'too_many', retry_after_ms: retryAfterMs }, 429, {
+    'retry-after': String(Math.max(1, Math.ceil(retryAfterMs / 1000))),
+  });
+}
 
 /** Read a request body with a hard byte cap, including chunked bodies that have no Content-Length. */
 export async function readTextCapped(req: Request, limit: number): Promise<string> {
@@ -383,6 +393,16 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
     }
 
     if (path === '/api/messages' && req.method === 'POST') {
+      const limited = tooMany(limits.messages, device, 'messages');
+      if (limited) return limited;
+      // A retrying client can send the same key twice; the second request gets the first item instead of a second turn.
+      const idem = idempotencyKey(req);
+      const scope = idem ? `${device}:${idem}` : null;
+      if (scope) {
+        const previous = idempotentItem(scope);
+        const item = previous ? items.get(previous) : null;
+        if (item) return json({ item, duplicate: true });
+      }
       const { text, channel_id, attachment_ids } = await body<{ text?: string; channel_id?: string; attachment_ids?: string[] }>(req);
       const ids = Array.isArray(attachment_ids) ? attachment_ids.slice(0, 6).map(String) : [];
       if (attachment_ids && !Array.isArray(attachment_ids)) return err(400, 'attachment_ids must be a list');
@@ -394,9 +414,12 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
       const note = attachmentNote(rows);
       const item = submitUser(t, note ? `${t}${note}` : undefined, channel_id, rows.map(toAttachment));
       if (rows.length) attachments.link(ids, item.id);
+      if (scope) rememberIdempotent(scope, item.id);
       return json({ item });
     }
     if (path === '/api/tasks' && req.method === 'POST') {
+      const limited = tooMany(limits.tasks, device, 'tasks');
+      if (limited) return limited;
       const { text, channel_id, attachment_ids } = await body<{ text?: string; channel_id?: string; attachment_ids?: string[] }>(req);
       // The same attachment contract as /api/messages: the task keeps the files, and its prompt names their paths so
       // the agent can open them. A background send with a photo and no caption is a legitimate message.
@@ -521,6 +544,9 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
       return json({ settings: next });
     }
     if (path === '/api/brief/run' && req.method === 'POST') {
+      // A brief starts a full Hermes turn; six in ten minutes is generous for "Run it now" and hard to loop by accident.
+      const limited = tooMany(limits.briefs, device, 'brief runs');
+      if (limited) return limited;
       const queued = runBrief('manual');
       return json({ ok: true, queued });
     }
@@ -537,6 +563,8 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
       return json({ ok: true });
     }
     if (path === '/api/push/test' && req.method === 'POST') {
+      const limited = tooMany(limits.pushTests, device, 'test notifications');
+      if (limited) return limited;
       const sent = await notify({ title: 'Hermes Duet', body: 'Notifications are working.', always: true }, { ignoreQuiet: true });
       return json({ sent });
     }

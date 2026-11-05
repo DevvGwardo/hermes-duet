@@ -1,18 +1,10 @@
 import { useState } from 'react';
 import type { Task } from '../../../shared/types';
 import { api } from '../api';
+import { STATUS_LABEL } from '../labels';
 import { useStore } from '../store';
 import { Icon, relLabel } from '../ui';
 import { FileRow } from './CardView';
-
-export const STATUS_LABEL: Record<Task['status'], string> = {
-  queued: 'Queued',
-  running: 'Working',
-  waiting: 'Waiting on you',
-  done: 'Done',
-  failed: 'Failed',
-  cancelled: 'Cancelled',
-};
 
 export function TasksView({ onJump, onOpenFile }: { onJump: (itemId: string) => void; onOpenFile: (id: string) => void }) {
   const tasks = useStore((s) => s.tasks);

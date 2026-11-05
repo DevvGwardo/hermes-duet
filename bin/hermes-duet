@@ -31,7 +31,7 @@ DATA="${DUET_DATA_DIR:-$ROOT/data}"
 PORT="${DUET_INTERNAL_PORT:-7457}"
 LABEL="${DUET_LAUNCHD_LABEL:-dev.hermes-duet.server}"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
-LOGDIR="$HOME/Library/Logs/hermes-duet"
+LOGDIR="${DUET_LOG_DIR:-$HOME/Library/Logs/hermes-duet}"
 # Linux headless (Ubuntu/Debian homelab, a VPS) runs the same server under a user unit instead of launchd.
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 UNIT="$UNIT_DIR/hermes-duet.service"
@@ -80,6 +80,16 @@ case "${1:-help}" in
     printf '%s' "$out" | bun -e 'const d = JSON.parse(await Bun.stdin.text()); for (const c of d.checks) console.log(`  ${c.ok ? "✓" : c.info ? "·" : "✗"} ${c.name}: ${c.detail}`)'
     if command -v tailscale >/dev/null && tailscale serve status 2>/dev/null | grep -q "127.0.0.1:${DUET_PORT:-7456}"; then echo "  ✓ tailscale serve forwards to :${DUET_PORT:-7456}"; else echo "  · tailscale serve not pointing at :${DUET_PORT:-7456} (only needed for phone access)"; fi
     echo "  · speech: $(command -v whisper-cli >/dev/null && echo 'whisper.cpp found' || echo 'no local transcriber (set DUET_STT_CMD or DUET_STT_URL)')"
+    # launchd and systemd append forever; a warning here is the reminder, rotate-logs is the fix.
+    LOG="$LOGDIR/server.log"
+    if [ -f "$LOG" ]; then
+      size="$(wc -c < "$LOG" | tr -d ' ')"
+      if [ "$size" -gt 52428800 ]; then
+        echo "  ! server log is $((size / 1048576)) MB; run: hermes-duet rotate-logs"
+      else
+        echo "  · server log: $((size / 1024)) KB"
+      fi
+    fi
     ;;
   install)
     BUN="$(command -v bun)" || { echo "bun not found on PATH" >&2; exit 1; }
@@ -141,6 +151,26 @@ UNITFILE
   logs)
     if has_unit; then journalctl --user -u hermes-duet.service -n "${2:-80}" -f;
     else tail -n "${2:-80}" -f "$LOGDIR/server.log"; fi ;;
+  rotate-logs)
+    # Copytruncate, not rename: launchd and systemd hold the file open, so a renamed log leaves the service writing
+    # to the old inode while `hermes-duet logs` tails an empty new file. Truncating in place keeps that descriptor.
+    keep="${2:-5}"
+    case "$keep" in ''|*[!0-9]*) echo "usage: hermes-duet rotate-logs [keep]" >&2; exit 2 ;; esac
+    [ "$keep" -ge 1 ] || { echo "usage: hermes-duet rotate-logs [keep] (keep must be at least 1)" >&2; exit 2; }
+    LOG="$LOGDIR/server.log"
+    [ -f "$LOG" ] || { echo "No server log at $LOG"; exit 0; }
+    size="$(wc -c < "$LOG" | tr -d ' ')"
+    [ "$size" -gt 0 ] || { echo "Server log is empty; nothing to rotate."; exit 0; }
+    i="$keep"
+    while [ "$i" -gt 1 ]; do
+      prev=$((i - 1))
+      if [ -f "$LOG.$prev" ]; then mv -f "$LOG.$prev" "$LOG.$i"; fi
+      i="$prev"
+    done
+    cp -p "$LOG" "$LOG.1" 2>/dev/null || cp "$LOG" "$LOG.1"
+    : > "$LOG"
+    echo "Rotated $LOG (${size} bytes); kept $keep copies."
+    ;;
   *)
     cat <<USAGE
 hermes-duet pair                  one-time code to pair a phone or browser
@@ -155,6 +185,7 @@ hermes-duet install | uninstall   background service (macOS launchd label: $LABE
 hermes-duet install-systemd       background service (Linux systemd user unit)
 hermes-duet uninstall-systemd
 hermes-duet start | stop | restart | logs
+hermes-duet rotate-logs [keep]    rotate the service log in place (default 5 copies)
 USAGE
     ;;
 esac

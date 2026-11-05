@@ -4,7 +4,7 @@ A 10-agent audit of `hermes-duet` (architect, backend, frontend, api, data, test
 produced the findings below. This file is now the record of what happened to each one: **fixed**, **still open** (with
 why), or **rejected** (the crew was wrong — do not re-investigate without new evidence).
 
-**Baseline at audit time:** 348 tests pass, `tsc` clean. **Now:** 416 tests pass, `tsc` clean, `bun run build` clean.
+**Baseline at audit time:** 348 tests pass, `tsc` clean. **Now:** 438 tests pass, `tsc` clean, `bun run build` clean.
 
 Line numbers in the original findings refer to commit `8fbabc7`; they have moved.
 
@@ -75,7 +75,7 @@ them), waits 150 ms for the last write, then closes the database.
 | 2.3 | Upload limits disagree | **Fixed** (limit); streaming still open |
 | 2.4 | Loopback internal API skips public validation | **Fixed** `c1acdf3` |
 | 2.5 | `/api/browser/input` is an `any` cast | **Fixed** `c1acdf3` |
-| 2.6 | No idempotency or rate limits on mutations | **Open** |
+| 2.6 | No idempotency or rate limits on mutations | **Fixed** (Round 4) |
 | 2.7 | No 405/OPTIONS, no `/api/version` | **Fixed** (405 + version) `c1acdf3` |
 
 **2.1** A trailing slash is the same route (`/api/items/?before=…` no longer 404s) and every `/api` path — including
@@ -92,10 +92,10 @@ streaming to disk under a hard byte cap needs a multipart parser.
 `unknown` and validated by `normalizeInput` (which already clamped coordinates and rejected unknown event types — the
 original claim that raw payloads reached CDP was overstated).
 
-**2.6 Open.** No `Idempotency-Key` and no per-device throttling on `/api/messages`, `/api/tasks`, `/api/brief/run`,
-`/api/push/test`. Deliberately deferred: it is a contract change for every client and this app is single-user, single
-device, over a private network. The cheap half (rate-limit `push/test` and `brief/run`) is worth doing before the app
-is ever put in front of more than one person.
+**2.6** Closed in Round 4. `server/limits.ts` gives each paired device a sliding budget for messages, tasks, brief
+runs and test pushes, and `POST /api/messages` accepts an `Idempotency-Key` scoped to the device. A repeated key
+returns the first item instead of enqueuing a second turn. The limits are in memory (a restart forgives recent
+hits), which is the right trade for an abuse brake; the durable brakes stay in SQLite.
 
 **2.7** `GET /api/version` (from `package.json`) and 405 + `Allow` for a known route called with the wrong method.
 `OPTIONS`/CORS is still not handled — the app is same-origin only, so a preflight cannot happen.
@@ -175,7 +175,7 @@ than a boot loop.
 | 5.3 | No live regions | **Fixed** `70ab0cc` |
 | 5.4 | Service worker has no offline shell or cache versioning | **Open** |
 | 5.5 | Snapshot ships too much on every reconnect | **Open** |
-| 5.6 | Single 388 KB bundle, no code splitting | **Open** |
+| 5.6 | Single 388 KB bundle, no code splitting | **Fixed** (Round 4) |
 | 5.7 | Small a11y and mobile gaps | **Fixed** `a5ba574` |
 
 **5.1** `Markdown` and each thread item are memoised; the store preserves item identity, so a token delta re-renders
@@ -187,8 +187,10 @@ talks to a LAN server, and a wrong cache is a worse failure than a blank screen 
 **5.5 Open.** `/api/state` still sends 150 items plus every file, page and task on reconnect. Trimming it changes what
 the phone has when it comes back; worth doing with a measurement on a real device, not blind.
 
-**5.6 Open.** ~388 KB (120 KB gzip) in one bundle, no `React.lazy`, no vendor chunk. A build-level change with a
-first-paint tradeoff.
+**5.6** Closed in Round 4. The two non-chat tabs and the three on-demand overlays are `React.lazy` chunks behind
+`Suspense`; `STATUS_LABEL` moved to `web/src/labels.ts` so the Tasks tab could split without Thread pulling it in.
+Initial JS is 365,345 B (98,610 B brotli) plus 25,762 B of chunks loaded on first use. The full harness opens every
+split view.
 
 ---
 
@@ -261,7 +263,7 @@ without a measurement on a phone.
 ## Round 3 — fresh pass, 2026-11-04
 
 A third pass re-ran the full blueprint suite (10 scripts, **99/99 checks, 37 screenshots reviewed**), typecheck
-(clean), `bun test` (**429/429, 47 files**) and the build (388 KB bundle plus precompressed siblings). It then
+(clean), `bun test` (**429/429, 47 files**; **438/49** after Round 4) and the build (388 KB bundle plus precompressed siblings). It then
 audited the HTTP surface, runner, data layer, web client, CI and deploy docs, fixed the high-impact findings, and
 re-ran the browser suite after the changes (99/99 again). Findings are listed in
 `docs/blueprint/hermes-duet-blueprint.html#fresh-pass`; this is the ledger.
@@ -276,7 +278,7 @@ re-ran the browser suite after the changes (99/99 again). Findings are listed in
 | 8.6 | `launchRun`'s failure path left an idle non-main lane in `lanes` | Low | **Fixed** |
 | 8.7 | SSE sink enqueued without backpressure (live-browser frames already drop above 1.5 MB) | Low | **Fixed** |
 | 8.8 | `announcedMeetings` only shrank when an event started; cancelled/rescheduled keys persisted | Low | **Fixed** |
-| 8.9 | No log rotation for launchd/systemd append-only `server.log` | Low | **Open** |
+| 8.9 | No log rotation for launchd/systemd append-only `server.log` | Low | **Fixed** (Round 4) |
 | 8.10 | Authenticated JSON had no `cache-control: no-store` | Low | **Fixed** |
 | 8.11 | Webhook 256 KB cap trusted `content-length`; chunked requests bypassed it (still token-gated) | Low | **Fixed** |
 | 8.12 | Docker runtime copied tests, `scripts/`, `site/` and `tools/` into the image | Low | **Fixed** |
@@ -314,11 +316,54 @@ drops tests, dev scripts, `site/` and `tools/` (keeping `scripts/precompress.ts`
 
 - `noUncheckedIndexedAccess` is off. Turning it on would surface hundreds of sites in `runner.ts`; it belongs with
   the planned runner split, not a docs pass.
-- The single 388 KB chunk and the reconnect snapshot are tracked as 5.5/5.6. This pass compressed both on the
-  wire (8.2) but did not split the bundle or trim what the snapshot carries; those are client-shape decisions.
+- The single chunk and the reconnect snapshot were tracked as 5.5/5.6. This pass compressed both on the wire (8.2);
+  Round 4 split the overlays and the two non-chat tabs (5.6). Snapshot trimming (5.5) still needs a real-thread
+  measurement.
 - Encryption at rest (3.3) still needs the key-holding decision; no new evidence.
 - The pairing lockout remains global by design. A reachable attacker can make pairing wait; the server is private by
   default, and the alternative (per-IP brakes) is weaker behind a tunnel.
+
+---
+
+## Round 4 — closing the remaining tractable gaps, 2026-11-04
+
+After Round 3 shipped, the follow-up pass closed the three items that were safe to finish without a policy or
+architecture decision: mutation limits/idempotency (2.6), code splitting (5.6) and log rotation (8.9). The browser
+suite was re-run after the client change: **99/99 checks**, 37 screenshots. Unit tests: **438/438 across 49 files**.
+
+| # | Finding | Status |
+|---|---|---|
+| 9.1 | No per-device limits on messages, tasks, briefs or test pushes; a retried message could enqueue a second turn | **Fixed** |
+| 9.2 | The first paint parsed every overlay and both other tabs | **Fixed** |
+| 9.3 | launchd/systemd append to `server.log` forever | **Fixed** |
+
+**9.1** `server/limits.ts` adds sliding windows per paired device: 60 messages/min, 20 tasks/min, 6 brief runs per
+10 minutes, 5 test pushes per 10 minutes. A refusal is `429` with `retry-after`. `POST /api/messages` accepts
+`Idempotency-Key` (`[A-Za-z0-9_-]{8,64}`), scoped to the device, and returns the first item for a repeat instead of
+a second turn; the map is bounded and expires after 10 minutes. Because the limiter is in memory, a restart forgives
+recent hits; that is the right trade for an abuse brake, and the durable brakes (pairing, webhooks) stay in SQLite.
+Tests: `server/limits.test.ts`, plus route tests for the duplicate key and the 429.
+
+**9.2** `TasksView`, `MakeView`, `Viewer`, `SettingsSheet` and `BrowserView` are `React.lazy` chunks behind
+`Suspense`. `STATUS_LABEL` moved to `web/src/labels.ts` so `Thread.tsx` no longer statically imports the Tasks tab
+(which would have defeated the split; Vite warned about exactly that). Measured: initial JS 388,251 → **365,345 B**
+(119,091 → **113,729 gzip**, 103,185 → **98,610 br**); five chunks total **25,762 B** (9,386 gzip), loaded on first
+use. The full harness opens every split view, so the chunk boundaries are exercised, not assumed.
+
+**9.3** `hermes-duet rotate-logs [keep]` copytruncates the live log: it copies `server.log` to `.1`, shifts older
+generations, then truncates in place so launchd/systemd keep writing to the same descriptor. `doctor` warns above
+50 MB, `DUET_LOG_DIR` overrides the location, and `DEPLOY.md` documents a weekly cron. `scripts/log-rotation.test.ts`
+spawns the real bash CLI against a temp directory.
+
+### What is deliberately still open
+
+- **5.5** reconnect snapshot trimming: the compressed snapshot is 1.9 KB on the seed, so this needs a measurement on
+  a real thread. It changes what a returning phone has; that is a product trade, not a clear defect.
+- **3.3** encryption at rest: still needs the key-holding decision (OS keychain vs passphrase, unattended boot).
+- **5.4** offline shell: needs cache invalidation designed for a LAN server; a wrong cache is worse than a spinner.
+- **6.6** lint/coverage: the nightly browser harness and advisory audit exist; a linter and coverage target are
+  separate tool choices.
+- **`runner.ts` split**: still the structural fix, and still not something to combine with behavioural changes.
 
 ---
 
@@ -342,13 +387,14 @@ The crew asserted these confidently; the gate checked and they are wrong or alre
 
 ## Suggested next steps, in order of value
 
-1. **2.6** rate-limit `push/test` and `brief/run`, and accept an `Idempotency-Key` on `/api/messages`. (Small, and it
-   is the last thing between this and being safe to hand to a second person.)
-2. **5.5 + 5.6** measured on a real phone: trim the reconnect snapshot, then split the four overlays out of the first
-   paint.
-3. **3.3** encryption at rest, once the key-holding decision is made (keychain for a Mac install, passphrase for a VPS).
-4. **5.4** an offline shell with a versioned cache.
-5. **6.6** lint + `bun audit` in CI, and a nightly smoke against a real gateway.
+Round 4 closed 2.6, 5.6 and 8.9. What remains, in order:
+
+1. **5.5** measure `/api/state` on a real thread, then trim what a returning phone has. The compressed snapshot is
+   1.9 KB on the seed, so this is a product trade measured against real data, not a blind cut.
+2. **3.3** encryption at rest, once the key-holding decision is made (keychain for a Mac install, passphrase for a VPS).
+3. **5.4** an offline shell with a versioned cache.
+4. **6.6** a linter and a coverage target; the nightly browser harness and advisory audit already run.
+5. **`runner.ts` split**, as a standalone structural change.
 
 `server/runner.ts` is still ~1,950 lines with a large tool-dispatch switch. Splitting it
 (`server/cards/actions.ts`, `server/runs/manager.ts`, `server/tools/dispatch.ts`, `runner.ts` as facade) is the

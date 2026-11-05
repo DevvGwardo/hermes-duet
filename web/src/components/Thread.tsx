@@ -6,7 +6,7 @@ import { Icon, Markdown, dayLabel, timeLabel } from '../ui';
 import { Attachments } from './Attachments';
 import { CardView } from './CardView';
 import { BrandBadge, Mascot, SpeechBubble } from './Manga';
-import { STATUS_LABEL } from './TasksView';
+import { STATUS_LABEL } from '../labels';
 import { WhatICanSee } from './WhatICanSee';
 
 const SUGGESTIONS = [

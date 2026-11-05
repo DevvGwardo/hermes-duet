@@ -6,6 +6,7 @@ import { attachments, items, kv, newId, tasks } from './db';
 import { hermes } from './hermes';
 import { GENERAL_CHANNEL } from './schema';
 import { apiError, handleApp, handleInternal, readTextCapped } from './index';
+import { resetIdempotency, resetLimits } from './limits';
 import { MAX_UPLOAD_BYTES } from './uploads';
 
 const BASE = 'http://127.0.0.1:7456';
@@ -65,6 +66,36 @@ describe('paired routes', () => {
       expect(tasks.get(body.task.id)?.instructions).toContain(path);
     } finally {
       hermes.hasKey = real;
+    }
+  });
+
+  test('a repeated Idempotency-Key returns the first message instead of posting twice', async () => {
+    resetIdempotency();
+    const key = `probe-${newId()}`;
+    const init = jsonPost({ text: 'idempotent probe' });
+    const headers = { ...(init.headers as Record<string, string>), 'idempotency-key': key };
+    const first = await authed('/api/messages', { ...init, headers });
+    expect(first.status).toBe(200);
+    const firstBody = (await first.json()) as any;
+    const second = await authed('/api/messages', { ...init, headers });
+    expect(second.status).toBe(200);
+    const secondBody = (await second.json()) as any;
+    expect(secondBody.item.id).toBe(firstBody.item.id);
+    expect(secondBody.duplicate).toBe(true);
+  });
+
+  test('test pushes are rate-limited per device and say when to retry', async () => {
+    resetLimits();
+    try {
+      for (let i = 0; i < 5; i++) {
+        expect((await authed('/api/push/test', { method: 'POST' })).status).toBe(200);
+      }
+      const refused = await authed('/api/push/test', { method: 'POST' });
+      expect(refused.status).toBe(429);
+      expect(refused.headers.get('retry-after')).toBeTruthy();
+      expect(((await refused.json()) as any).code).toBe('too_many');
+    } finally {
+      resetLimits();
     }
   });
 
