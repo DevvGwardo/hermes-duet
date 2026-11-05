@@ -5,7 +5,7 @@ import { expect, test } from 'bun:test';
 (globalThis as any).document = { addEventListener() {}, visibilityState: 'hidden' };
 (globalThis as any).window = { addEventListener() {}, matchMedia: () => ({ matches: false }) };
 
-const { api, loadOlder } = await import('./api');
+const { api, loadOlder, openChannel } = await import('./api');
 const { getState, setState } = await import('./store');
 
 function stubFetch(handler: (url: string, init: any) => any) {
@@ -85,6 +85,35 @@ test('loadOlder pages back from the oldest item in the open channel, not the who
     expect(seen).toEqual([['taxes-mid', 'chan-taxes']]);
   } finally {
     (api as any).older = realOlder;
+  }
+});
+
+test('openChannel loads a channel the snapshot has no items for, even with a pre-channels item loaded', async () => {
+  // Rows written before topic channels carry no `channel_id` inside their JSON (the column is backfilled, the item
+  // is not). Reading the target id as the fallback makes every such row look like it belongs to the channel being
+  // opened, so the page is never fetched and the channel shows empty for good.
+  const asked: string[] = [];
+  const real = { channelPage: api.channelPage, seenChannel: api.seenChannel };
+  (api as any).channelPage = async (id: string) => {
+    asked.push(id);
+    return { items: [{ id: 'tax-1', channel_id: id, created_at: 500 } as any], has_more: true };
+  };
+  (api as any).seenChannel = async () => ({ ok: true });
+  try {
+    setState({
+      channelId: 'chan-general',
+      channels: [
+        { id: 'chan-general', slug: 'general' } as any,
+        { id: 'chan-taxes', slug: 'taxes' } as any,
+      ],
+      items: [{ id: 'legacy-1', created_at: 10 } as any],
+    });
+    await openChannel('chan-taxes');
+    expect(asked).toEqual(['chan-taxes']);
+    expect(getState().items.map((i) => i.id)).toContain('tax-1');
+  } finally {
+    (api as any).channelPage = real.channelPage;
+    (api as any).seenChannel = real.seenChannel;
   }
 });
 
