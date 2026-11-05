@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import type { Attachment, FileEntry, Item, Page, Task } from '../shared/types';
-import { items, kv, newId, runs, tasks } from './db';
+import { channels, items, kv, newId, runs, tasks } from './db';
 import { HermesError, hermes } from './hermes';
 import { GENERAL_CHANNEL } from './schema';
 import { agentState, briefDedupeAllowed, cancelTask, deliverableAction, deliverableApproval, executeTool, mainSessionId, pageRefreshing, recoverOrphans, runBrief, settleHermesAsk, startUserTask, stopMain, submitUser, __resetBriefDedupe } from './runner';
@@ -205,6 +205,43 @@ async function until(cond: () => boolean, ms = 2000) {
   const deadline = Date.now() + ms;
   while (!cond() && Date.now() < deadline) await Bun.sleep(10);
 }
+
+test('a chat turn in a topic channel carries that channel\'s waiting-cards note', async () => {
+  // The note tells the agent which of its cards are still tappable, so a reply that settles one in words also takes
+  // it down. `waitingNote` already scopes to the run's own session; gating it on the main lane dropped it for every
+  // channel, leaving approvals from #taxes tappable days later.
+  const ch = channels.create({ name: 'taxes' });
+  items.save({
+    id: newId(),
+    kind: 'card',
+    channel_id: ch.id,
+    created_at: Date.now(),
+    updated_at: Date.now(),
+    card: { type: 'approval', title: 'Send the invoice', session_id: ch.session_id, status: 'pending' } as any,
+  });
+  const inputs: string[] = [];
+  const restore = stubHermes({
+    hasKey: () => true,
+    startRun: async (a: any) => {
+      inputs.push(a.input);
+      return { run_id: `r-ch-${inputs.length}`, status: 'running' };
+    },
+    // Finish the turn straight away so the lane frees and the test does not leave a run behind.
+    events: async (_id: string, _seq: number, on: any) => {
+      on({ event: 'run.completed', seq: 1 });
+    },
+    stop: async () => ({}),
+  });
+  try {
+    submitUser('hold off on that, I will call them', undefined, ch.id);
+    await until(() => inputs.length > 0);
+    expect(inputs[0]).toContain('Cards of yours still waiting');
+    expect(inputs[0]).toContain('Send the invoice');
+  } finally {
+    restore();
+    await stopMain();
+  }
+});
 
 test('a stop Hermes refuses (404) still frees the lane right away', async () => {
   const restore = stubHermes({
