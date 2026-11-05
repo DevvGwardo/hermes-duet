@@ -99,7 +99,11 @@ export const api = {
 export async function openChannel(id: string) {
   setChannel(id);
   api.seenChannel(id).catch(() => {});
-  const hasItems = getState().items.some((i) => (i.channel_id ?? id) === id);
+  // Ask the same question the thread answers: does this channel have loaded items? Rows from before topic channels
+  // carry no `channel_id`, and `channelItems` already resolves those to general. Falling back to the id being opened
+  // instead made every such row look like a member of every channel, so a new channel was never fetched and stayed
+  // empty.
+  const hasItems = channelItems(getState()).length > 0;
   if (hasItems) return;
   const page = await api.channelPage(id);
   mergeItems(page.items);

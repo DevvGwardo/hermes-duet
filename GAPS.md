@@ -371,6 +371,7 @@ the existing provider tests assert the method, path and expand parameters (they 
 |---|---|---|
 | 10.1 | A delivered steer that is a substring of the undelivered one was replayed in its place, losing the user's real message | **Fixed** |
 | 10.2 | "Earlier messages" paged with the whole install's oldest item, not the open channel's, so a second channel's history could not load | **Fixed** |
+| 10.3 | Opening a channel skipped its page when a pre-channels item was loaded, so the channel stayed empty | **Fixed** |
 
 **10.1** `undeliveredSteers` walked `run.steers` oldest-first and used a bare `indexOf` against `pending_steer`.
 With "send it" already delivered and "don't send it" returned pending, the delivered text matched at offset 6 of the
@@ -391,6 +392,14 @@ client change: **99/99** across all ten scripts, 37 screenshots.
 *Still open, next:* `hasMore` is a single boolean, so exhausting one channel's history also hides "Earlier
 messages" in another channel that still has more (`Thread.tsx` gates the button on it, `loadUntil` too). Fixing it
 needs per-channel paging state, which is a state-shape change; it is queued rather than half-fixed here.
+
+**10.3** `openChannel` decided whether to fetch a channel's page with `(i.channel_id ?? id) === id` — the *target*
+id as the fallback, where `Thread.tsx` and `store.ts` both resolve a missing `channel_id` to general. Rows written
+before topic channels keep `channel_id` only in the backfilled column, not in their JSON (`/api/state` serves
+`JSON.parse(r.json)`), so one such row in the snapshot made every channel look already loaded: opening `#taxes`
+returned early, the channel rendered its onboarding state, and no in-thread control could fetch it back. It now asks
+`channelItems`, so the fallback rule lives in one place. Tests: `web/src/api.test.ts` (failed against the old
+predicate). Browser suite re-run after the client change: **99/99**, 37 screenshots.
 
 ### What is deliberately still open
 
