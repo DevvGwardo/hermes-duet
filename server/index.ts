@@ -11,6 +11,7 @@ import { listConnectors, testConnector } from './connectors';
 import { sseResponse } from './bus';
 import { config } from './config';
 import { type AttachmentRow, attachments, channels, db, devices, files, items, kv, newId, pages, prune, settings, tasks, toAttachment, triggers } from './db';
+import { UserError } from './errors';
 import { hermes } from './hermes';
 import { idempotencyKey, idempotentItem, limits, rememberIdempotent, type SlidingWindow } from './limits';
 import { presence } from './presence';
@@ -98,6 +99,13 @@ function messageText(raw: unknown, hasFiles: boolean): string {
 const ERROR_CODES: Record<number, string> = { 400: 'bad_request', 401: 'not_paired', 403: 'forbidden', 404: 'not_found', 413: 'too_large', 429: 'too_many', 500: 'internal' };
 export function apiError(e: any, path: string): Response {
   const msg = String(e?.message ?? e ?? 'error');
+  // A message a validator wrote for the person using the app (see server/errors.ts) keeps its own status and wording.
+  // The heuristic below would otherwise call "a channel name needs at least one letter or number" a 500, and its
+  // path/JSON filter would drop "can't take image/avif" because of the slash.
+  if (e instanceof UserError) {
+    const code = ERROR_CODES[e.status] ?? 'error';
+    return json({ error: e.message, code, request_id: newId().slice(-8) }, e.status);
+  }
   // An errno or a raw Error is an internal failure even when its text happens to say "no such file".
   const status = /ENOENT|EACCES|EPERM|Error:/i.test(msg)
     ? 500

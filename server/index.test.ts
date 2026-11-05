@@ -3,6 +3,7 @@
 import { describe, expect, test } from 'bun:test';
 import { createPairCode, deviceCookie, internalToken, redeemPairCode } from './auth';
 import { attachments, items, kv, newId, tasks } from './db';
+import { UserError } from './errors';
 import { hermes } from './hermes';
 import { GENERAL_CHANNEL } from './schema';
 import { apiError, handleApp, handleInternal, readTextCapped } from './index';
@@ -48,6 +49,24 @@ describe('paired routes', () => {
     const snap = (await res.json()) as any;
     expect(Array.isArray(snap.items)).toBe(true);
     expect(Array.isArray(snap.pending)).toBe(true);
+  });
+
+  test('an upload of a type we do not take is refused with its reason, not a 500', async () => {
+    // The composer accepts `image/*`, so AVIF and friends are selectable but unsupported. The validator writes a
+    // sentence for the phone; it must arrive as a 400, not be swallowed as an internal error.
+    const form = new FormData();
+    form.set('file', new File([new Uint8Array([1, 2, 3])], 'scan.avif', { type: 'image/avif' }));
+    const res = await authed('/api/uploads', { method: 'POST', body: form });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as any;
+    expect(body.error).toContain('avif');
+  });
+
+  test('a channel name with no letter or number is a 400 with the reason', async () => {
+    const res = await authed('/api/channels', jsonPost({ name: '!!!' }));
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as any;
+    expect(body.error).toContain('letter or number');
   });
 
   test('a background task carries its attachment into the thread and the prompt', async () => {
@@ -189,6 +208,18 @@ describe('error shaping', () => {
     const body = (await apiError(new Error('no such channel'), '/api/items').json()) as any;
     expect(body.error).toBe('no such channel');
     expect(body.code).toBe('not_found');
+  });
+
+  test('a UserError keeps its sentence and status, while a plain Error is still replaced', async () => {
+    const kept = await apiError(new UserError('a channel name needs at least one letter or number'), '/api/channels');
+    expect(kept.status).toBe(400);
+    const body = (await kept.json()) as any;
+    expect(body.error).toBe('a channel name needs at least one letter or number');
+    expect(body.code).toBe('bad_request');
+    // Oversized uploads keep their 413 rather than being read as a generic 400.
+    const big = await apiError(new UserError('files are limited to 25 MB', 413), '/api/uploads');
+    expect(big.status).toBe(413);
+    expect(((await big.json()) as any).code).toBe('too_large');
   });
 
   test('a message with a path in it is replaced, not echoed', async () => {

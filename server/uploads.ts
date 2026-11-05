@@ -5,6 +5,7 @@ import { basename, extname, join } from 'node:path';
 import { type Attachment, attachmentKind } from '../shared/types';
 import { config } from './config';
 import { attachments, newId, toAttachment } from './db';
+import { UserError } from './errors';
 
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
@@ -47,9 +48,10 @@ export function uploadExt(mime: string): string {
 
 export function checkUpload(mime: unknown, size: number) {
   const type = normalizeMime(mime);
-  if (!UPLOAD_TYPES[type]) throw new Error(`can't take ${type || 'that kind of file'}; send an image, a PDF, text or audio`);
-  if (!Number.isFinite(size) || size <= 0) throw new Error('that file is empty');
-  if (size > MAX_UPLOAD_BYTES) throw new Error(`files are limited to ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)} MB`);
+  // The echoed type is the client's own text; keep it short so a long header cannot bloat the response.
+  if (!UPLOAD_TYPES[type]) throw new UserError(`can't take ${type.slice(0, 40) || 'that kind of file'}; send an image, a PDF, text or audio`);
+  if (!Number.isFinite(size) || size <= 0) throw new UserError('that file is empty');
+  if (size > MAX_UPLOAD_BYTES) throw new UserError(`files are limited to ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)} MB`, 413);
 }
 
 /** A display name only: no directories, no control characters, short enough for a card. */
@@ -82,7 +84,7 @@ export function saveUpload(input: { bytes: Uint8Array; mime: string; filename?: 
 
 /** Hard byte ceiling for a buffered request body the server reads whole. */
 export function checkBodySize(bytes: number): void {
-  if (!Number.isFinite(bytes) || bytes > MAX_UPLOAD_BYTES) throw new Error(`files are limited to ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)} MB`);
+  if (!Number.isFinite(bytes) || bytes > MAX_UPLOAD_BYTES) throw new UserError(`files are limited to ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)} MB`, 413);
 }
 
 /** The extension a stored upload has; used only to keep a name the user recognizes. */

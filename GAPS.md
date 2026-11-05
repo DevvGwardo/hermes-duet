@@ -372,6 +372,7 @@ the existing provider tests assert the method, path and expand parameters (they 
 | 10.1 | A delivered steer that is a substring of the undelivered one was replayed in its place, losing the user's real message | **Fixed** |
 | 10.2 | "Earlier messages" paged with the whole install's oldest item, not the open channel's, so a second channel's history could not load | **Fixed** |
 | 10.3 | Opening a channel skipped its page when a pre-channels item was loaded, so the channel stayed empty | **Fixed** |
+| 10.4 | Validation sentences from the upload and channel validators reached the phone as `500 internal` | **Fixed** |
 
 **10.1** `undeliveredSteers` walked `run.steers` oldest-first and used a bare `indexOf` against `pending_steer`.
 With "send it" already delivered and "don't send it" returned pending, the delivered text matched at offset 6 of the
@@ -400,6 +401,19 @@ before topic channels keep `channel_id` only in the backfilled column, not in th
 returned early, the channel rendered its onboarding state, and no in-thread control could fetch it back. It now asks
 `channelItems`, so the fallback rule lives in one place. Tests: `web/src/api.test.ts` (failed against the old
 predicate). Browser suite re-run after the client change: **99/99**, 37 screenshots.
+
+**10.4** `apiError` classifies a thrown message by matching its words, and the sentences the validators write for the
+user do not contain any of them: "a channel name needs at least one letter or number", "channel names are at most 40
+characters" and "can't take image/avif" all fell through to **500 `internal`**, so the phone showed a generic failure
+for a file the composer's own `accept="image/*"` had offered (AVIF, TIFF, BMP) and the log filled with stack traces
+for user input. (The `safe` filter would also have replaced the upload sentence even at 400, because the MIME type
+contains a slash.) `server/errors.ts` now defines `UserError`, which carries its own status; `apiError` returns its
+sentence verbatim, and the upload and channel validators throw it (oversized uploads keep their 413). Everything
+else — including any future plain `Error` — still goes through the heuristic and is replaced by a code, so internals
+still do not leak. Tests: route-level in `server/index.test.ts` (both returned 500 before), plus an `apiError` test
+pinning that a plain `Error` with a path is still `internal`. Verified with `curl` against the demo: unsupported type
+→ `400 {"error":"can't take image/avif; …"}`, bad channel name → `400 {"error":"a channel name needs at least one
+letter or number"}`, valid upload and channel creation unchanged, logged-out upload still `401`.
 
 ### What is deliberately still open
 
