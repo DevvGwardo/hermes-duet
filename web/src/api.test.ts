@@ -5,7 +5,7 @@ import { expect, test } from 'bun:test';
 (globalThis as any).document = { addEventListener() {}, visibilityState: 'hidden' };
 (globalThis as any).window = { addEventListener() {}, matchMedia: () => ({ matches: false }) };
 
-const { api } = await import('./api');
+const { api, loadOlder } = await import('./api');
 const { getState, setState } = await import('./store');
 
 function stubFetch(handler: (url: string, init: any) => any) {
@@ -56,6 +56,35 @@ test('older pages with before + channel, encoded', async () => {
     expect(s.calls[1].url).toBe('/api/items?before=abc');
   } finally {
     s.restore();
+  }
+});
+
+test('loadOlder pages back from the oldest item in the open channel, not the whole install', async () => {
+  // The thread keeps every channel's items in one list. After paging #general, its oldest item is the globally
+  // oldest, so using it as the cursor for #taxes asks for a window that contains none of #taxes' unloaded history.
+  const seen: [string, string | undefined][] = [];
+  const realOlder = api.older;
+  (api as any).older = async (before: string, channel?: string) => {
+    seen.push([before, channel]);
+    return { items: [], has_more: false };
+  };
+  try {
+    setState({
+      channelId: 'chan-taxes',
+      hasMore: true,
+      channels: [
+        { id: 'chan-general', slug: 'general' } as any,
+        { id: 'chan-taxes', slug: 'taxes' } as any,
+      ],
+      items: [
+        { id: 'general-old', channel_id: 'chan-general', created_at: 10 } as any,
+        { id: 'taxes-mid', channel_id: 'chan-taxes', created_at: 100 } as any,
+      ],
+    });
+    await loadOlder();
+    expect(seen).toEqual([['taxes-mid', 'chan-taxes']]);
+  } finally {
+    (api as any).older = realOlder;
   }
 });
 

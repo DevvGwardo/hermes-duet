@@ -1,6 +1,6 @@
 import { settledNotifications } from '../../shared/links';
 import type { Attachment, Capabilities, Channel, Connector, Item, SearchHit, ServerEvent, Settings, Snapshot, Task } from '../../shared/types';
-import { applyEvent, applySnapshot, getState, mergeItems, prependItems, setChannel, setState } from './store';
+import { applyEvent, applySnapshot, channelItems, getState, mergeItems, prependItems, setChannel, setState } from './store';
 
 class HttpError extends Error {
   constructor(public status: number, message: string) {
@@ -159,7 +159,11 @@ export async function connect() {
 
 export async function loadOlder() {
   const s = getState();
-  const first = s.items[0];
+  // The oldest item of the channel being read, not of the whole install. Every channel shares one list, so after
+  // paging one channel the globally oldest row is usually from it; using that as the cursor asks the server for a
+  // window that holds none (or only part) of the open channel's unloaded history, and an empty page then hides
+  // "Earlier messages" everywhere.
+  const first = channelItems(s)[0];
   if (!first) return;
   // Page back through the channel being read, so scrolling history never jumps into another thread.
   const r = await api.older(first.id, s.channelId);

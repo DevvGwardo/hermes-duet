@@ -85,13 +85,13 @@ pre.cmd { background: var(--kpi-bg); color: var(--kpi-ink); font: 13px/1.6 var(-
 </nav>
 <main>
 <header class="top" id="status">
-  <p class="eyebrow">Hermes Duet · blueprint · roadmap complete · <!--bp:generated-->2026-11-04 · audit fixes<!--/bp:generated--></p>
+  <p class="eyebrow">Hermes Duet · blueprint · roadmap complete · <!--bp:generated-->2026-11-05 · f3206c9<!--/bp:generated--></p>
   <h1>Your agent, in duet — on your phone.</h1>
   <p class="lede">Hermes Duet is a PWA front end for a Hermes agent: one thread for chat and approval cards, a morning brief, background tasks, standing pages, and a live view of the browser the agent drives. This page captures every screen and modal, driven in real Chrome against a seeded demo server.</p>
   <p class="muted">Everything below came from a local run in real Chrome on this Mac. Screenshots are real captures by the harness in <code>tools/blueprint/</code>; the demo server (<code>bun scripts/demo.ts --reset</code>) holds seeded content, the scheduler off. Nothing is estimated.</p>
   <div class="kpis" role="list">
     <div class="kpi" role="listitem"><b><!--bp:checks-->99 / 99<!--/bp:checks--></b><span>browser checks passed</span></div>
-    <div class="kpi" role="listitem"><b>438/438</b><span>unit tests (<code>bun test</code>, 49 files)</span></div>
+    <div class="kpi" role="listitem"><b>440/440</b><span>unit tests (<code>bun test</code>, 49 files)</span></div>
     <div class="kpi" role="listitem"><b><!--bp:console-errors-->11<!--/bp:console-errors--></b><span>console errors, each the expected logged-out /api/state 401 probe (one per harness context that opens the pair screen)</span></div>
     <div class="kpi" role="listitem"><b><!--bp:shots-->37<!--/bp:shots--></b><span>screenshots captured &amp; reviewed</span></div>
     <div class="kpi" role="listitem"><b>100&nbsp;ms</b><span>first render of the pair screen</span></div>
@@ -100,7 +100,7 @@ pre.cmd { background: var(--kpi-bg); color: var(--kpi-ink); font: 13px/1.6 var(-
 
 <section id="fresh-pass">
   <h2>Fresh pass: gaps, fixes and optimizations (2026-11-04)</h2>
-  <p class="intro">All ten harness scripts were re-run against a fresh demo seed in real Chrome: <strong>99/99 checks, 37 screenshots reviewed</strong>, no unexpected console errors. <code>bun run typecheck</code> is clean, <code>bun test</code> is <strong>438/438 across 49 files</strong>, and <code>bun run build</code> produces a <strong>365 KB initial bundle</strong> plus five on-demand chunks and their precompressed siblings. On top of that evidence, this pass read the HTTP surface, runner, data layer, web client, CI and deploy docs, then fixed the highest-impact gaps. Nothing below is estimated: every claim names the code path or the command that produced it.</p>
+  <p class="intro">All ten harness scripts were re-run against a fresh demo seed in real Chrome: <strong>99/99 checks, 37 screenshots reviewed</strong>, no unexpected console errors. <code>bun run typecheck</code> is clean, <code>bun test</code> is <strong>440/440 across 49 files</strong>, and <code>bun run build</code> produces a <strong>365 KB initial bundle</strong> plus five on-demand chunks and their precompressed siblings. On top of that evidence, this pass read the HTTP surface, runner, data layer, web client, CI and deploy docs, then fixed the highest-impact gaps. Nothing below is estimated: every claim names the code path or the command that produced it.</p>
   <p class="intro">The first table covers the audit’s top findings, including the follow-up pass that closed mutation limits and code splitting. The second covers hardening; log rotation is now fixed there too.</p>
 
   <h3>Fixed first</h3>
@@ -318,12 +318,12 @@ flowchart LR
 
 <section id="tests">
   <h2>Test results</h2>
-  <p class="intro">The harness drives the real app in real Chrome with a disposable paired context per viewport and every non-local request aborted. Unit tests: <code>bun test</code>, 438 pass / 0 fail across 49 files. Build: <code>bun run build</code> clean, including the five lazy chunks and their precompressed siblings. The fresh pass above changed product code, so the browser suite was re-run afterwards: 99/99 again.</p>
+  <p class="intro">The harness drives the real app in real Chrome with a disposable paired context per viewport and every non-local request aborted. Unit tests: <code>bun test</code>, 440 pass / 0 fail across 49 files. Build: <code>bun run build</code> clean, including the five lazy chunks and their precompressed siblings. The fresh pass above changed product code, so the browser suite was re-run afterwards: 99/99 again.</p>
   <div class="table-box"><table>
     <thead><tr><th>Run</th><th>Check</th><th>Measured</th><th>Result</th></tr></thead>
     <tbody><!--bp:checks-rows-->
 <tr><td>sweep</td><td>Pair screen asks for a code</td><td>inputs=1</td><td><span class="pill ok">pass</span></td></tr>
-<tr><td>sweep</td><td>Pairing with a real code lands in the thread</td><td>code XE… accepted</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>sweep</td><td>Pairing with a real code lands in the thread</td><td>code 5Z… accepted</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>sweep</td><td>Thread shows the morning brief</td><td>6 cards</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>sweep</td><td>Thread shows a pending approval</td><td></td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>sweep</td><td>Thread shows a pending question</td><td></td><td><span class="pill ok">pass</span></td></tr>
@@ -350,11 +350,11 @@ flowchart LR
 <tr><td>live</td><td>Live pane toolbar renders</td><td></td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>live</td><td>Non-black frames flow from the driven Chrome</td><td></td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>live</td><td>URL-bar navigation lands on the fixture</td><td>127.0.0.1:7499</td><td><span class="pill ok">pass</span></td></tr>
-<tr><td>live</td><td>A tap through the pane repaints the driven page</td><td>mean abs diff=59.9</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>live</td><td>A tap through the pane repaints the driven page</td><td>mean abs diff=84.8</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>live</td><td>No unexpected console errors</td><td>clean</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>channels</td><td>Channel sheet creates #taxes and the topic bar follows</td><td>taxes Deductions and receipts</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>channels</td><td>General stays first in the strip</td><td>general</td><td><span class="pill ok">pass</span></td></tr>
-<tr><td>channels</td><td>Message posted in #taxes appears in its thread</td><td>Receipts to gather 2569</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>channels</td><td>Message posted in #taxes appears in its thread</td><td>Receipts to gather 80255</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>channels</td><td>Search finds the #taxes message</td><td>hits=1</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>channels</td><td>Jump lands on the message</td><td>visible</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>channels</td><td>No unexpected console errors</td><td>clean</td><td><span class="pill ok">pass</span></td></tr>
@@ -377,14 +377,14 @@ flowchart LR
 <tr><td>a11y</td><td>No unexpected console errors</td><td>clean</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>approvals</td><td>Seed holds a pending approval and a pending question</td><td>approvals=1 choices=1</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>approvals</td><td>Rail badge counts what needs you</td><td>badges=2,1</td><td><span class="pill ok">pass</span></td></tr>
-<tr><td>approvals</td><td>Approval decides and says what happened</td><td>SENT · 9:15 PM</td><td><span class="pill ok">pass</span></td></tr>
-<tr><td>approvals</td><td>Choice decides and names the chosen answer</td><td>YOU CHOSE “YES, MOVE IT” · 9:15 PM</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>approvals</td><td>Approval decides and says what happened</td><td>SENT · 1:33 AM</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>approvals</td><td>Choice decides and names the chosen answer</td><td>YOU CHOSE “YES, MOVE IT” · 1:33 AM</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>approvals</td><td>Nothing stays pending</td><td>pending=0</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>approvals</td><td>Needs-you badge clears, running-task badge stays</td><td>chat=0 tasks=1</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>approvals</td><td>No unexpected console errors</td><td>clean</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>recovery</td><td>Hermes-down surfaces as a status, not a spinner</td><td>Hermes offline / Offline</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>recovery</td><td>Dropped connection shows Reconnecting</td><td></td><td><span class="pill ok">pass</span></td></tr>
-<tr><td>recovery</td><td>Thread resyncs without duplicating cards</td><td>before=12 after=13 dupes=0</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>recovery</td><td>Thread resyncs without duplicating cards</td><td>before=13 after=14 dupes=0</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>recovery</td><td>No page errors across the outage</td><td>clean</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>dialogs</td><td>viewer: focus moves inside on open</td><td>BUTTON.btn btn-ghost small</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>dialogs</td><td>viewer: Tab stays inside (80 stops)</td><td>wrapped, 3 unique</td><td><span class="pill ok">pass</span></td></tr>
@@ -408,7 +408,7 @@ flowchart LR
 <tr><td>dialogs</td><td>No sideways scroll at 390px</td><td></td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>dialogs</td><td>No unexpected console errors</td><td>clean</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>wheel</td><td>Wheel over the stage sends scroll input</td><td>x=600 y=398 dy=300</td><td><span class="pill ok">pass</span></td></tr>
-<tr><td>wheel</td><td>Fresh pane lists current tabs</td><td>real=1 pill=127.0.0.1:7499/tap.html?run=1-1793844992</td><td><span class="pill ok">pass</span></td></tr>
+<tr><td>wheel</td><td>Fresh pane lists current tabs</td><td>real=1 pill=127.0.0.1:7499/tap.html?run=1-1793860500</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>wheel</td><td>Tab strip holds 5+ tabs at 390px</td><td>6 tabs</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>wheel</td><td>Toolbar never overflows at 390px</td><td>overflow=0px</td><td><span class="pill ok">pass</span></td></tr>
 <tr><td>wheel</td><td>Tab dropdown scrolls instead of growing</td><td>h=388 max=388.24px scroll=58</td><td><span class="pill ok">pass</span></td></tr>
@@ -429,8 +429,8 @@ flowchart LR
     <tbody><!--bp:perf-rows-->
 <tr><td><code>sweep.jsHeapMB</code></td><td>6.1</td></tr>
 <tr><td><code>sweep.screenshots</code></td><td>12</td></tr>
-<tr><td><code>sweep.firstRenderMs</code></td><td>100</td></tr>
-<tr><td><code>live.tapRepaintDiff</code></td><td>59.9</td></tr>
+<tr><td><code>sweep.firstRenderMs</code></td><td>110</td></tr>
+<tr><td><code>live.tapRepaintDiff</code></td><td>84.8</td></tr>
 <tr><td><code>live.screenshots</code></td><td>3</td></tr>
 <tr><td><code>channels.screenshots</code></td><td>3</td></tr>
 <tr><td><code>pairing.screenshots</code></td><td>1</td></tr>
@@ -518,7 +518,7 @@ export APP_URL=http://127.0.0.1:7466/ BP_OUT=/Users/devgwardo/hermes-duet/bluepr
 for s in sweep live channels pairing a11y approvals recovery dialogs wheel polish; do
   node tools/blueprint/$s.mjs || echo "$s FAILED"
 done
-bun test   # 438 pass, 0 fail</pre>
+bun test   # 440 pass, 0 fail</pre>
 </section>
 </main>
 </div>
