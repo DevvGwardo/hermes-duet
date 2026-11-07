@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join, normalize } from 'node:path';
 import { brotliCompressSync, gzipSync } from 'node:zlib';
 import type { Snapshot } from '../shared/types';
@@ -21,7 +21,8 @@ import { ftsQuery, search } from './search';
 import { startScheduler } from './scheduler';
 import { downloadsPrompt, inboundIp, meetingPrompt, webhookMatches, webhookPrompt, type WatchedFile } from './triggers';
 import { checkMeetings, meetingPrepEnabled, recordWebhook, recordWebhookIp, startFolderWatch, webhookIpReady, webhookReady, webhookToken } from './triggers-runtime';
-import { MAX_UPLOAD_BYTES, checkBodySize, normalizeMime, saveUpload } from './uploads';
+import { MAX_UPLOAD_BYTES, checkBodySize, normalizeMime, saveUpload, uploadDir } from './uploads';
+import { parseMultipartCapped, type MultipartResult } from './multipart';
 import { readLogin, vaults } from './vault';
 import { broadcast } from './bus';
 
@@ -445,22 +446,23 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
 
     // ---- uploads, voice memos and spoken briefs (see server/uploads.ts, server/audio.ts) ----
     if (path === '/api/uploads' && req.method === 'POST') {
-      // One limit: the same number uploads.ts enforces after reading, so a file can't pass the gate and then be
-      // rejected deeper after it has been fully buffered. A missing or chunked body reports no content-length, so
-      // the hard cap on the buffered File bytes is the real gate.
+      // One limit: the same number uploads.ts enforces, checked WHILE the body streams (GAPS 2.3 —
+      // a chunked body used to be fully buffered by formData() before any size check could run).
       if (tooLarge(req, MAX_UPLOAD_BYTES)) return err(413, 'that file is too large');
-      const form = await req.formData().catch(() => null);
-      const file = form?.get('file');
-      if (!(file instanceof File)) return err(400, 'send the file in a "file" field');
-      const listed = form?.get('mime');
-      const mime = normalizeMime(listed ? String(listed) : file.type);
-      const bytes = new Uint8Array(await file.arrayBuffer());
+      let mp: MultipartResult | null = null;
       try {
-        checkBodySize(bytes.byteLength);
-      } catch {
-        return err(413, 'that file is too large');
+        mp = await parseMultipartCapped(req.body!, req.headers.get('content-type'), MAX_UPLOAD_BYTES, ['file'], join(uploadDir(), 'incoming'));
+      } catch (e) {
+        if (e instanceof UserError && e.status === 413) return err(413, e.message);
+        return err(400, 'send the file in a "file" field');
       }
-      return json({ attachment: saveUpload({ bytes, mime, filename: String(form?.get('name') ?? file.name) }) });
+      if (!mp.file) return err(400, 'send the file in a "file" field');
+      try {
+        const bytes = new Uint8Array(readFileSync(mp.file.path));
+        return json({ attachment: saveUpload({ bytes, mime: normalizeMime(mp.fields.mime ?? mp.file.mime), filename: String(mp.fields.name ?? mp.file.filename) }) });
+      } finally {
+        rmSync(mp.file.path, { force: true });
+      }
     }
     const uploadMatch = path.match(/^\/api\/uploads\/([\w-]+)$/);
     if (uploadMatch && req.method === 'GET') return serveUpload(uploadMatch[1]);
@@ -470,11 +472,20 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
       let bytes: Uint8Array;
       let mime: string;
       if ((req.headers.get('content-type') ?? '').includes('multipart/form-data')) {
-        const form = await req.formData().catch(() => null);
-        const file = form?.get('audio') ?? form?.get('file');
-        if (!(file instanceof File)) return err(400, 'send the recording in an "audio" field');
-        bytes = new Uint8Array(await file.arrayBuffer());
-        mime = normalizeMime(file.type);
+        let mp: MultipartResult | null = null;
+        try {
+          mp = await parseMultipartCapped(req.body!, req.headers.get('content-type'), MAX_UPLOAD_BYTES, ['audio', 'file'], join(uploadDir(), 'incoming'));
+        } catch (e) {
+          if (e instanceof UserError && e.status === 413) return err(413, e.message);
+          return err(400, 'send the recording in an "audio" field');
+        }
+        if (!mp.file) return err(400, 'send the recording in an "audio" field');
+        try {
+          bytes = new Uint8Array(readFileSync(mp.file.path));
+          mime = normalizeMime(mp.file.mime);
+        } finally {
+          rmSync(mp.file.path, { force: true });
+        }
       } else {
         bytes = new Uint8Array(await req.arrayBuffer());
         mime = normalizeMime(req.headers.get('content-type'));
