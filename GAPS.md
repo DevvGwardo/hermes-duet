@@ -491,3 +491,8 @@ All five dependabot PRs landed, one gate per merge, raw logs in `proof/updates-2
   PR closed as superseded by `4cf1aee` + `cdcf1e8`.
 
 No reversions this pass. Test count unchanged 445 → 445 (dep bumps only, no behavior surface).
+
+**Production receipt (2.3, live service):** `scripts/prod-upload-smoke.ts` pairs a throwaway device via the
+internal API and round-trips a real multipart upload against the running launchd service
+(dev.hermes-duet.server restarted on `e26bf4c`): upload `0mw5slp5i000i2p` (image/png, 33 bytes), readback
+bit-identical. Run it any time with `bun scripts/prod-upload-smoke.ts`.
