@@ -84,9 +84,13 @@ bare `/api` — answers JSON, never the app shell.
 **2.2** `apiError` returns a small code plus a request id. Validation sentences the server wrote ("no such channel")
 stay readable; errno paths, gateway bodies and stack fragments are replaced with a code and logged with that id.
 
-**2.3** One constant: the 40 MB gate now uses `uploads.ts`'s 25 MB, checked before the body is read. *Still open:* the
-form body is buffered (`req.formData()`), so a huge multipart body is fully materialised before the per-file check —
-streaming to disk under a hard byte cap needs a multipart parser.
+**2.3** One constant: the 40 MB gate uses `uploads.ts`'s 25 MB. *Closed* `e26bf4c`: `/api/uploads` and the multipart
+branch of `/api/audio/transcribe` now stream through `server/multipart.ts`, a boundary state machine that stages the
+file part to disk at 0600 under the same 25 MB cap and CANCELS the request stream the moment the cap would be
+exceeded — a chunked oversized body costs at most 25 MB of reading instead of a full buffer. Split boundaries (one-byte
+chunks), the closing `--` decision on a short buffer, and part-header parsing are covered by
+`server/multipart.test.ts` (5 tests: round-trip, 1-byte split-boundary stress, cap-cancel, missing boundary,
+non-file fields). Gate: 450 pass / 0 fail, tsc clean, build clean.
 
 **2.4–2.5** `/internal/message` applies the same empty/length rules as `/api/messages`; browser input is passed as
 `unknown` and validated by `normalizeInput` (which already clamped coordinates and rejected unknown event types — the
