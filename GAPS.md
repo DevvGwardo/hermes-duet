@@ -469,3 +469,21 @@ Round 4 closed 2.6, 5.6 and 8.9. What remains, in order:
 `server/runner.ts` is still ~1,950 lines with a large tool-dispatch switch. Splitting it
 (`server/cards/actions.ts`, `server/runs/manager.ts`, `server/tools/dispatch.ts`, `runner.ts` as facade) is the
 structural fix that keeps 1.1–1.9 reviewable. Do not attempt that in the same change as a behavioural fix.
+
+---
+
+## Dependency pass — 2026-11-06 (proof-of-work record)
+
+All five dependabot PRs landed, one gate per merge, raw logs in `proof/updates-20261106/`.
+
+- Baseline: `tsc` clean — **445 pass / 0 fail** (49 files, 1279 expect() calls) — `bun run build` clean.
+- **#4** @types/bun 1.4.4 — gate green (445/445).
+- **#18** @vitejs/plugin-react 6.2.1 — gate green, build clean.
+- **#19** marked 18.1.3 — gate green (markdown renderer is security-adjacent: patch kept current).
+- **#6** playwright-core 1.64.1 — gate green (445/445).
+- **#3** typescript 5.9.3 → **7.0.2** — lockfile conflicted past the four merges; re-landed on main.
+  TS 7 typecheck surfaced 3 × `TS2882` (side-effect css imports undeclared) — fixed forward with
+  `web/src/css-modules.d.ts`. Full gate after: `tsc` clean, **445 pass / 0 fail**, build clean.
+  PR closed as superseded by `4cf1aee` + `cdcf1e8`.
+
+No reversions this pass. Test count unchanged 445 → 445 (dep bumps only, no behavior surface).
