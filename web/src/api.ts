@@ -1,6 +1,6 @@
 import { settledNotifications } from '../../shared/links';
 import type { Attachment, Capabilities, Channel, Connector, Item, SearchHit, ServerEvent, Settings, Snapshot, Task } from '../../shared/types';
-import { applyEvent, applySnapshot, channelItems, getState, mergeItems, prependItems, setChannel, setState } from './store';
+import { applyEvent, applySnapshot, channelItems, getState, hasMoreFor, mergeItems, prependItems, setChannel, setChannelMore, setState } from './store';
 
 class HttpError extends Error {
   constructor(public status: number, message: string) {
@@ -107,6 +107,8 @@ export async function openChannel(id: string) {
   if (hasItems) return;
   const page = await api.channelPage(id);
   mergeItems(page.items);
+  // The channel's own truth, recorded per channel: an exhausted #general must not speak for #taxes.
+  setChannelMore(id, page.has_more);
 }
 
 let es: EventSource | null = null;
@@ -169,16 +171,17 @@ export async function loadOlder() {
   // "Earlier messages" everywhere.
   const first = channelItems(s)[0];
   if (!first) return;
-  // Page back through the channel being read, so scrolling history never jumps into another thread.
+  // Page back through the channel being read, so scrolling history never jumps into another thread:
+  // the response's has_more updates only THIS channel's flag.
   const r = await api.older(first.id, s.channelId);
-  prependItems(r.items, r.has_more);
+  prependItems(r.items, s.channelId ?? '', r.has_more);
 }
 
 /** Page back until `id` is in the loaded thread, so a jump to an old pending card lands. */
 export async function loadUntil(id: string, maxPages = 20) {
   for (let i = 0; i < maxPages; i++) {
     const s = getState();
-    if (s.items.some((x) => x.id === id) || !s.hasMore) return;
+    if (s.items.some((x) => x.id === id) || !hasMoreFor(s)) return;
     await loadOlder();
   }
 }

@@ -35,7 +35,7 @@ export function Thread({
   const generalId = useStore((s) => s.channels.find((c) => c.slug === 'general')?.id);
   // useSyncExternalStore compares snapshots by identity, so the filter runs here rather than inside the selector.
   const items = useMemo(() => (channelId ? all.filter((i) => (i.channel_id ?? generalId) === channelId) : all), [all, channelId, generalId]);
-  const hasMore = useStore((s) => s.hasMore);
+  const hasMore = useStore((s) => s.hasMoreBy[s.channelId ?? ''] ?? false);
   // What changed at the tail of the thread, said out loud once per change.
   const newest = items[items.length - 1];
   const [announce, setAnnounce] = useState('');

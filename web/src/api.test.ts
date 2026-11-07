@@ -5,8 +5,84 @@ import { expect, test } from 'bun:test';
 (globalThis as any).document = { addEventListener() {}, visibilityState: 'hidden' };
 (globalThis as any).window = { addEventListener() {}, matchMedia: () => ({ matches: false }) };
 
-const { api, loadOlder, openChannel } = await import('./api');
-const { getState, setState } = await import('./store');
+const { api, loadOlder, loadUntil, openChannel } = await import('./api');
+const { getState, hasMoreFor, setState } = await import('./store');
+
+const CHANNELS = [
+  { id: 'chan-general', slug: 'general' } as any,
+  { id: 'chan-taxes', slug: 'taxes' } as any,
+];
+
+test('exhausting one channel leaves Earlier messages on for the other (per-channel has_more)', async () => {
+  // The original GAPS bug: one global hasMore meant paging #general to its end hid the button in
+  // #taxes, which still had history. loadOlder on general must only touch general's entry.
+  const real = api.older;
+  (api as any).older = async () => ({ items: [], has_more: false });
+  try {
+    setState({
+      channelId: 'chan-general',
+      channels: CHANNELS,
+      hasMoreBy: { 'chan-general': true, 'chan-taxes': true },
+      items: [
+        { id: 'general-old', channel_id: 'chan-general', created_at: 10 } as any,
+        { id: 'taxes-mid', channel_id: 'chan-taxes', created_at: 100 } as any,
+      ],
+    });
+    await loadOlder();
+    expect(getState().hasMoreBy['chan-general']).toBe(false);
+    expect(getState().hasMoreBy['chan-taxes']).toBe(true);
+    setState({ channelId: 'chan-taxes' });
+    expect(hasMoreFor(getState())).toBe(true);
+    setState({ channelId: 'chan-general' });
+    expect(hasMoreFor(getState())).toBe(false);
+  } finally {
+    (api as any).older = real;
+  }
+});
+
+test('openChannel records the fetched page\'s has_more for that channel', async () => {
+  // channelPage's has_more used to be discarded on the floor; the channel's real state stayed
+  // whatever the snapshot guessed.
+  const real = { channelPage: api.channelPage, seenChannel: api.seenChannel };
+  (api as any).channelPage = async () => ({ items: [{ id: 'tax-9', channel_id: 'chan-taxes', created_at: 400 } as any], has_more: true });
+  (api as any).seenChannel = async () => ({ ok: true });
+  try {
+    setState({ channelId: 'chan-general', channels: CHANNELS, hasMoreBy: { 'chan-general': true }, items: [] });
+    await openChannel('chan-taxes');
+    expect(getState().hasMoreBy['chan-taxes']).toBe(true);
+  } finally {
+    (api as any).channelPage = real.channelPage;
+    (api as any).seenChannel = real.seenChannel;
+  }
+});
+
+test('loadUntil pages only while the open channel has more, not any other', async () => {
+  const real = api.older;
+  const asked: string[] = [];
+  (api as any).older = async (before: string) => {
+    asked.push(before);
+    return { items: [], has_more: false };
+  };
+  try {
+    // Taxes exhausted, general not: jumping to an id inside general pages via general's cursor.
+    setState({
+      channelId: 'chan-general',
+      channels: CHANNELS,
+      hasMoreBy: { 'chan-general': true, 'chan-taxes': false },
+      items: [{ id: 'general-old', channel_id: 'chan-general', created_at: 10 } as any],
+    });
+    await loadUntil('missing-id', 3);
+    expect(asked).toEqual(['general-old']);
+
+    // Open channel exhausted: no fetch at all, even though taxes still has more.
+    asked.length = 0;
+    setState({ channelId: 'chan-taxes', hasMoreBy: { 'chan-general': true, 'chan-taxes': false } });
+    await loadUntil('missing-id', 3);
+    expect(asked).toEqual([]);
+  } finally {
+    (api as any).older = real;
+  }
+});
 
 function stubFetch(handler: (url: string, init: any) => any) {
   const calls: { url: string; init: any }[] = [];
@@ -71,7 +147,7 @@ test('loadOlder pages back from the oldest item in the open channel, not the who
   try {
     setState({
       channelId: 'chan-taxes',
-      hasMore: true,
+      hasMoreBy: { 'chan-taxes': true },
       channels: [
         { id: 'chan-general', slug: 'general' } as any,
         { id: 'chan-taxes', slug: 'taxes' } as any,

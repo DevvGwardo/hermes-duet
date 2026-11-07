@@ -7,7 +7,8 @@ export interface State {
   authed: boolean | null; // null = unknown yet
   connected: boolean;
   items: Item[];
-  hasMore: boolean;
+  /** Whether the channel has unloaded older history, keyed by channel id ('' = no channels at all). */
+  hasMoreBy: Record<string, boolean>;
   /** Cards waiting on the user, from the server, not filtered from the loaded `items` page. */
   pending: Item[];
   tasks: Task[];
@@ -30,7 +31,7 @@ let state: State = {
   authed: null,
   connected: false,
   items: [],
-  hasMore: false,
+  hasMoreBy: {},
   pending: [],
   tasks: [],
   files: [],
@@ -78,11 +79,18 @@ export function applySnapshot(s: Snapshot) {
     const channels = s.channels ?? [];
     // Keep the channel the user is reading across a reconnect; fall back to general when it was archived.
     const channelId = current.channelId && channels.some((c) => c.id === current.channelId) ? current.channelId : (channels[0]?.id ?? null);
+    // The snapshot's page is the newest of the whole install: its has_more is the only signal, and it
+    // applies to every channel conservatively (a channel with a full history loaded is corrected by
+    // its own first page fetch, which reports the channel's real has_more). A channelless install
+    // pages under the '' key.
+    const hasMoreBy: Record<string, boolean> = {};
+    for (const c of channels) hasMoreBy[c.id] = s.has_more;
+    if (!channels.length) hasMoreBy[''] = s.has_more;
     return {
       ready: true,
       authed: true,
       items: s.items,
-      hasMore: s.has_more,
+      hasMoreBy,
       pending: s.pending,
       tasks: s.tasks.sort(byUpdatedDesc),
       files: s.files,
@@ -96,6 +104,14 @@ export function applySnapshot(s: Snapshot) {
   });
 }
 
+/** The paging key for the thread the Chat tab is showing ('' when there are no channels). */
+export const pagingKey = (s: State) => s.channelId ?? '';
+
+/** Whether the channel being read still has unloaded older history. */
+export function hasMoreFor(s: State): boolean {
+  return s.hasMoreBy[pagingKey(s)] ?? false;
+}
+
 /** Switch the Chat tab's channel; the thread renders only that channel's items. */
 export function setChannel(id: string) {
   setState({ channelId: id });
@@ -107,8 +123,13 @@ export function channelItems(s: State): Item[] {
   return s.items.filter((i) => (i.channel_id ?? s.channels[0]?.id) === s.channelId);
 }
 
-export function prependItems(older: Item[], hasMore: boolean) {
-  setState((s) => ({ items: [...older.filter((o) => !s.items.some((i) => i.id === o.id)), ...s.items, ...[]].sort(byCreated), hasMore }));
+export function prependItems(older: Item[], channelId: string, hasMore: boolean) {
+  setState((s) => ({ items: [...older.filter((o) => !s.items.some((i) => i.id === o.id)), ...s.items, ...[]].sort(byCreated), hasMoreBy: { ...s.hasMoreBy, [channelId]: hasMore } }));
+}
+
+/** Record a channel page's has_more (openChannel) without folding items twice. */
+export function setChannelMore(channelId: string, hasMore: boolean) {
+  setState((s) => ({ hasMoreBy: { ...s.hasMoreBy, [channelId]: hasMore } }));
 }
 
 /** Fold a freshly fetched channel page into the loaded items, leaving everything else alone. */
