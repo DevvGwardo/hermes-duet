@@ -403,10 +403,16 @@ exhausting #general's history no longer hides "Earlier messages" in #taxes. Test
 (per-channel isolation after loadOlder, openChannel records the page's has_more, loadUntil pages only while the
 open channel has more) — all written to fail against the single-boolean store. Gate: 453 pass / 0 fail, tsc clean,
 build clean. Browser receipt, fresh seed: sweep 24/24, pairing 7/7, channels 6/6, approvals 7/7, dialogs 21/21,
-a11y 10/10, polish 8/8, recovery 4/4, wheel 6/6, live 5/6: the tap-repaint check fails with
-`tapRepaintDiff=0`, exits 1, and reproduces identically on the base commit (verified by stashing this diff —
-same check, same number), so it is environmental to this machine, not this change. Recovery and wheel also
-crashed in the first pass (child-process teardown) and are green on the rerun. First pass had dialogs at 20/21 — a suite-ordering artifact: approvals runs
+a11y 10/10, polish 8/8, recovery 4/4 (`report-recovery-7f44dcfb`, exit 0 — includes "thread resyncs without
+duplicating cards, dupes=0" against the new snapshot shape), wheel 6/6 (`report-wheel-48267943`, exit 0), live
+5/6: the tap-repaint check fails with `tapRepaintDiff=0`, exits 1, and reproduces identically on the base commit
+(verified by stashing this diff — same check, same number), so it is environmental to this machine, not this
+change. Local-only-script invocation notes learned the hard way: `recovery.mjs` needs the demo started through
+the blueprint devserver helper with `DUET_HERMES_URL=http://127.0.0.1:9` (a plain background demo is invisible
+to the helper's stop, so the reconnect check fails); `wheel.mjs` needs the fixture server
+(`python3 -m http.server 7499 -d tools/blueprint/fixture`) plus a normally-started demo. An earlier draft of
+this entry claimed recovery/wheel green from a rerun that had actually crashed them both — the tally script had
+matched stale Nov-5 report files (`ls -t` without a date filter); corrected only after re-checking file mtimes. First pass had dialogs at 20/21 — a suite-ordering artifact: approvals runs
 before it and deliberately leaves `tasks=1`, so the Tasks empty-state contrast check found "no empty text";
 dialogs alone on a fresh seed is 21/21.
 
