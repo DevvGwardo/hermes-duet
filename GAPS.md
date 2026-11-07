@@ -395,9 +395,19 @@ from the open channel's oldest loaded item, reusing `channelItems` so the legacy
 one place. Tests: `web/src/api.test.ts` (failed against the old cursor). The browser suite was re-run after the
 client change: **99/99** across all ten scripts, 37 screenshots.
 
-*Still open, next:* `hasMore` is a single boolean, so exhausting one channel's history also hides "Earlier
-messages" in another channel that still has more (`Thread.tsx` gates the button on it, `loadUntil` too). Fixing it
-needs per-channel paging state, which is a state-shape change; it is queued rather than half-fixed here.
+*Closed* `f1fe1da`: `hasMore` became `hasMoreBy: Record<channelId, boolean>` (paging key `channelId ?? ''` for a
+channelless install). The snapshot seeds every channel with its has_more conservatively; `channelPage`'s
+previously-discarded `has_more` is now recorded for that channel (`setChannelMore`); `loadOlder`'s response
+updates only the open channel; `loadUntil` and the Thread button read per-channel truth (`hasMoreFor`). So
+exhausting #general's history no longer hides "Earlier messages" in #taxes. Tests: `web/src/api.test.ts` +3
+(per-channel isolation after loadOlder, openChannel records the page's has_more, loadUntil pages only while the
+open channel has more) — all written to fail against the single-boolean store. Gate: 453 pass / 0 fail, tsc clean,
+build clean. Browser receipt, fresh seed: sweep 24/24, pairing 7/7, channels 6/6, approvals 7/7, dialogs 21/21,
+a11y 10/10, polish 8/8, recovery 4/4, wheel 6/6, live 6/6 checks with `tapRepaintDiff=0` recorded as a perf
+number (exit 0 — the harness treats it as a measurement, and it reproduces identically on the base commit, so it
+is environmental, not this change). First pass had dialogs at 20/21 — a suite-ordering artifact: approvals runs
+before it and deliberately leaves `tasks=1`, so the Tasks empty-state contrast check found "no empty text";
+dialogs alone on a fresh seed is 21/21.
 
 **10.3** `openChannel` decided whether to fetch a channel's page with `(i.channel_id ?? id) === id` — the *target*
 id as the fallback, where `Thread.tsx` and `store.ts` both resolve a missing `channel_id` to general. Rows written
