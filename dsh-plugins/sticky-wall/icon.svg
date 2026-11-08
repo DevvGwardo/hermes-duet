@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Sticky wall">
+  <rect x="6" y="6" width="52" height="52" rx="13" fill="#f4c04e"/>
+  <path d="M58 30 30 58h16a12 12 0 0 0 12-12Z" fill="#d99a2b"/>
+  <g fill="none" stroke="#6b4c12" stroke-linecap="round" stroke-width="4" opacity="0.55">
+    <path d="M19 25h26"/>
+    <path d="M19 34h26"/>
+    <path d="M19 43h14"/>
+  </g>
+</svg>

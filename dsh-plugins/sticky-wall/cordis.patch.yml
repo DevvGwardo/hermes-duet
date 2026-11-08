@@ -1,0 +1,3 @@
+- insert:
+    - id: sticky-wall
+      name: '@local/sticky-wall'
