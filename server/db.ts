@@ -5,6 +5,7 @@ import { type Attachment, type Channel, type FileEntry, type Item, type Page, ty
 import { type ChannelInput, type ChannelPatch, slugFor } from './channels';
 import { config } from './config';
 import { lockDownDataDir } from './permissions';
+import { indexItem, taskSearchText } from './search';
 import { GENERAL_CHANNEL, SCHEMA_VERSION, applySchema } from './schema';
 
 mkdirSync(config.dataDir, { recursive: true });
@@ -280,15 +281,21 @@ const itemsChannel = db.query('UPDATE items SET channel_id = ? WHERE id = ?');
 
 export const items = {
   save(item: Item) {
-    itemUpsert.run({
-      $id: item.id,
-      $kind: item.kind,
-      $created_at: item.created_at,
-      $updated_at: item.updated_at,
-      $run_id: item.run_id ?? null,
-      $task_id: item.task_id ?? null,
-      $channel_id: item.channel_id ?? GENERAL_CHANNEL,
-      $json: JSON.stringify(item),
+    // The row and its search text are one unit: a card edit that reached the table but not the index would keep the
+    // old draft findable under the new one.
+    const channelId = item.channel_id ?? GENERAL_CHANNEL;
+    tx(() => {
+      itemUpsert.run({
+        $id: item.id,
+        $kind: item.kind,
+        $created_at: item.created_at,
+        $updated_at: item.updated_at,
+        $run_id: item.run_id ?? null,
+        $task_id: item.task_id ?? null,
+        $channel_id: channelId,
+        $json: JSON.stringify(item),
+      });
+      indexItem(db, item, channelId);
     });
     return item;
   },
@@ -394,7 +401,7 @@ export const tasks = {
         $updated_at: task.updated_at,
         $json: JSON.stringify(task),
       });
-      searchIndex.put(task.id, 'task', task.title, [task.result, task.progress, task.instructions].filter(Boolean).join('\n'));
+      searchIndex.put(task.id, 'task', task.title, taskSearchText(task));
     });
     return task;
   },

@@ -384,6 +384,19 @@ export interface AgentState {
   background_running: number;
 }
 
+/**
+ * The context file the agent starts every turn with, editable from Settings ("memory"). The server only ever
+ * touches its configured path, so `path` is informational; the API takes no path of its own.
+ */
+export interface MemoryState {
+  /** The configured context file (context.local.md unless DUET_CONTEXT_FILE says otherwise). */
+  path: string;
+  /** Its current content; '' when it is missing or empty. */
+  text: string;
+  /** Server-side cap on `text`, in UTF-8 bytes. */
+  max_bytes: number;
+}
+
 /** What the agent already has before the first message ("What I can see"). Names only, never config values. */
 export interface Capabilities {
   /** One short label per source line in the context file; empty when there is no context file. */

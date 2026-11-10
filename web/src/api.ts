@@ -1,5 +1,5 @@
 import { settledNotifications } from '../../shared/links';
-import type { Attachment, Capabilities, Channel, Connector, Item, SearchHit, ServerEvent, Settings, Snapshot, Task } from '../../shared/types';
+import type { Attachment, Capabilities, Channel, Connector, Item, MemoryState, SearchHit, ServerEvent, Settings, Snapshot, Task } from '../../shared/types';
 import { applyEvent, applySnapshot, channelItems, getState, hasMoreFor, mergeItems, prependItems, setChannel, setChannelMore, setState } from './store';
 
 class HttpError extends Error {
@@ -73,6 +73,10 @@ export const api = {
   subscribe: (sub: PushSubscriptionJSON) => call<{ ok: true }>('POST', '/api/push/subscribe', sub),
   testPush: () => call<{ sent: number }>('POST', '/api/push/test'),
   capabilities: () => call<Capabilities>('GET', '/api/capabilities'),
+  /** The context file the agent starts each turn with. */
+  memory: () => call<MemoryState>('GET', '/api/memory'),
+  saveMemory: (text: string) => call<MemoryState>('PUT', '/api/memory', { text }),
+  clearMemory: () => call<MemoryState>('DELETE', '/api/memory'),
   /** The hard-block policy: what approvals can never authorize. Absent on old servers; callers must tolerate that. */
   policy: () => call<{ blocks: { id: string; title: string; detail: string }[] }>('GET', '/api/policy'),
   connectors: () => call<{ connectors: Connector[] }>('GET', '/api/connectors'),

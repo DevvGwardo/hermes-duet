@@ -4,6 +4,7 @@ import { api, enablePush, isStandalone, pushSupported } from '../api';
 import { useStore } from '../store';
 import { useDialogTrap } from '../hooks/useDialogTrap';
 import { Icon } from '../ui';
+import { MemorySheet } from './MemorySheet';
 import { WhatICanSee } from './WhatICanSee';
 
 export function SettingsSheet({ onClose }: { onClose: () => void }) {
@@ -17,6 +18,7 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
   const [connErr, setConnErr] = useState<string | null>(null);
   const [trig, setTrig] = useState<{ webhook_url: string; watch_dir: string | null; meeting_lead_minutes: number; triggers: { id: string; kind: string; last_triggered_at: number | null }[] } | null>(null);
   const [copied, setCopied] = useState(false);
+  const [memoryOpen, setMemoryOpen] = useState(false);
   // The hard-block policy is informational only; older servers don't serve it, so a failure just hides the section.
   const [policy, setPolicy] = useState<{ id: string; title: string; detail: string }[] | null>(null);
   const dialog = useRef<HTMLDivElement | null>(null);
@@ -232,9 +234,16 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
             <h3>What I can see</h3>
             <p className="muted small">Loaded before your first message, every turn.</p>
             <WhatICanSee />
+            <div className="setting-row">
+              <span>Memory</span>
+              <button className="btn btn-ghost small" onClick={() => setMemoryOpen(true)}>
+                Edit
+              </button>
+            </div>
           </section>
         </div>
       </div>
+      {memoryOpen && <MemorySheet onClose={() => setMemoryOpen(false)} />}
     </div>
   );
 }

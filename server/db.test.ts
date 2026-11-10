@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { channels, db, files, kv, newId, pages } from './db';
+import { channels, db, files, kv, newId, pages, tasks } from './db';
 import { search } from './search';
 
 test('new ids are compact, sortable and unique', () => {
@@ -102,4 +102,21 @@ test('removing a page takes its search row with it', () => {
   expect(search(db, 'retirement').some((h) => h.id === page.id)).toBe(true);
   pages.remove(page.id);
   expect(search(db, 'retirement').some((h) => h.id === page.id)).toBe(false);
+});
+
+test('a task is searchable by its result and its source quote', () => {
+  const task = {
+    id: newId(),
+    title: 'Permit research',
+    status: 'done' as const,
+    steps: [],
+    result: 'The city issued permit #4471.',
+    sources: [{ kind: 'url' as const, label: 'City permit office', quote: 'Permit #4471 was issued' }],
+    created_at: Date.now(),
+    updated_at: Date.now(),
+    background: true,
+  };
+  tasks.save(task);
+  expect(search(db, '4471').some((h) => h.id === task.id)).toBe(true);
+  expect(search(db, 'permit').some((h) => h.id === task.id && h.kind === 'task')).toBe(true);
 });
