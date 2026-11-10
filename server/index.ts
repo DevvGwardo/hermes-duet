@@ -10,8 +10,10 @@ import { createPairCode, deviceCookie, deviceFor, internalToken, isHttps, pairBl
 import { listConnectors, testConnector } from './connectors';
 import { sseResponse } from './bus';
 import { config } from './config';
+import { MAX_EDIT_BYTES } from '../shared/edit';
 import { type AttachmentRow, attachments, channels, db, devices, files, items, kv, newId, pages, prune, settings, tasks, toAttachment, triggers } from './db';
 import { UserError } from './errors';
+import { saveFileVersion } from './fileversions';
 import { hermes } from './hermes';
 import { idempotencyKey, idempotentItem, limits, rememberIdempotent, type SlidingWindow } from './limits';
 import { HARD_BLOCKS } from './safety';
@@ -67,9 +69,9 @@ export async function readTextCapped(req: Request, limit: number): Promise<strin
   return new TextDecoder().decode(Buffer.concat(chunks));
 }
 
-async function body<T = any>(req: Request): Promise<T> {
+async function body<T = any>(req: Request, limit = 256_000): Promise<T> {
   if (!(req.headers.get('content-type') ?? '').includes('application/json')) throw new Error('expected JSON');
-  const text = await readTextCapped(req, 256_000);
+  const text = await readTextCapped(req, limit);
   return (text ? JSON.parse(text) : {}) as T;
 }
 
@@ -165,6 +167,7 @@ const API_METHODS: [RegExp, string[]][] = [
   [/^\/api\/runs\/stop$/, ['POST']],
   [/^\/api\/pages\/[\w-]+$/, ['DELETE']],
   [/^\/api\/files\/[\w-]+$/, ['GET']],
+  [/^\/api\/files\/[\w-]+\/versions$/, ['POST']],
   [/^\/api\/settings$/, ['PUT']],
   [/^\/api\/brief\/run$/, ['POST']],
   [/^\/api\/brief\/[\w-]+\/audio$/, ['GET']],
@@ -588,6 +591,33 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
 
     const fileMatch = path.match(/^\/api\/files\/([\w-]+)$/);
     if (fileMatch && req.method === 'GET') return await serveFile(fileMatch[1], url.searchParams.has('download'));
+
+    // ---- editing a delivered file: save the text as a new version, keeping the original ----
+    const fileVersionMatch = path.match(/^\/api\/files\/([\w-]*)\/versions$/);
+    if (fileVersionMatch && req.method === 'POST') {
+      const existing = fileVersionMatch[1] ? files.get(fileVersionMatch[1]) : null;
+      if (!existing) return err(404, 'no such file');
+      // The cap is on the text, but JSON escaping can double its size (a file of newlines or quotes), so the
+      // door leaves room for that; the text itself is measured by saveFileVersion, which answers 413.
+      const limit = MAX_EDIT_BYTES * 2 + 4096;
+      if (tooLarge(req, limit)) return err(413, `edited files are limited to ${MAX_EDIT_BYTES / 1024 / 1024} MB`);
+      let raw: string;
+      try {
+        raw = await readTextCapped(req, limit);
+      } catch {
+        return err(413, `edited files are limited to ${MAX_EDIT_BYTES / 1024 / 1024} MB`);
+      }
+      let text: unknown;
+      try {
+        text = (JSON.parse(raw || '{}') as { text?: unknown } | null)?.text;
+      } catch {
+        return err(400, 'send the file text as JSON');
+      }
+      if (typeof text !== 'string') return err(400, 'send the file text as JSON');
+      const entry = saveFileVersion(existing.entry, text);
+      broadcast({ type: 'file', file: entry });
+      return json({ file: entry });
+    }
 
     // ---- interactive deliverables: buttons inside a delivered dashboard ----
     const deliverable = path.match(/^\/api\/deliverables\/([\w-]+)\/(action|approval)$/);

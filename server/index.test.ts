@@ -1,8 +1,13 @@
 // Route-level tests for the HTTP surface. They call the handlers directly, so no port is bound and no real device is
 // needed beyond a paired cookie.
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
+import { MAX_EDIT_BYTES } from '../shared/edit';
+import type { FileEntry } from '../shared/types';
 import { createPairCode, deviceCookie, internalToken, redeemPairCode } from './auth';
-import { attachments, channels, items, kv, newId, pages, tasks } from './db';
+import { attachments, channels, files, items, kv, newId, pages, tasks } from './db';
+import { config } from './config';
 import { UserError } from './errors';
 import { hermes } from './hermes';
 import { GENERAL_CHANNEL } from './schema';
@@ -487,5 +492,108 @@ describe('notification preferences', () => {
       expect(res.status).toBe(400);
       expect(((await res.json()) as any).error).toBeTruthy();
     }
+  });
+});
+
+describe('file versions', () => {
+  /** A delivered file on disk, registered like deliver_file would have done. */
+  const stored = (name: string, mime: string, over: Partial<FileEntry> = {}) => {
+    const id = newId();
+    const dir = join(config.dataDir, 'files', id);
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, name);
+    writeFileSync(path, 'original text', 'utf8');
+    return files.add({ id, title: name, name, mime, size: 13, created_at: Date.now(), ...over }, path);
+  };
+
+  test('saving text creates a new linked version and leaves the original alone', async () => {
+    const base = stored('notes.md', 'text/markdown', { task_id: 'task-1', page_id: 'page-1' });
+    const res = await authed(`/api/files/${base.id}/versions`, jsonPost({ text: 'edited text' }));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any;
+    expect(body.file.id).not.toBe(base.id);
+    expect(body.file.version_of).toBe(base.id);
+    expect(body.file.title).toBe(base.title);
+    expect(body.file.name).toBe(base.name);
+    expect(body.file.mime).toBe(base.mime);
+    expect(body.file.task_id).toBe('task-1');
+    expect(body.file.page_id).toBe('page-1');
+    expect(body.file.size).toBe(Buffer.byteLength('edited text', 'utf8'));
+    // The original row and its bytes are untouched, and the new file has its own storage path.
+    expect(files.get(base.id)!.entry.version_of).toBeUndefined();
+    expect(await Bun.file(files.get(base.id)!.path).text()).toBe('original text');
+    expect(files.get(body.file.id)!.path).not.toBe(files.get(base.id)!.path);
+    expect(await Bun.file(files.get(body.file.id)!.path).text()).toBe('edited text');
+    // The new version is served like any other deliverable.
+    const got = await authed(`/api/files/${body.file.id}`);
+    expect(got.status).toBe(200);
+    expect(await got.text()).toBe('edited text');
+  });
+
+  test('a file that is not text is refused with a clear sentence, not a 500', async () => {
+    for (const [name, mime] of [
+      ['scan.pdf', 'application/pdf'],
+      ['photo.png', 'image/png'],
+      ['archive.zip', 'application/zip'],
+    ] as const) {
+      const base = stored(name, mime);
+      const res = await authed(`/api/files/${base.id}/versions`, jsonPost({ text: 'x' }));
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as any).error).toContain('only text files');
+      expect(files.all().some((f) => f.version_of === base.id)).toBe(false);
+    }
+  });
+
+  test('a text over 2 MB is refused with 413', async () => {
+    const base = stored('big.md', 'text/markdown');
+    const res = await authed(`/api/files/${base.id}/versions`, jsonPost({ text: 'a'.repeat(MAX_EDIT_BYTES + 1) }));
+    expect(res.status).toBe(413);
+    expect(((await res.json()) as any).error).toContain('2 MB');
+    expect(files.all().some((f) => f.version_of === base.id)).toBe(false);
+    expect(await Bun.file(files.get(base.id)!.path).text()).toBe('original text');
+  });
+
+  test('a text of exactly 2 MB is accepted, even when escaping doubles the body', async () => {
+    const base = stored('edges.md', 'text/markdown');
+    const text = '\n'.repeat(MAX_EDIT_BYTES);
+    const res = await authed(`/api/files/${base.id}/versions`, jsonPost({ text }));
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as any).file.size).toBe(MAX_EDIT_BYTES);
+  });
+
+  test('an oversized body is refused at the door', async () => {
+    const base = stored('big.md', 'text/markdown');
+    const res = await authed(`/api/files/${base.id}/versions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-length': String(MAX_EDIT_BYTES * 2 + 8192) },
+    });
+    expect(res.status).toBe(413);
+  });
+
+  test('a missing text field is a 400, not an empty file', async () => {
+    const base = stored('notes.md', 'text/markdown');
+    for (const payload of [{}, { text: 42 }, { text: null }]) {
+      const res = await authed(`/api/files/${base.id}/versions`, jsonPost(payload));
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as any).error).toBe('send the file text as JSON');
+    }
+    expect(files.all().some((f) => f.version_of === base.id)).toBe(false);
+  });
+
+  test('an unknown or empty file id is a 404', async () => {
+    const missing = await authed('/api/files/no-such-file/versions', jsonPost({ text: 'x' }));
+    expect(missing.status).toBe(404);
+    expect(((await missing.json()) as any).error).toBe('no such file');
+    const empty = await authed('/api/files//versions', jsonPost({ text: 'x' }));
+    expect(empty.status).toBe(404);
+  });
+
+  test('an unpaired request is refused, and a wrong method gets 405 with Allow', async () => {
+    const base = stored('notes.md', 'text/markdown');
+    const anon = await app(`/api/files/${base.id}/versions`, jsonPost({ text: 'x' }));
+    expect(anon.status).toBe(401);
+    const wrong = await authed(`/api/files/${base.id}/versions`);
+    expect(wrong.status).toBe(405);
+    expect(wrong.headers.get('allow')).toBe('POST');
   });
 });

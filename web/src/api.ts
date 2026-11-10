@@ -1,5 +1,5 @@
 import { settledNotifications } from '../../shared/links';
-import type { Attachment, Capabilities, Channel, Connector, ConnectorSuggestion, Item, SearchHit, ServerEvent, Settings, Snapshot, Task } from '../../shared/types';
+import type { Attachment, Capabilities, Channel, Connector, ConnectorSuggestion, FileEntry, Item, SearchHit, ServerEvent, Settings, Snapshot, Task } from '../../shared/types';
 import { applyEvent, applySnapshot, channelItems, getState, hasMoreFor, mergeItems, prependItems, setChannel, setChannelMore, setState } from './store';
 
 class HttpError extends Error {
@@ -106,6 +106,8 @@ export const api = {
   channelPage: (id: string) => call<{ items: Item[]; has_more: boolean }>('GET', `/api/channels/${encodeURIComponent(id)}/items`),
   seenChannel: (id: string) => call<{ ok: true }>('POST', `/api/channels/${encodeURIComponent(id)}/seen`),
   search: (q: string) => call<{ hits: SearchHit[]; terms: string[] }>('GET', `/api/search?q=${encodeURIComponent(q)}`),
+  /** Save an edited deliverable as a new version; the original file is kept. */
+  saveFileVersion: (id: string, text: string) => call<{ file: FileEntry }>('POST', `/api/files/${encodeURIComponent(id)}/versions`, { text }),
 };
 
 /**

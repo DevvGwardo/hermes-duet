@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
-import { useStore } from '../store';
+import { isEditableMime } from '../edit';
+import { applyEvent, useStore } from '../store';
 import { useDialogTrap } from '../hooks/useDialogTrap';
 import { Icon, Markdown, bytesLabel } from '../ui';
 
@@ -8,20 +9,45 @@ import { Icon, Markdown, bytesLabel } from '../ui';
  * The viewer: a delivered file on its phone. HTML runs in a sandboxed frame (no cookies, no API access) with the
  * Duet bridge appended by the server, so buttons inside a dashboard come back as messages here.
  *
+ * Text deliverables can be edited in place: the source loads into a textarea, and Save writes it back through
+ * `POST /api/files/:id/versions` as a new file, so the original version is never lost. Edited HTML is only ever
+ * shown in the same sandboxed frame; the source editor is a toggle, not a replacement.
+ *
  * `compareId` turns it into a version slider for a standing page: the previous version sits on top, clipped to the
  * left of the handle, so sliding shows what changed between yesterday's page and today's.
  */
 export function Viewer({ fileId, compareId, onClose }: { fileId: string; compareId?: string | null; onClose: () => void }) {
-  const file = useStore((s) => s.files.find((f) => f.id === fileId));
+  // The viewer follows the file being looked at. Saving a version swaps in the new file without the shell
+  // reopening the sheet, so the edit lands exactly where the user made it.
+  const [currentId, setCurrentId] = useState(fileId);
+  useEffect(() => {
+    setCurrentId(fileId);
+    setEditing(false);
+    setDraft('');
+    setEditErr(null);
+    setShowPreview(false);
+  }, [fileId]);
+  const file = useStore((s) => s.files.find((f) => f.id === currentId));
   const older = useStore((s) => s.files.find((f) => f.id === compareId));
   const [text, setText] = useState<string | null>(null);
   const [olderText, setOlderText] = useState<string | null>(null);
   const [split, setSplit] = useState(50);
   const [note, setNote] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [editErr, setEditErr] = useState<string | null>(null);
+  const [showPreview, setShowPreview] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
   const frame = useRef<HTMLIFrameElement | null>(null);
   const dialog = useRef<HTMLDivElement | null>(null);
   useDialogTrap(dialog);
-  const src = `/api/files/${encodeURIComponent(fileId)}`;
+  const src = `/api/files/${encodeURIComponent(currentId)}`;
+  const isHtml = file?.mime === 'text/html';
+  const isSvg = file?.mime === 'image/svg+xml';
+  const editable = !!file && isEditableMime(file.name, file.mime);
+  // A served HTML file has the Duet bridge appended by the server; the editor reads the raw bytes instead.
+  const sourceUrl = isHtml ? `${src}?download=1` : src;
   const kind = !file
     ? 'none'
     : file.mime.startsWith('image/')
@@ -35,12 +61,17 @@ export function Viewer({ fileId, compareId, onClose }: { fileId: string; compare
             : 'download';
 
   useEffect(() => {
-    if (kind !== 'markdown' && kind !== 'text') return;
-    fetch(src, { credentials: 'include' })
+    if (!editable) return;
+    setText(null);
+    setLoadFailed(false);
+    fetch(sourceUrl, { credentials: 'include' })
       .then((r) => r.text())
       .then(setText)
-      .catch(() => setText('Could not load this file.'));
-  }, [src, kind]);
+      .catch(() => {
+        setLoadFailed(true);
+        setText('Could not load this file.');
+      });
+  }, [sourceUrl, editable]);
 
   useEffect(() => {
     if (!compareId) return;
@@ -66,19 +97,19 @@ export function Viewer({ fileId, compareId, onClose }: { fileId: string; compare
         const action = String(msg.data?.action ?? '').slice(0, 64);
         if (!action) return;
         api
-          .deliverableAction(fileId, action, msg.data?.payload)
+          .deliverableAction(currentId, action, msg.data?.payload)
           .then(() => setNote(`Sent “${action}” to Hermes.`))
           .catch((err) => setNote(err?.message ?? 'That did not go through.'));
       } else if (msg.type === 'duet_approval') {
         api
-          .deliverableApproval(fileId, { title: msg.data?.title, summary: msg.data?.summary, action_label: msg.data?.action_label })
+          .deliverableApproval(currentId, { title: msg.data?.title, summary: msg.data?.summary, action_label: msg.data?.action_label })
           .then(() => setNote('Approval card posted. Check Needs you.'))
           .catch((err) => setNote(err?.message ?? 'Could not post that approval.'));
       }
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [fileId]);
+  }, [currentId]);
 
   function print() {
     try {
@@ -97,7 +128,39 @@ export function Viewer({ fileId, compareId, onClose }: { fileId: string; compare
     }
   }
 
-  const canCopy = (kind === 'markdown' || kind === 'text') && text !== null;
+  function startEdit() {
+    setDraft(text ?? '');
+    setEditErr(null);
+    setShowPreview(false);
+    setEditing(true);
+  }
+
+  function cancelEdit() {
+    setEditing(false);
+    setDraft('');
+    setEditErr(null);
+  }
+
+  async function saveEdit() {
+    if (!file) return;
+    setSaving(true);
+    setEditErr(null);
+    try {
+      const res = await api.saveFileVersion(currentId, draft);
+      // Put the new file in the store before the SSE broadcast arrives, so the viewer never shows a missing
+      // file between the response and the event.
+      applyEvent({ type: 'file', file: res.file });
+      setCurrentId(res.file.id);
+      setEditing(false);
+      setNote('Saved as a new version');
+    } catch (e: any) {
+      setEditErr(e?.message ?? 'Could not save this version.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const canCopy = !editing && (kind === 'markdown' || kind === 'text') && text !== null;
 
   return (
     <div className="sheet-backdrop" onClick={onClose}>
@@ -114,9 +177,14 @@ export function Viewer({ fileId, compareId, onClose }: { fileId: string; compare
               <span className="muted compare-label">vs {new Date(older.created_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}</span>
             )}
           </div>
-          {kind === 'frame' && (
+          {kind === 'frame' && !editing && (
             <button className="btn btn-ghost small" onClick={print}>
               Print
+            </button>
+          )}
+          {editable && !editing && (
+            <button className="btn btn-ghost small" onClick={startEdit} disabled={text === null || loadFailed}>
+              Edit
             </button>
           )}
           {canCopy && (
@@ -136,7 +204,48 @@ export function Viewer({ fileId, compareId, onClose }: { fileId: string; compare
             {note}
           </div>
         )}
-        {compareId ? (
+        {editing ? (
+          <div className="viewer-edit">
+            {isHtml || isSvg ? (
+              <div className="viewer-edit-toggle" role="tablist" aria-label="Editor view">
+                <button role="tab" aria-selected={!showPreview} className={showPreview ? '' : 'on'} onClick={() => setShowPreview(false)}>
+                  Source
+                </button>
+                <button role="tab" aria-selected={showPreview} className={showPreview ? 'on' : ''} onClick={() => setShowPreview(true)}>
+                  Preview
+                </button>
+              </div>
+            ) : null}
+            {isHtml || isSvg ? (
+              showPreview ? (
+                isHtml ? (
+                  <iframe
+                    src={src}
+                    title={`${file?.title ?? 'File'} preview`}
+                    sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-downloads allow-modals"
+                  />
+                ) : (
+                  <img src={src} alt={file?.title ?? 'File preview'} />
+                )
+              ) : (
+                <textarea value={draft} onChange={(e) => setDraft(e.target.value)} spellCheck={false} aria-label="File source" />
+              )
+            ) : (
+              <textarea value={draft} onChange={(e) => setDraft(e.target.value)} spellCheck={false} aria-label="File text" />
+            )}
+            <div className="viewer-edit-bar">
+              <span className="viewer-edit-error" role="alert">
+                {editErr ?? ''}
+              </span>
+              <button className="btn btn-ghost small" onClick={cancelEdit} disabled={saving}>
+                Cancel
+              </button>
+              <button className="btn btn-primary small" onClick={saveEdit} disabled={saving || text === null}>
+                {saving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          </div>
+        ) : compareId ? (
           <div className="compare">
             <div className="compare-stage">
               <div className="compare-pane">
