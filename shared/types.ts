@@ -222,6 +222,8 @@ export interface Channel {
   instructions?: string;
   /** Optional group name for the channel strip ("Work", "Home"); absent means ungrouped. */
   group?: string;
+  /** A repository this channel works in: "owner/name" or an http(s) GitHub URL. */
+  repo?: string;
   /** The Hermes session this channel talks to. */
   session_id: string;
   /** Last time the user opened it here, for the unread dot. */
@@ -258,6 +260,31 @@ export interface Connector {
 }
 
 export type TaskStatus = 'queued' | 'running' | 'waiting' | 'done' | 'failed' | 'cancelled';
+
+/** When a user-defined routine runs. Times are local wall-clock "HH:MM". */
+export type RoutineSchedule =
+  | { kind: 'daily'; time: string }
+  | { kind: 'weekly'; time: string; weekdays: number[] } // 0 Sunday .. 6 Saturday
+  | { kind: 'interval'; every_minutes: number };
+
+/** A recurring job the user created in plain language, run as a background task. */
+export interface Routine {
+  id: string;
+  title: string;
+  /** Self-contained instructions for the task it starts. */
+  prompt: string;
+  schedule: RoutineSchedule;
+  /** Which channel its task and handover belong to; absent means general. */
+  channel_id?: string;
+  enabled: boolean;
+  last_run?: number;
+  last_result?: string;
+  last_task_id?: string;
+  /** Next due time in epoch ms, kept in sync by the scheduler and every edit. */
+  next_run?: number;
+  created_at: number;
+  updated_at: number;
+}
 
 export interface TaskStep {
   text: string;
@@ -327,6 +354,8 @@ export interface FileEntry {
   task_id?: string | null;
   /** Set when this file became a version of that standing page; lists show only a page's newest version. */
   page_id?: string;
+  /** Set when the user edited this deliverable: the earlier file this replaced. Newest version wins in lists. */
+  version_of?: string;
   created_at: number;
 }
 
@@ -337,6 +366,14 @@ export interface Settings {
   quiet_start: string; // "HH:MM"
   quiet_end: string;
   timezone: string;
+  /** Which task pushes to send: every finish, only failures, or none. Approvals always push. */
+  notify_tasks?: 'all' | 'failures' | 'off';
+  /** Agent `notify` pushes. */
+  notify_agent?: boolean;
+  /** Channels whose pushes are muted; their cards still post in the thread. */
+  muted_channels?: string[];
+  /** Soft daily push cap, approvals excluded; 0 or absent means no cap. */
+  max_pushes_per_day?: number;
 }
 
 export interface AgentState {
@@ -367,6 +404,8 @@ export interface Snapshot {
   /** Every pending card, including ones older than the `items` page. */
   pending: Item[];
   tasks: Task[];
+  /** User-defined recurring routines, when the routines feature is enabled. */
+  routines?: Routine[];
   files: FileEntry[];
   pages: Page[];
   /** Topic channels, newest activity last. The app opens the general one first. */
@@ -380,6 +419,8 @@ export type ServerEvent =
   | { type: 'item'; item: Item }
   | { type: 'delta'; item_id: string; text: string }
   | { type: 'task'; task: Task }
+  | { type: 'routine'; routine: Routine }
+  | { type: 'routine_removed'; id: string }
   | { type: 'file'; file: FileEntry }
   | { type: 'page'; page: Page }
   | { type: 'page_removed'; id: string }
