@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { shelf } from '../../../shared/shelf';
 import type { FileEntry, Page, Task } from '../../../shared/types';
 import { api } from '../api';
+import { visibleFiles } from '../edit';
 import { useStore } from '../store';
 import { Icon, bytesLabel, dayLabel, fileIcon, relLabel, timeLabel } from '../ui';
 
@@ -16,7 +17,9 @@ export function MakeView({ onStart, onOpenFile, onCompare }: { onStart: (prompt:
   const files = useStore((s) => s.files);
   const pages = useStore((s) => s.pages);
   const tasks = useStore((s) => s.tasks);
-  const shown = shelf(files, pages.map((p) => p.id));
+  // A file the user edited is replaced by its newest version, so the list shows the edit once. `shelf` still
+  // decides which standing-page version is current; this only hides a file its own edit superseded.
+  const shown = visibleFiles(shelf(files, pages.map((p) => p.id)));
   // Every delivered version of a page stays in the files list; the newest one is current, the one before it is what
   // "Compare" slides against.
   const versionsOf = (page: Page) =>
@@ -75,6 +78,7 @@ export function MakeView({ onStart, onOpenFile, onCompare }: { onStart: (prompt:
                       <span className="row-sub">
                         {f.name} · {bytesLabel(f.size)} · {relLabel(f.created_at)}
                       </span>
+                      {f.version_of && <span className="chip edited-chip">edited</span>}
                     </span>
                     <Icon.chevron size={18} />
                   </button>

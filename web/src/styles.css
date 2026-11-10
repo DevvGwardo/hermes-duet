@@ -3592,6 +3592,85 @@ li.done .tick {
   accent-color: var(--gold);
 }
 
+/* Editing a deliverable: the source textarea fills the sheet, with the save bar pinned to the bottom. */
+.viewer-edit {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.viewer-edit textarea {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  resize: none;
+  border: 0;
+  padding: 14px 16px;
+  font: 14px/1.55 var(--mono);
+  color: var(--paper-2);
+  background: rgba(0, 0, 0, 0.25);
+}
+.viewer-edit textarea:focus {
+  outline: 0;
+  background: rgba(0, 0, 0, 0.4);
+}
+.viewer-edit iframe {
+  flex: 1;
+  min-height: 0;
+  border: 0;
+  background: #fff;
+}
+.viewer-edit img {
+  max-width: 100%;
+  max-height: 100%;
+  margin: auto;
+  display: block;
+  object-fit: contain;
+}
+.viewer-edit-toggle {
+  display: flex;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1.5px solid var(--line-2);
+  background: var(--ink-1);
+}
+.viewer-edit-toggle button {
+  padding: 5px 12px;
+  border-radius: 5px;
+  border: 1.5px solid var(--line-2);
+  color: var(--faint);
+  font: 600 12px var(--mono);
+}
+.viewer-edit-toggle button.on {
+  border-color: var(--gold);
+  color: var(--gold);
+  background: rgba(255, 215, 0, 0.08);
+}
+.viewer-edit-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+  border-top: 2px solid #000;
+  background: linear-gradient(0deg, #181818, var(--ink-1));
+}
+.viewer-edit-error {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--danger);
+  font: 400 12px var(--mono);
+}
+/* A small "edited" marker on a file the user saved a version of. */
+.edited-chip {
+  align-self: flex-start;
+  margin-top: 5px;
+  padding: 2px 8px;
+  font-size: 10.5px;
+}
+
 @media (min-width: 900px) {
   .channels {
     padding: 10px max(16px, calc((100% - var(--col)) / 2)) 4px;
