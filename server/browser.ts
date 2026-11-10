@@ -685,8 +685,17 @@ const CARD_CVV = ['input[autocomplete="cc-csc"]', 'input[name*="cvc" i]', 'input
 /**
  * Type an issued single-use card into the checkout. The caller keeps the number only in memory and calls this
  * immediately after issuing it; only which fields were found is reported back.
+ *
+ * `expectedHost` is the merchant host the payment was approved for. The vault lookup for a login takes a second or
+ * two and the agent may have navigated the tab in that window; the same holds between a payment approval and this
+ * fill, so the page is re-checked here before a single character is typed: a prompt-injected agent that steered the
+ * tab elsewhere must not receive card digits meant for the merchant.
  */
-export async function fillCard(card: { number: string; expMonth: number; expYear: number; cvv: string }): Promise<{ number: boolean; expiry: boolean; cvv: boolean }> {
+export async function fillCard(card: { number: string; expMonth: number; expYear: number; cvv: string }, expectedHost: string): Promise<{ number: boolean; expiry: boolean; cvv: boolean }> {
+  const page = await currentHost();
+  if (!sameLoginSite(expectedHost, page)) {
+    throw new Error(`the tab is on ${page || 'an unknown page'} but the card was approved for ${expectedHost || 'an unknown site'}, so nothing was filled`);
+  }
   const sid = await sessionId();
   const exp = `${String(card.expMonth).padStart(2, '0')}/${String(card.expYear).slice(-2)}`;
   const number = await typeInto(sid, CARD_NUMBER, card.number);

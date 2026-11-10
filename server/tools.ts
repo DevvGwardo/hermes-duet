@@ -45,6 +45,7 @@ export const TOOLS = [
       type: 'object',
       properties: {
         merchant: { type: 'string', description: 'Vendor or store name, e.g. "Amtrak".' },
+        merchant_url: { type: 'string', description: 'The exact checkout page, e.g. "https://shop.example.com/checkout". The single-use card is only typed into this page\'s host.' },
         amount_cents: { type: 'number', description: 'Total in cents (2450 for $24.50). Must equal the items.' },
         currency: { type: 'string', description: 'Three-letter code. Default USD.' },
         items: {
@@ -62,7 +63,7 @@ export const TOOLS = [
         },
         task_id: taskId,
       },
-      required: ['merchant', 'amount_cents', 'items'],
+      required: ['merchant', 'merchant_url', 'amount_cents', 'items'],
     },
   },
   {

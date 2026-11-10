@@ -1385,8 +1385,9 @@ export async function actOnCard(id: string, action: string, value?: string): Pro
 
 /**
  * Carry out an approved payment. With a provider configured, a single-use card is issued for exactly the approved
- * total and typed into the agent's live browser; the number exists only in this function's locals and is never put on
- * the card, in the database, or in the prompt. The agent's next turn is told what actually happened.
+ * total and typed into the agent's live browser, but only while the tab is still on the approved merchant's host;
+ * the number exists only in this function's locals and is never put on the card, in the database, or in the prompt.
+ * The agent's next turn is told what actually happened.
  */
 async function settlePayment(item: Item, approved: boolean): Promise<void> {
   const c = item.card!;
@@ -1403,31 +1404,37 @@ async function settlePayment(item: Item, approved: boolean): Promise<void> {
       failure = e?.message ?? 'the card provider is misconfigured';
     }
     if (provider && !failure) {
-      try {
-        const card = await issueCard(provider, { amountCents: c.amount_cents ?? 0, currency: c.currency ?? 'USD', merchant: c.merchant ?? 'the merchant' });
-        if (cardExpired(card)) throw new Error('the issued card was already expired');
-        last4 = card.last4;
+      // Cards approved before the merchant binding carry no host to check the tab against, so they can never be
+      // filled: issuing one anyway would only create a live card number with nowhere safe to type it.
+      if (!c.merchant_host) {
+        failure = 'this payment was approved without a bound merchant site, so no card was typed into the browser. Send a new request_payment from the exact checkout page and have the user approve that instead.';
+      } else {
         try {
-          const fields = await browser.fillCard(card);
-          cardFilled = fields.number && fields.expiry && fields.cvv;
-          if (!cardFilled) failure = 'no checkout fields were found in the live browser';
-        } finally {
-          // Best effort: the number is not kept anywhere after this call.
-          card.number = '';
-          card.cvv = '';
+          const card = await issueCard(provider, { amountCents: c.amount_cents ?? 0, currency: c.currency ?? 'USD', merchant: c.merchant ?? 'the merchant' });
+          if (cardExpired(card)) throw new Error('the issued card was already expired');
+          last4 = card.last4;
+          try {
+            const fields = await browser.fillCard(card, c.merchant_host);
+            cardFilled = fields.number && fields.expiry && fields.cvv;
+            if (!cardFilled) failure = 'no checkout fields were found in the live browser';
+          } finally {
+            // Best effort: the number is not kept anywhere after this call.
+            card.number = '';
+            card.cvv = '';
+          }
+          item = put({
+            ...item,
+            card: {
+              ...c,
+              status: 'approved',
+              decision: 'approve',
+              card_summary: `single-use ${provider.name} card ending ${last4}, good for one transaction and one hour${cardFilled ? ', filled into the browser' : ''}`,
+              card_filled: cardFilled,
+            },
+          });
+        } catch (e: any) {
+          failure = e?.message ?? 'the card provider failed';
         }
-        item = put({
-          ...item,
-          card: {
-            ...c,
-            status: 'approved',
-            decision: 'approve',
-            card_summary: `single-use ${provider.name} card ending ${last4}, good for one transaction and one hour${cardFilled ? ', filled into the browser' : ''}`,
-            card_filled: cardFilled,
-          },
-        });
-      } catch (e: any) {
-        failure = e?.message ?? 'the card provider failed';
       }
     }
   }

@@ -31,6 +31,10 @@ function wholeNumber(v: unknown): number | null {
 
 export interface PaymentInput {
   merchant: string;
+  /** The exact checkout page the card may be typed into; kept as the normalized URL. */
+  merchant_url: string;
+  /** Host derived from merchant_url; what the browser must still be on before the card is filled. */
+  merchant_host: string;
   amount_cents: number;
   currency: string;
   items: PaymentItem[];
@@ -46,6 +50,23 @@ export function paymentInput(raw: unknown, capCents = DEFAULT_CAP_CENTS): Paymen
   const src = (raw ?? {}) as Record<string, unknown>;
   const merchant = text(src.merchant, 80);
   if (!merchant) throw new Error('a payment needs a merchant');
+  // The card is typed only into this merchant's host, so the checkout page is required up front: a bare merchant
+  // name can't be checked against the tab later. Only http(s) reaches a checkout; anything else (or a relative
+  // path with no host at all) is refused rather than guessed at.
+  const merchantUrl = text(src.merchant_url, 2000);
+  if (!merchantUrl) throw new Error('a payment needs the exact checkout page (merchant_url)');
+  let parsed: URL;
+  try {
+    parsed = new URL(merchantUrl);
+  } catch {
+    throw new Error('merchant_url must be an absolute http(s) URL for the checkout page');
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('merchant_url must be an http(s) URL for the checkout page');
+  }
+  if (!parsed.hostname) throw new Error('merchant_url must name the checkout host');
+  const merchant_url = parsed.href;
+  const merchant_host = parsed.hostname;
   const currency = (text(src.currency, 8) || 'USD').toUpperCase();
   if (!/^[A-Z]{3}$/.test(currency)) throw new Error('currency must be a three-letter code like USD');
   const list = Array.isArray(src.items) ? src.items.slice(0, MAX_LINE_ITEMS) : [];
@@ -67,20 +88,22 @@ export function paymentInput(raw: unknown, capCents = DEFAULT_CAP_CENTS): Paymen
   if (claimed !== total) throw new Error(`the total says ${money(claimed, currency)} but the items add up to ${money(total, currency)}`);
   const cap = Number.isFinite(capCents) && capCents > 0 ? Math.floor(capCents) : DEFAULT_CAP_CENTS;
   if (total > cap) throw new Error(`${money(total, currency)} is over the ${money(cap, currency)} per-transaction limit (DUET_MAX_TRANSACTION_LIMIT)`);
-  return { merchant, amount_cents: total, currency, items, cap_cents: cap };
+  return { merchant, merchant_url, merchant_host, amount_cents: total, currency, items, cap_cents: cap };
 }
 
-/** The card the agent's request_payment posts: itemized, capped, and explicit about what approval means. */
+/** The card the agent's request_payment posts: itemized, capped, bound to the checkout page, and explicit about what approval means. */
 export function paymentCard(input: PaymentInput, opts: { taskId?: string | null; cardProvider?: string | null } = {}): CardData {
   const total = money(input.amount_cents, input.currency);
   const how = opts.cardProvider
-    ? `Approving creates a single-use ${opts.cardProvider} card limited to ${total} and types it into the browser.`
-    : 'No card provider is configured, so approving authorizes me to spend up to this total; I will still come back if the checkout differs.';
+    ? `Approving creates a single-use ${opts.cardProvider} card limited to ${total} and types it into the checkout at ${input.merchant_host}.`
+    : `No card provider is configured, so approving authorizes me to spend up to this total at ${input.merchant_host}; I will still come back if the checkout differs.`;
   return {
     type: 'payment',
     title: `Pay ${total} to ${input.merchant}`,
     body: how,
     merchant: input.merchant,
+    merchant_url: input.merchant_url,
+    merchant_host: input.merchant_host,
     amount_cents: input.amount_cents,
     currency: input.currency,
     cap_cents: input.cap_cents,
