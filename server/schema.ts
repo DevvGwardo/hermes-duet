@@ -1,6 +1,8 @@
 // The database shape, kept out of db.ts so a test can build it in memory. Every statement is idempotent: a checkout
 // that has been running for months gets the new columns and indexes on its next boot, and nothing is dropped.
 import type { Database } from 'bun:sqlite';
+import type { Item } from '../shared/types';
+import { indexItem } from './search';
 
 /** The channel every existing row belongs to, and the one the brief, check-ins and tasks live in. */
 export const GENERAL_CHANNEL = 'chan-general';
@@ -24,7 +26,7 @@ function addColumn(db: Database, table: string, name: string, decl: string) {
  * Bumped whenever a shape change needs more than an idempotent CREATE. Kept in `PRAGMA user_version`, so a checkout
  * that has been running for months applies the step it is missing instead of guessing from the tables it can see.
  */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export function applySchema(db: Database) {
   const from = db.query<{ user_version: number }, []>('PRAGMA user_version').get()?.user_version ?? 0;
@@ -122,15 +124,14 @@ CREATE TABLE IF NOT EXISTS triggers (
 );
 `);
 
-  // Full-text index over thread items. `-1` in snippet()/highlight() picks the best column by itself.
+  // Full-text index over thread items. One row per item, written by db.items.save (and rebuilt here on upgrade)
+  // from searchText(), so the card subfields are flattened in one place instead of a trigger's json_extract per field.
   db.exec(`
 CREATE VIRTUAL TABLE IF NOT EXISTS fts_items USING fts5(
   item_id UNINDEXED,
   channel_id UNINDEXED,
   kind UNINDEXED,
   text,
-  card_title,
-  card_body,
   tokenize = 'porter unicode61'
 );
 `);
@@ -146,31 +147,26 @@ CREATE VIRTUAL TABLE IF NOT EXISTS fts_assets USING fts5(
 );
 `);
 
+  // Migration 003: card subfields. The old index knew only card.title and card.body, so a decision, a draft, a
+  // follow-up or a line item was invisible. FTS5 tables cannot be altered, so the index is dropped and rebuilt
+  // from the items themselves; the triggers that maintained it are gone (db.items.save owns the row now).
+  if (from < 3) {
+    db.exec('DROP TABLE IF EXISTS fts_items');
+    db.exec(`
+CREATE VIRTUAL TABLE fts_items USING fts5(
+  item_id UNINDEXED,
+  channel_id UNINDEXED,
+  kind UNINDEXED,
+  text,
+  tokenize = 'porter unicode61'
+);
+`);
+  }
   db.exec(`
-CREATE TRIGGER IF NOT EXISTS items_fts_insert AFTER INSERT ON items BEGIN
-  INSERT INTO fts_items(item_id, channel_id, kind, text, card_title, card_body)
-  VALUES (
-    new.id,
-    coalesce(new.channel_id, '${GENERAL_CHANNEL}'),
-    new.kind,
-    json_extract(new.json, '$.text'),
-    json_extract(new.json, '$.card.title'),
-    json_extract(new.json, '$.card.body')
-  );
-END;
-CREATE TRIGGER IF NOT EXISTS items_fts_update AFTER UPDATE ON items BEGIN
-  DELETE FROM fts_items WHERE item_id = old.id;
-  INSERT INTO fts_items(item_id, channel_id, kind, text, card_title, card_body)
-  VALUES (
-    new.id,
-    coalesce(new.channel_id, '${GENERAL_CHANNEL}'),
-    new.kind,
-    json_extract(new.json, '$.text'),
-    json_extract(new.json, '$.card.title'),
-    json_extract(new.json, '$.card.body')
-  );
-END;
-CREATE TRIGGER IF NOT EXISTS items_fts_delete AFTER DELETE ON items BEGIN
+DROP TRIGGER IF EXISTS items_fts_insert;
+DROP TRIGGER IF EXISTS items_fts_update;
+DROP TRIGGER IF EXISTS items_fts_delete;
+CREATE TRIGGER items_fts_delete AFTER DELETE ON items BEGIN
   DELETE FROM fts_items WHERE item_id = old.id;
 END;
 `);
@@ -182,15 +178,22 @@ END;
 }
 
 /**
- * Index rows written before the FTS table existed (or while its triggers were missing). Cheap and idempotent: only
+ * Index rows written before the FTS table existed (or while it had the old shape). Cheap and idempotent: only
  * ids absent from the index are touched, so it costs one scan of the ids on a normal boot.
  */
 export function backfillItems(db: Database) {
-  db.exec(`
-INSERT INTO fts_items(item_id, channel_id, kind, text, card_title, card_body)
-SELECT id, coalesce(channel_id, '${GENERAL_CHANNEL}'), kind,
-       json_extract(json, '$.text'), json_extract(json, '$.card.title'), json_extract(json, '$.card.body')
-FROM items i
-WHERE NOT EXISTS (SELECT 1 FROM fts_items f WHERE f.item_id = i.id);
-`);
+  const indexed = new Set(db.query<{ item_id: string }, []>('SELECT item_id FROM fts_items').all().map((r) => r.item_id));
+  const rows = db.query<{ id: string; channel_id: string | null; json: string }, []>('SELECT id, channel_id, json FROM items').all();
+  for (const r of rows) {
+    if (indexed.has(r.id)) continue;
+    let item: Item;
+    try {
+      item = JSON.parse(r.json) as Item;
+    } catch {
+      continue;
+    }
+    // The stored JSON is the full item in production, but a row written by an older version (or a test) may not
+    // carry its own id; the column is the truth the index is keyed on.
+    indexItem(db, { ...item, id: r.id }, r.channel_id ?? GENERAL_CHANNEL);
+  }
 }

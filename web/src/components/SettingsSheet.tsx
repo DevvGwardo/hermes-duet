@@ -5,6 +5,7 @@ import { useStore } from '../store';
 import { useDialogTrap } from '../hooks/useDialogTrap';
 import { Icon } from '../ui';
 import { ConnectorsSheet } from './ConnectorsSheet';
+import { MemorySheet } from './MemorySheet';
 import { RoutinesSheet } from './RoutinesSheet';
 import { WhatICanSee } from './WhatICanSee';
 
@@ -22,20 +23,21 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
   const [copied, setCopied] = useState(false);
   const [showConnectors, setShowConnectors] = useState(false);
   const [routinesOpen, setRoutinesOpen] = useState(false);
+  const [memoryOpen, setMemoryOpen] = useState(false);
   // The hard-block policy is informational only; older servers don't serve it, so a failure just hides the section.
   const [policy, setPolicy] = useState<{ id: string; title: string; detail: string }[] | null>(null);
   const dialog = useRef<HTMLDivElement | null>(null);
   useDialogTrap(dialog);
 
   useEffect(() => {
-    // Escape closes the routines or connectors sheet first when one is open on top of this one.
+    // Escape closes the routines, connectors or memory sheet first when one is open on top of this one.
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || routinesOpen || showConnectors) return;
+      if (e.key !== 'Escape' || routinesOpen || showConnectors || memoryOpen) return;
       onClose();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose, routinesOpen, showConnectors]);
+  }, [onClose, routinesOpen, showConnectors, memoryOpen]);
 
   // Probes run AppleScript, so they load when the sheet opens rather than with every snapshot.
   useEffect(() => {
@@ -309,11 +311,18 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
             <h3>What I can see</h3>
             <p className="muted small">Loaded before your first message, every turn.</p>
             <WhatICanSee />
+            <div className="setting-row">
+              <span>Memory</span>
+              <button className="btn btn-ghost small" onClick={() => setMemoryOpen(true)}>
+                Edit
+              </button>
+            </div>
           </section>
         </div>
       </div>
       {showConnectors && <ConnectorsSheet onClose={() => setShowConnectors(false)} />}
       {routinesOpen && <RoutinesSheet onClose={() => setRoutinesOpen(false)} />}
+      {memoryOpen && <MemorySheet onClose={() => setMemoryOpen(false)} />}
     </div>
   );
 }

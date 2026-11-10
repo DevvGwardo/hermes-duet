@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import type { Settings } from '../shared/types';
-import { channels, db, files, kv, newId, pages, settings } from './db';
+import { channels, db, files, kv, newId, pages, settings, tasks } from './db';
 import { search } from './search';
 
 test('new ids are compact, sortable and unique', () => {
@@ -164,4 +164,21 @@ test('settings.update refuses a bad notification preference instead of storing i
   expect(() => settings.update({ max_pushes_per_day: -1 })).toThrow('max_pushes_per_day');
   expect(() => settings.update({ max_pushes_per_day: 101 })).toThrow('max_pushes_per_day');
   expect(() => settings.update({ max_pushes_per_day: 2.5 })).toThrow('max_pushes_per_day');
+});
+
+test('a task is searchable by its result and its source quote', () => {
+  const task = {
+    id: newId(),
+    title: 'Permit research',
+    status: 'done' as const,
+    steps: [],
+    result: 'The city issued permit #4471.',
+    sources: [{ kind: 'url' as const, label: 'City permit office', quote: 'Permit #4471 was issued' }],
+    created_at: Date.now(),
+    updated_at: Date.now(),
+    background: true,
+  };
+  tasks.save(task);
+  expect(search(db, '4471').some((h) => h.id === task.id)).toBe(true);
+  expect(search(db, 'permit').some((h) => h.id === task.id && h.kind === 'task')).toBe(true);
 });

@@ -15,6 +15,7 @@ import { type AttachmentRow, attachments, channels, db, devices, files, items, k
 import { UserError } from './errors';
 import { saveFileVersion } from './fileversions';
 import { hermes } from './hermes';
+import { MEMORY_MAX_BYTES, clearMemory, readMemory, writeMemory } from './memory';
 import { idempotencyKey, idempotentItem, limits, rememberIdempotent, type SlidingWindow } from './limits';
 import { HARD_BLOCKS } from './safety';
 import { presence } from './presence';
@@ -154,6 +155,7 @@ const API_METHODS: [RegExp, string[]][] = [
   [/^\/api\/events$/, ['GET']],
   [/^\/api\/capabilities$/, ['GET']],
   [/^\/api\/suggestions$/, ['GET']],
+  [/^\/api\/memory$/, ['GET', 'PUT', 'DELETE']],
   [/^\/api\/policy$/, ['GET']],
   [/^\/api\/browser\/(status|tabs|vaults)$/, ['GET']],
   [/^\/api\/browser\/(open|input|viewport|autofill)$/, ['POST']],
@@ -412,6 +414,29 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
         connected: { toolsets: caps.toolsets, apps: caps.apps, connectors },
       });
     }
+
+    // ---- memory: the context file the agent starts each turn with ----
+    if (path === '/api/memory' && req.method === 'GET') return json(readMemory());
+    if (path === '/api/memory' && req.method === 'PUT') {
+      // The cap is on the text, not the JSON envelope: read a little past it so the size check below is what
+      // answers 413, and a body too large to read is the same answer rather than a generic 400.
+      let raw: string;
+      try {
+        raw = await readTextCapped(req, MEMORY_MAX_BYTES + 4096);
+      } catch {
+        return err(413, 'memory is too large');
+      }
+      let text: unknown;
+      try {
+        text = (raw ? JSON.parse(raw) : {})?.text;
+      } catch {
+        return err(400, 'expected JSON');
+      }
+      if (typeof text !== 'string') return err(400, 'text must be a string');
+      return json(writeMemory(text));
+    }
+    if (path === '/api/memory' && req.method === 'DELETE') return json(clearMemory());
+
     // The deterministic trust floor around approvals: what is always refused, even with an approval card.
     if (path === '/api/policy' && req.method === 'GET') return json({ blocks: HARD_BLOCKS });
 

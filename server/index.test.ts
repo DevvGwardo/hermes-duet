@@ -1,13 +1,14 @@
 // Route-level tests for the HTTP surface. They call the handlers directly, so no port is bound and no real device is
 // needed beyond a paired cookie.
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, test } from 'bun:test';
 import { MAX_EDIT_BYTES } from '../shared/edit';
 import type { FileEntry } from '../shared/types';
 import { createPairCode, deviceCookie, internalToken, redeemPairCode } from './auth';
-import { attachments, channels, files, items, kv, newId, pages, tasks } from './db';
 import { config } from './config';
+import { attachments, channels, files, items, kv, newId, pages, tasks } from './db';
 import { UserError } from './errors';
 import { hermes } from './hermes';
 import { GENERAL_CHANNEL } from './schema';
@@ -33,6 +34,7 @@ async function authed(path: string, init: RequestInit = {}) {
   return app(path, { ...init, headers: { cookie: await paired(), ...(init.headers as Record<string, string>) } });
 }
 const jsonPost = (body: unknown): RequestInit => ({ method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+const jsonPut = (body: unknown): RequestInit => ({ method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
 describe('paired routes', () => {
   test('health needs no pairing and reveals nothing', async () => {
@@ -595,5 +597,74 @@ describe('file versions', () => {
     const wrong = await authed(`/api/files/${base.id}/versions`);
     expect(wrong.status).toBe(405);
     expect(wrong.headers.get('allow')).toBe('POST');
+  });
+});
+
+describe('memory routes', () => {
+  const ORIGINAL_CONTEXT = config.contextFile;
+  let dir: string;
+  let path: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'duet-memory-route-'));
+    path = join(dir, 'context.local.md');
+    config.contextFile = path;
+  });
+  afterEach(() => {
+    config.contextFile = ORIGINAL_CONTEXT;
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('GET returns the default empty state with the configured path', async () => {
+    const res = await authed('/api/memory');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ path, text: '', max_bytes: 32768 });
+  });
+
+  test('PUT writes the text and GET reads it back', async () => {
+    const text = '- Tasks: run `todo list --today`';
+    const put = await authed('/api/memory', jsonPut({ text }));
+    expect(put.status).toBe(200);
+    expect(((await put.json()) as any).text).toBe(text);
+    expect(readFileSync(path, 'utf8')).toBe(text);
+    const get = await authed('/api/memory');
+    expect(((await get.json()) as any).text).toBe(text);
+  });
+
+  test('PUT over the 32 KB cap is a 413 and writes nothing', async () => {
+    const res = await authed('/api/memory', jsonPut({ text: 'x'.repeat(32769) }));
+    expect(res.status).toBe(413);
+    expect(existsSync(path)).toBe(false);
+  });
+
+  test('DELETE clears the file and returns the empty state', async () => {
+    await authed('/api/memory', jsonPut({ text: 'remember this' }));
+    const res = await authed('/api/memory', { method: 'DELETE' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ path, text: '', max_bytes: 32768 });
+    expect(existsSync(path)).toBe(false);
+  });
+
+  test('needs pairing, like every other app route', async () => {
+    expect((await app('/api/memory')).status).toBe(401);
+    expect((await app('/api/memory', jsonPut({ text: 'x' }))).status).toBe(401);
+    expect((await app('/api/memory', { method: 'DELETE' })).status).toBe(401);
+  });
+
+  test('ignores a path in the body: only the configured context file is touched', async () => {
+    const other = join(dir, 'other.md');
+    writeFileSync(other, 'untouched');
+    const res = await authed('/api/memory', jsonPut({ path: other, text: 'redirected' }));
+    expect(res.status).toBe(200);
+    expect(readFileSync(other, 'utf8')).toBe('untouched');
+    expect(readFileSync(path, 'utf8')).toBe('redirected');
+    const get = await authed('/api/memory');
+    expect(((await get.json()) as any).path).toBe(path);
+  });
+
+  test('a wrong method is a 405 with Allow', async () => {
+    const res = await authed('/api/memory', { method: 'POST' });
+    expect(res.status).toBe(405);
+    expect(res.headers.get('allow')).toBe('GET, PUT, DELETE');
   });
 });
