@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
-import { channels, db, files, kv, newId, pages } from './db';
+import type { Settings } from '../shared/types';
+import { channels, db, files, kv, newId, pages, settings } from './db';
 import { search } from './search';
 
 test('new ids are compact, sortable and unique', () => {
@@ -102,4 +103,43 @@ test('removing a page takes its search row with it', () => {
   expect(search(db, 'retirement').some((h) => h.id === page.id)).toBe(true);
   pages.remove(page.id);
   expect(search(db, 'retirement').some((h) => h.id === page.id)).toBe(false);
+});
+
+// Settings are one JSON blob, so a row saved before the notification preferences existed has no keys for them.
+// The defaults must read as the behavior such an install already had: everything pushes, nothing muted, no cap.
+test('an old settings row reads as the behavior it always had', () => {
+  const before = kv.get<Partial<Settings> | null>('settings', null);
+  try {
+    kv.set('settings', { brief_enabled: false });
+    const s = settings.get();
+    expect(s.notify_tasks).toBe('all');
+    expect(s.notify_agent).toBe(true);
+    expect(s.muted_channels).toEqual([]);
+    expect(s.max_pushes_per_day).toBe(0);
+  } finally {
+    kv.set('settings', before ?? {});
+  }
+});
+
+test('settings.update validates the notification preferences and drops unknown channels', () => {
+  const c = channels.create({ name: 'hc-mute' });
+  const before = kv.get<Partial<Settings> | null>('settings', null);
+  try {
+    const next = settings.update({ notify_tasks: 'failures', notify_agent: false, muted_channels: [c.id, c.id, 'chan-nope'], max_pushes_per_day: 12 });
+    expect(next.notify_tasks).toBe('failures');
+    expect(next.notify_agent).toBe(false);
+    expect(next.muted_channels).toEqual([c.id]);
+    expect(next.max_pushes_per_day).toBe(12);
+  } finally {
+    kv.set('settings', before ?? {});
+  }
+});
+
+test('settings.update refuses a bad notification preference instead of storing it', () => {
+  expect(() => settings.update({ notify_tasks: 'sometimes' as any })).toThrow('notify_tasks');
+  expect(() => settings.update({ notify_agent: 'yes' as any })).toThrow('notify_agent');
+  expect(() => settings.update({ muted_channels: 'nope' as any })).toThrow('muted_channels');
+  expect(() => settings.update({ max_pushes_per_day: -1 })).toThrow('max_pushes_per_day');
+  expect(() => settings.update({ max_pushes_per_day: 101 })).toThrow('max_pushes_per_day');
+  expect(() => settings.update({ max_pushes_per_day: 2.5 })).toThrow('max_pushes_per_day');
 });

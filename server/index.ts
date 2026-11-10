@@ -619,7 +619,7 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
     if (path === '/api/push/test' && req.method === 'POST') {
       const limited = tooMany(limits.pushTests, device, 'test notifications');
       if (limited) return limited;
-      const sent = await notify({ title: 'Hermes Duet', body: 'Notifications are working.', always: true }, { ignoreQuiet: true });
+      const sent = await notify({ title: 'Hermes Duet', body: 'Notifications are working.', always: true }, { ignoreQuiet: true, ignorePrefs: true });
       return json({ sent });
     }
     return methodNotAllowed(path, req.method) ?? err(404, 'not found');

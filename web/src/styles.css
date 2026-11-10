@@ -2170,6 +2170,38 @@ li.done .tick {
   align-items: center;
   gap: 8px;
 }
+.setting-row select,
+.setting-row input[type='number'] {
+  background: #000;
+  border: 1.5px solid var(--line-2);
+  border-radius: 5px;
+  padding: 6px 10px;
+  /* 16px is the threshold below which iOS zooms the whole page when a field takes focus. */
+  font: 400 16px var(--mono);
+  color: var(--paper);
+  color-scheme: dark;
+  max-width: 170px;
+}
+.mute-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.mute-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+  color: var(--paper-2);
+  font-size: 14px;
+  cursor: pointer;
+}
+.mute-row input {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  accent-color: var(--gold);
+}
 .switch {
   appearance: none;
   width: 48px;

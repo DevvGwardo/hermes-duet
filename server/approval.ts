@@ -46,6 +46,7 @@ export function approvalPush(card: Item): PushPayload {
     action_label: c.action_label,
     tag: card.id,
     url: `/?card=${card.id}`,
+    category: 'approval',
   };
 }
 

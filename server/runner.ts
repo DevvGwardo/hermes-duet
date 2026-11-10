@@ -848,7 +848,7 @@ function finishBody(l: Lane, run: ActiveRun, status: 'done' | 'error' | 'stopped
         },
       }),
     );
-    pushSafe({ title: 'Work was interrupted', body: card.card!.title, card_id: card.id, tag: card.id, url: `/?card=${card.id}` });
+    pushSafe({ title: 'Work was interrupted', body: card.card!.title, card_id: card.id, tag: card.id, url: `/?card=${card.id}`, category: 'system', channel_id: card.channel_id });
     return;
   }
 
@@ -868,7 +868,7 @@ function finishBody(l: Lane, run: ActiveRun, status: 'done' | 'error' | 'stopped
         }),
       );
       // The user expects a brief at this hour, so its failure reaches them the way the brief would have.
-      pushSafe({ title: "Your morning brief didn't finish", body: 'Tap to run it again.', card_id: card.id, tag: 'brief', url: `/?card=${card.id}` }, { ignoreQuiet: true });
+      pushSafe({ title: "Your morning brief didn't finish", body: 'Tap to run it again.', card_id: card.id, tag: 'brief', url: `/?card=${card.id}`, category: 'brief', channel_id: card.channel_id }, { ignoreQuiet: true });
     }
   } else if (status === 'error') {
     // A chat or decision turn: a reply that never came reaches the user like one that did, with one tap to retry
@@ -888,7 +888,7 @@ function finishBody(l: Lane, run: ActiveRun, status: 'done' | 'error' | 'stopped
         },
       }),
     );
-    pushSafe({ title: "Couldn't finish", body: card.card!.title, card_id: card.id, tag: card.id, url: `/?card=${card.id}` });
+    pushSafe({ title: "Couldn't finish", body: card.card!.title, card_id: card.id, tag: card.id, url: `/?card=${card.id}`, category: 'system', channel_id: card.channel_id });
   } else if (status === 'done' && l.main) {
     if (spec.kind === 'brief') {
       const { note, stray } = morningOutcome(run);
@@ -896,7 +896,7 @@ function finishBody(l: Lane, run: ActiveRun, status: 'done' | 'error' | 'stopped
       if (stray) console.log(`[brief] no card posted, not pushed: ${firstLine(stray)}`);
     } else if (!run.cards && text) {
       // notify() skips devices that have the app on screen, so this only reaches you when you've walked away.
-      pushSafe({ title: 'Hermes Duet', body: firstLine(text), tag: 'reply' });
+      pushSafe({ title: 'Hermes Duet', body: firstLine(text), tag: 'reply', category: 'system', channel_id: channelOfSpec(spec) });
     }
   }
 }
@@ -932,10 +932,10 @@ function announceEnd(final: Task) {
   const filesNote = delivered.length ? ` Files: ${delivered.join('; ')}.` : '';
   if (final.status === 'done') {
     addContextNote(`Background task "${final.title}" (${taskId}) finished: ${final.result ?? ''}${filesNote} The user has its handover card in the thread.`);
-    pushSafe({ title: `Done: ${final.title}`, body: firstLine(final.result ?? 'Finished.'), tag: `task-${taskId}`, url: `/?card=${card.id}` });
+    pushSafe({ title: `Done: ${final.title}`, body: firstLine(final.result ?? 'Finished.'), tag: `task-${taskId}`, url: `/?card=${card.id}`, category: 'task_done', channel_id: card.channel_id });
   } else {
     addContextNote(`Background task "${final.title}" (${taskId}) failed: ${final.result ?? ''}${filesNote} The user has its card in the thread${card.card!.retry ? ', with a "Try again" button' : ''}.`);
-    pushSafe({ title: `Task failed: ${final.title}`, body: firstLine(final.result ?? ''), tag: `task-${taskId}`, url: `/?card=${card.id}` });
+    pushSafe({ title: `Task failed: ${final.title}`, body: firstLine(final.result ?? ''), tag: `task-${taskId}`, url: `/?card=${card.id}`, category: 'task_failed', channel_id: card.channel_id });
   }
 }
 
@@ -1052,7 +1052,7 @@ function failTask(taskId: string, reason: string, { push = true } = {}) {
   if (!t || t.status === 'cancelled' || t.status === 'done') return;
   putTask({ ...t, status: 'failed', result: reason, progress: '' });
   addContextNote(`Background task "${t.title}" (${taskId}) failed: ${reason}`);
-  if (push) pushSafe({ title: `Task failed: ${t.title}`, body: firstLine(reason), tag: `task-${taskId}` });
+  if (push) pushSafe({ title: `Task failed: ${t.title}`, body: firstLine(reason), tag: `task-${taskId}`, category: 'task_failed', channel_id: channels.forTask(t) });
 }
 
 // ---------------------------------------------------------------------------
@@ -1092,8 +1092,8 @@ function hermesPrompt(run: ActiveRun, ev: RunEvent, kind: 'approval' | 'clarify'
   if (run.spec.taskId) markTaskWaiting(run.spec.taskId);
   pushSafe(
     kind === 'approval'
-      ? approvalPush(item)
-      : { title: 'Quick question', body: card.title, card_id: item.id, approval: false, tag: item.id, url: `/?card=${item.id}` },
+      ? { ...approvalPush(item), channel_id: channel }
+      : { title: 'Quick question', body: card.title, card_id: item.id, approval: false, tag: item.id, url: `/?card=${item.id}`, category: 'question', channel_id: channel },
     { ignoreQuiet: true },
   );
 }
@@ -1243,7 +1243,7 @@ export function deliverableApproval(file: FileEntry, raw: Record<string, unknown
     { type: 'approval', title, body: `${summary}\n\n— from “${file.title}”`, action_label, status: 'pending' },
     { sessionId: channel.session_id, taskId: null, channelId: channel.id },
   );
-  pushSafe(approvalPush(item), { ignoreQuiet: true });
+  pushSafe({ ...approvalPush(item), channel_id: channel.id }, { ignoreQuiet: true });
   return item;
 }
 
@@ -1916,7 +1916,7 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
       if (o.taskId) markTaskWaiting(o.taskId);
       const replaced = swap.apply();
       // Same tag as the withdrawn card's push, so the new banner takes the old one's place on the lock screen.
-      pushSafe({ ...approvalPush(item), ...(replaced && { tag: replaced }) }, { ignoreQuiet: true });
+      pushSafe({ ...approvalPush(item), channel_id: o.channelId, ...(replaced && { tag: replaced }) }, { ignoreQuiet: true });
       return `Approval card ${item.id} is on the user's phone.${swap.note} They have NOT approved yet. Do not take the action now. Tell them in one short line what you're waiting on, then end your turn. You'll get "[approval ${item.id}] APPROVED" or "NOT NOW" as a new message.`;
     }
     case 'request_payment': {
@@ -1934,6 +1934,9 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
           card_id: item.id,
           tag: item.id,
           url: `/?card=${item.id}`,
+          // Spending money is consent: it always reaches the phone, like any approval.
+          category: 'approval',
+          channel_id: o.channelId,
         },
         { ignoreQuiet: true },
       );
@@ -1950,7 +1953,7 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
       const item = postCard({ type: 'choice', title: req(args.question, 'question', 200), body: str(args.context, 4000) || undefined, options, status: 'pending' }, o);
       if (o.taskId) markTaskWaiting(o.taskId);
       const replaced = swap.apply();
-      pushSafe({ title: 'Quick question', body: item.card!.title, card_id: item.id, tag: replaced ?? item.id, url: `/?card=${item.id}` });
+      pushSafe({ title: 'Quick question', body: item.card!.title, card_id: item.id, tag: replaced ?? item.id, url: `/?card=${item.id}`, category: 'question', channel_id: o.channelId });
       return `Question card ${item.id} posted.${swap.note} End your turn now; the answer arrives as "[answer ${item.id}] …".`;
     }
     case 'withdraw_card': {
@@ -1991,6 +1994,8 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
           body: [...entries.slice(0, 3).map((e) => `• ${e.title}`), ...(entries.length > 3 ? [`+${entries.length - 3} more`] : [])].join('\n'),
           tag: morning ? 'brief' : 'checkin',
           url: `/?card=${item.id}`,
+          category: morning ? 'brief' : 'checkin',
+          channel_id: o.channelId,
         },
         { ignoreQuiet: morning },
       );
@@ -2076,7 +2081,7 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
       // The push names a card, so tapping it lands on something, a dismissed banner isn't the only record, and
       // quiet hours hold it for "While you were away" instead of dropping it.
       const item = postCard({ type: 'note', title: noteTitle, body: noteBody || undefined, status: 'info', alert: true }, o);
-      const sent = await notify({ title: item.card!.title, body: item.card!.body ?? '', card_id: item.id, tag: item.id, url: `/?card=${item.id}` });
+      const sent = await notify({ title: item.card!.title, body: item.card!.body ?? '', card_id: item.id, tag: item.id, url: `/?card=${item.id}`, category: 'agent', channel_id: o.channelId });
       if (sent) return `Notification sent. It is also card ${item.id} in the thread.`;
       return inQuietHours(settings.get())
         ? `Card ${item.id} is in the thread. Quiet hours are on, so the push is held until they end.`
