@@ -5,6 +5,7 @@ import { useStore } from '../store';
 import { useDialogTrap } from '../hooks/useDialogTrap';
 import { Icon } from '../ui';
 import { ConnectorsSheet } from './ConnectorsSheet';
+import { RoutinesSheet } from './RoutinesSheet';
 import { WhatICanSee } from './WhatICanSee';
 
 export function SettingsSheet({ onClose }: { onClose: () => void }) {
@@ -20,16 +21,21 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
   const [trig, setTrig] = useState<{ webhook_url: string; watch_dir: string | null; meeting_lead_minutes: number; triggers: { id: string; kind: string; last_triggered_at: number | null }[] } | null>(null);
   const [copied, setCopied] = useState(false);
   const [showConnectors, setShowConnectors] = useState(false);
+  const [routinesOpen, setRoutinesOpen] = useState(false);
   // The hard-block policy is informational only; older servers don't serve it, so a failure just hides the section.
   const [policy, setPolicy] = useState<{ id: string; title: string; detail: string }[] | null>(null);
   const dialog = useRef<HTMLDivElement | null>(null);
   useDialogTrap(dialog);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    // Escape closes the routines or connectors sheet first when one is open on top of this one.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || routinesOpen || showConnectors) return;
+      onClose();
+    };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [onClose, routinesOpen, showConnectors]);
 
   // Probes run AppleScript, so they load when the sheet opens rather than with every snapshot.
   useEffect(() => {
@@ -190,6 +196,17 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
           </section>
 
           <section>
+            <h3>Routines</h3>
+            <p className="muted small">Background tasks on a schedule you write in plain language: every Monday at 9, every 6 hours.</p>
+            <div className="setting-row">
+              <span>Scheduled routines</span>
+              <button className="btn btn-ghost small" onClick={() => setRoutinesOpen(true)}>
+                Manage
+              </button>
+            </div>
+          </section>
+
+          <section>
             <h3>Connectors</h3>
             <div className="setting-row">
               <span>What is connected, and what to add next</span>
@@ -296,6 +313,7 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
         </div>
       </div>
       {showConnectors && <ConnectorsSheet onClose={() => setShowConnectors(false)} />}
+      {routinesOpen && <RoutinesSheet onClose={() => setRoutinesOpen(false)} />}
     </div>
   );
 }

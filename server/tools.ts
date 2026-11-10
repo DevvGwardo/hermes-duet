@@ -256,6 +256,49 @@ export const TOOLS = [
     },
   },
   {
+    name: 'save_routine',
+    description:
+      'Save a user-defined routine: a background task that runs on a schedule you choose (daily, weekly on picked days, or every N minutes). ' +
+      'Each run starts a background task in its own session with its own context and hands the result back on a handover card, so the instructions must be complete and self-contained. ' +
+      'Returns the routine and its next run. Pass routine_id to update an existing routine instead of creating another.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'Short name, e.g. "Weekly inbox summary". At most 120 characters.' },
+        prompt: {
+          type: 'string',
+          description:
+            'Self-contained instructions for the task it starts each run: the goal, the sources, what to deliver. The task gets a fresh session that knows nothing else, and its result reaches the user on a handover card.',
+        },
+        schedule: {
+          type: 'object',
+          description: 'When it runs, in the user\'s local time.',
+          properties: {
+            kind: { type: 'string', enum: ['daily', 'weekly', 'interval'] },
+            time: { type: 'string', description: 'HH:MM (24-hour), local time. For daily and weekly.' },
+            weekdays: { type: 'array', items: { type: 'number' }, description: 'For weekly: 0-6 (Sunday-Saturday) or 1-7 (Monday-Sunday).' },
+            every_minutes: { type: 'number', description: 'For interval: 15 to 10080 (one week).' },
+          },
+          required: ['kind'],
+        },
+        channel_id: { type: 'string', description: 'Optional channel the task and its handover belong to; absent means the general thread.' },
+        enabled: { type: 'boolean', description: 'Default true. false saves it paused.' },
+        routine_id: { type: 'string', description: 'An existing routine to update.' },
+      },
+      required: ['title', 'prompt', 'schedule'],
+    },
+  },
+  {
+    name: 'remove_routine',
+    description:
+      'Remove a user-defined routine so it stops running. Its past tasks and handover cards stay in the thread; only the schedule is deleted.',
+    inputSchema: {
+      type: 'object',
+      properties: { routine_id: { type: 'string', description: 'The routine to remove.' } },
+      required: ['routine_id'],
+    },
+  },
+  {
     name: 'start_task',
     description:
       'Start a larger piece of work in the background (research, building a deck/model/dashboard, multi-step errands) so the conversation stays free. ' +

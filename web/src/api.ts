@@ -1,5 +1,5 @@
 import { settledNotifications } from '../../shared/links';
-import type { Attachment, Capabilities, Channel, Connector, ConnectorSuggestion, FileEntry, Item, SearchHit, ServerEvent, Settings, Snapshot, Task } from '../../shared/types';
+import type { Attachment, Capabilities, Channel, Connector, ConnectorSuggestion, FileEntry, Item, Routine, RoutineSchedule, SearchHit, ServerEvent, Settings, Snapshot, Task } from '../../shared/types';
 import { applyEvent, applySnapshot, channelItems, getState, hasMoreFor, mergeItems, prependItems, setChannel, setChannelMore, setState } from './store';
 
 class HttpError extends Error {
@@ -108,6 +108,14 @@ export const api = {
   search: (q: string) => call<{ hits: SearchHit[]; terms: string[] }>('GET', `/api/search?q=${encodeURIComponent(q)}`),
   /** Save an edited deliverable as a new version; the original file is kept. */
   saveFileVersion: (id: string, text: string) => call<{ file: FileEntry }>('POST', `/api/files/${encodeURIComponent(id)}/versions`, { text }),
+  routines: () => call<{ routines: Routine[] }>('GET', '/api/routines'),
+  /** Create a routine, or update it when `routine_id` (or `id`) is passed. */
+  saveRoutine: (input: { routine_id?: string; id?: string; title: string; prompt: string; schedule: RoutineSchedule; channel_id?: string; enabled?: boolean }) =>
+    call<{ routine: Routine }>('POST', '/api/routines', input),
+  runRoutine: (id: string) => call<{ routine: Routine }>('POST', `/api/routines/${encodeURIComponent(id)}/run`),
+  pauseRoutine: (id: string) => call<{ routine: Routine }>('POST', `/api/routines/${encodeURIComponent(id)}/pause`),
+  resumeRoutine: (id: string) => call<{ routine: Routine }>('POST', `/api/routines/${encodeURIComponent(id)}/resume`),
+  removeRoutine: (id: string) => call<{ ok: true }>('DELETE', `/api/routines/${encodeURIComponent(id)}`),
 };
 
 /**

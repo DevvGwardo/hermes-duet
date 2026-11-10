@@ -3790,3 +3790,85 @@ li.done .tick {
   gap: 10px;
   justify-content: center;
 }
+
+/* ---------------------------------------------------------------- routines */
+.routine-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px 12px 16px;
+}
+.routine-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.routine-actions {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+  max-width: 190px;
+}
+.routine-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.routine-form input,
+.routine-form textarea,
+.routine-form select {
+  width: 100%;
+  background: #0d0d0d;
+  border: 1.5px solid var(--line-2);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 16px; /* >=16px stops iOS zoom-on-focus */
+  color: var(--paper);
+}
+.routine-form textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+.routine-form input:focus,
+.routine-form textarea:focus,
+.routine-form select:focus {
+  outline: 0;
+  border-color: var(--gold);
+}
+.routine-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--paper-2);
+}
+.routine-field input,
+.routine-field select {
+  width: auto;
+  flex: 0 1 180px;
+}
+.day-row {
+  display: flex;
+  gap: 6px;
+}
+.day-chip {
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+  border: 1.5px solid var(--line-2);
+  color: var(--faint);
+  font: 600 13px var(--mono);
+}
+.day-chip.on {
+  background: var(--paper);
+  color: #111;
+  border-color: #000;
+}
+.routine-form-btns {
+  display: flex;
+  gap: 8px;
+}

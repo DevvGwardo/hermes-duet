@@ -1,7 +1,7 @@
 import { Database } from 'bun:sqlite';
 import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { type Attachment, type Channel, type FileEntry, type Item, type Page, type Settings, type Task, attachmentKind } from '../shared/types';
+import { type Attachment, type Channel, type FileEntry, type Item, type Page, type Routine, type Settings, type Task, attachmentKind } from '../shared/types';
 import { type ChannelInput, type ChannelPatch, slugFor } from './channels';
 import { config } from './config';
 import { UserError } from './errors';
@@ -472,6 +472,32 @@ export const pages = {
       db.query('DELETE FROM pages WHERE id = ?').run(id);
       searchIndex.remove(id);
     });
+  },
+};
+
+// ---------- routines ----------
+const routineGet = db.query<{ json: string }, [string]>('SELECT json FROM routines WHERE id = ?');
+// Soonest first: the scheduler reads the list in due order and the sheet shows the same order.
+const routineAll = db.query<{ json: string }, []>('SELECT json FROM routines ORDER BY next_run, created_at, id');
+const routineUpsert = db.query(
+  `INSERT INTO routines(id, enabled, next_run, created_at, json) VALUES (?, ?, ?, ?, ?)
+   ON CONFLICT(id) DO UPDATE SET enabled = excluded.enabled, next_run = excluded.next_run, json = excluded.json`,
+);
+const routineDelete = db.query('DELETE FROM routines WHERE id = ?');
+export const routines = {
+  all(): Routine[] {
+    return routineAll.all().map((r) => JSON.parse(r.json) as Routine);
+  },
+  get(id: string): Routine | null {
+    const row = routineGet.get(id);
+    return row ? (JSON.parse(row.json) as Routine) : null;
+  },
+  save(routine: Routine) {
+    routineUpsert.run(routine.id, routine.enabled ? 1 : 0, routine.next_run ?? null, routine.created_at, JSON.stringify(routine));
+    return routine;
+  },
+  remove(id: string) {
+    return routineDelete.run(id).changes > 0;
   },
 };
 

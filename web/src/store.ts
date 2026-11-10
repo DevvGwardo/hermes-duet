@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import { trackPending } from '../../shared/pending';
-import type { AgentState, Channel, FileEntry, Item, Page, ServerEvent, Settings, Snapshot, Task } from '../../shared/types';
+import type { AgentState, Channel, FileEntry, Item, Page, Routine, ServerEvent, Settings, Snapshot, Task } from '../../shared/types';
 
 export interface State {
   ready: boolean;
@@ -12,6 +12,8 @@ export interface State {
   /** Cards waiting on the user, from the server, not filtered from the loaded `items` page. */
   pending: Item[];
   tasks: Task[];
+  /** User-defined recurring routines, soonest next run first. */
+  routines: Routine[];
   files: FileEntry[];
   /** Standing pages, pinned at the top of Make. */
   pages: Page[];
@@ -34,6 +36,7 @@ let state: State = {
   hasMoreBy: {},
   pending: [],
   tasks: [],
+  routines: [],
   files: [],
   pages: [],
   channels: [],
@@ -73,6 +76,8 @@ function upsert<T extends { id: string }>(list: T[], value: T, sort?: (a: T, b: 
 
 const byCreated = (a: { created_at: number }, b: { created_at: number }) => a.created_at - b.created_at;
 const byUpdatedDesc = (a: { updated_at: number }, b: { updated_at: number }) => b.updated_at - a.updated_at;
+/** Soonest next run first; a routine with no next run (paused before its first save) sorts last. */
+const byNextRun = (a: Routine, b: Routine) => (a.next_run ?? Infinity) - (b.next_run ?? Infinity);
 
 export function applySnapshot(s: Snapshot) {
   setState((current) => {
@@ -93,6 +98,7 @@ export function applySnapshot(s: Snapshot) {
       hasMoreBy,
       pending: s.pending,
       tasks: s.tasks.sort(byUpdatedDesc),
+      routines: (s.routines ?? []).sort(byNextRun),
       files: s.files,
       pages: s.pages ?? [],
       channels,
@@ -159,6 +165,12 @@ export function applyEvent(ev: ServerEvent) {
       break;
     case 'task':
       setState((s) => ({ tasks: upsert(s.tasks, ev.task, byUpdatedDesc) }));
+      break;
+    case 'routine':
+      setState((s) => ({ routines: upsert(s.routines, ev.routine, byNextRun) }));
+      break;
+    case 'routine_removed':
+      setState((s) => ({ routines: s.routines.filter((r) => r.id !== ev.id) }));
       break;
     case 'file':
       // A known file is updated in place (save_page marks one as a page version), so newest-first order holds.
