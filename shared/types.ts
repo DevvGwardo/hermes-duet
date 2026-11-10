@@ -259,6 +259,17 @@ export interface Connector {
   hint?: string;
 }
 
+/**
+ * A read-only "what to connect next" card. The app never installs or authorizes anything: the hint is
+ * guidance the user follows by hand.
+ */
+export interface ConnectorSuggestion {
+  id: string;
+  title: string;
+  detail: string;
+  hint?: string;
+}
+
 export type TaskStatus = 'queued' | 'running' | 'waiting' | 'done' | 'failed' | 'cancelled';
 
 /** When a user-defined routine runs. Times are local wall-clock "HH:MM". */

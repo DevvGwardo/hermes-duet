@@ -51,12 +51,14 @@ export function ChannelsSheet({ onClose }: { onClose: () => void }) {
   const [name, setName] = useState('');
   const [topic, setTopic] = useState('');
   const [group, setGroup] = useState('');
+  const [repo, setRepo] = useState('');
   const [instructions, setInstructions] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [eTopic, setETopic] = useState('');
   const [eGroup, setEGroup] = useState('');
+  const [eRepo, setERepo] = useState('');
   const [eInstructions, setEInstructions] = useState('');
   const dialog = useRef<HTMLDivElement | null>(null);
   useDialogTrap(dialog);
@@ -91,10 +93,12 @@ export function ChannelsSheet({ onClose }: { onClose: () => void }) {
       const { channel } = await api.createChannel(name.trim(), topic.trim() || undefined, {
         ...(instructions.trim() ? { instructions: instructions.trim() } : {}),
         ...(group.trim() ? { group: group.trim() } : {}),
+        ...(repo.trim() ? { repo: repo.trim() } : {}),
       });
       setName('');
       setTopic('');
       setGroup('');
+      setRepo('');
       setInstructions('');
       await openChannel(channel.id);
       onClose();
@@ -109,6 +113,7 @@ export function ChannelsSheet({ onClose }: { onClose: () => void }) {
     setEditing(c.id);
     setETopic(c.topic ?? '');
     setEGroup(c.group ?? '');
+    setERepo(c.repo ?? '');
     setEInstructions(c.instructions ?? '');
     setErr(null);
   }
@@ -118,7 +123,7 @@ export function ChannelsSheet({ onClose }: { onClose: () => void }) {
     setErr(null);
     try {
       // Empty strings clear the field server-side; absent keys would leave it alone.
-      await api.updateChannel(id, { topic: eTopic.trim(), instructions: eInstructions.trim(), group: eGroup.trim() });
+      await api.updateChannel(id, { topic: eTopic.trim(), instructions: eInstructions.trim(), group: eGroup.trim(), repo: eRepo.trim() });
       setEditing(null);
     } catch (e: any) {
       setErr(e?.message ?? 'Could not save that channel.');
@@ -161,6 +166,19 @@ export function ChannelsSheet({ onClose }: { onClose: () => void }) {
             {c.id === active && <Icon.check size={16} />}
           </button>
           <span className="channel-row-actions">
+            {c.repo && (
+              <a
+                className="channel-repo"
+                href={c.repo}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={`Open ${c.repo} in a new tab`}
+                aria-label={`Open ${c.repo}`}
+              >
+                <Icon.globe size={14} />
+                <span className="channel-repo-text">{c.repo.replace(/^https?:\/\//, '')}</span>
+              </a>
+            )}
             <button className="icon-btn" disabled={busy} onClick={() => (editing === c.id ? setEditing(null) : startEdit(c))} aria-label={`Edit ${c.slug}`} title="Edit channel">
               <Icon.pencil size={16} />
             </button>
@@ -181,6 +199,16 @@ export function ChannelsSheet({ onClose }: { onClose: () => void }) {
           >
             <input value={eTopic} onChange={(e) => setETopic(e.target.value)} placeholder="What it is for (optional)" aria-label="Channel topic" maxLength={200} />
             <input value={eGroup} onChange={(e) => setEGroup(e.target.value)} placeholder="Group (optional)" aria-label="Channel group" maxLength={40} />
+            <input
+              value={eRepo}
+              onChange={(e) => setERepo(e.target.value)}
+              placeholder="Repo (owner/name or GitHub URL, optional)"
+              aria-label="Channel repo"
+              maxLength={200}
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+            />
             <textarea
               value={eInstructions}
               onChange={(e) => setEInstructions(e.target.value)}
@@ -239,6 +267,16 @@ export function ChannelsSheet({ onClose }: { onClose: () => void }) {
               <input value={name} onChange={(e) => setName(e.target.value)} placeholder="taxes" aria-label="Channel name" maxLength={40} autoCapitalize="off" />
               <input value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="What it is for (optional)" aria-label="Channel topic" maxLength={200} />
               <input value={group} onChange={(e) => setGroup(e.target.value)} placeholder="Group (optional)" aria-label="Channel group" maxLength={40} />
+              <input
+                value={repo}
+                onChange={(e) => setRepo(e.target.value)}
+                placeholder="Repo (owner/name or GitHub URL, optional)"
+                aria-label="Channel repo"
+                maxLength={200}
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+              />
               <textarea
                 value={instructions}
                 onChange={(e) => setInstructions(e.target.value)}

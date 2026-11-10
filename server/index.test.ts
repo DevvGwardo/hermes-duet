@@ -91,6 +91,47 @@ describe('paired routes', () => {
     expect(res.status).toBe(404);
   });
 
+  test('creating a channel stores a normalized repo', async () => {
+    const res = await authed('/api/channels', jsonPost({ name: `repo-${newId().slice(-6)}`, repo: ' owner/name ' }));
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as any).channel.repo).toBe('https://github.com/owner/name');
+  });
+
+  test('updating a channel repo normalizes it, and empty clears it', async () => {
+    const created = (await (await authed('/api/channels', jsonPost({ name: `repoedit-${newId().slice(-6)}` }))).json()) as any;
+    const updated = await authed('/api/channels', jsonPost({ id: created.channel.id, repo: 'https://github.com/other/project.git' }));
+    expect(((await updated.json()) as any).channel.repo).toBe('https://github.com/other/project');
+    const cleared = await authed('/api/channels', jsonPost({ id: created.channel.id, repo: '' }));
+    expect(((await cleared.json()) as any).channel.repo).toBe(null);
+  });
+
+  test('a repo that is not owner/name or a GitHub URL is a 400 with the reason', async () => {
+    const res = await authed('/api/channels', jsonPost({ name: `badrepo-${newId().slice(-6)}`, repo: 'gitlab.com/owner/name' }));
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as any).error).toMatch(/github\.com/);
+  });
+
+  test('/api/suggestions needs a paired device', async () => {
+    const res = await app('/api/suggestions');
+    expect(res.status).toBe(401);
+  });
+
+  test('/api/suggestions returns the connected summary and read-only suggestions', async () => {
+    const res = await authed('/api/suggestions');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any;
+    expect(Array.isArray(body.suggestions)).toBe(true);
+    expect(body.suggestions.length).toBeLessThanOrEqual(3);
+    expect(Array.isArray(body.connected.apps)).toBe(true);
+    expect(Array.isArray(body.connected.connectors)).toBe(true);
+    expect(body.connected.toolsets === null || Array.isArray(body.connected.toolsets)).toBe(true);
+    for (const s of body.suggestions) {
+      expect(typeof s.id).toBe('string');
+      expect(typeof s.title).toBe('string');
+      expect(typeof s.detail).toBe('string');
+    }
+  });
+
   test('marking a channel seen records it, and a missing one is a 404', async () => {
     const created = (await (await authed('/api/channels', jsonPost({ name: `seen-${newId().slice(-6)}` }))).json()) as any;
     expect((await authed(`/api/channels/${created.channel.id}/seen`, { method: 'POST' })).status).toBe(200);

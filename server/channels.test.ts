@@ -2,9 +2,12 @@ import { describe, expect, test } from 'bun:test';
 import {
   CHANNEL_GROUP_MAX,
   CHANNEL_INSTRUCTIONS_MAX,
+  CHANNEL_REPO_MAX,
   channelInput,
   channelLine,
   channelPatch,
+  cleanRepo,
+  normalizeRepo,
   slugFor,
 } from './channels';
 
@@ -82,6 +85,69 @@ describe('channelLine', () => {
     expect(line).toContain('never override your safety rules');
     // No instructions means no standing block at all, not an empty label.
     expect(channelLine({ name: 'taxes', topic: 't' }, false)).not.toContain('Standing instructions');
+  });
+
+  test('a repo adds one bounded line and keeps the safety clause', () => {
+    const line = channelLine({ name: 'work', topic: 't', instructions: 'Be terse.', repo: 'https://github.com/owner/name' }, false);
+    expect(line).toContain('This channel works in the repository https://github.com/owner/name');
+    expect(line).toContain('connected GitHub tools');
+    expect(line).toContain('never push');
+    expect(line).toContain('approval');
+    expect(line).toContain('never override your safety rules');
+    // The repo line is one sentence, not a second block of instructions.
+    expect(line.indexOf('This channel works in the repository')).toBeGreaterThan(line.indexOf('Its topic: t.'));
+  });
+
+  test('no repo means no repo line', () => {
+    expect(channelLine({ name: 'work', topic: 't' }, false)).not.toContain('repository');
+  });
+});
+
+describe('channel repo', () => {
+  test('limits are exported for the client', () => {
+    expect(CHANNEL_REPO_MAX).toBe(200);
+  });
+
+  test('owner/name is normalized to a canonical https URL', () => {
+    expect(normalizeRepo('  DevvGwardo/hermes-duet  ')).toBe('https://github.com/DevvGwardo/hermes-duet');
+    expect(channelInput({ name: 'work', repo: 'owner/name' }).repo).toBe('https://github.com/owner/name');
+  });
+
+  test('an http(s) GitHub URL is normalized, dropping .git, deeper paths and queries', () => {
+    expect(normalizeRepo('http://github.com/owner/name.git')).toBe('https://github.com/owner/name');
+    expect(normalizeRepo('https://www.github.com/owner/name/tree/main?x=1')).toBe('https://github.com/owner/name');
+    expect(channelInput({ name: 'work', repo: 'https://github.com/owner/name.git' }).repo).toBe('https://github.com/owner/name');
+  });
+
+  test('refuses anything that is not owner/name or a github.com URL', () => {
+    expect(() => normalizeRepo('owner')).toThrow(/owner\/name/);
+    expect(() => normalizeRepo('owner/name extra')).toThrow(/owner\/name/);
+    expect(() => normalizeRepo('gitlab.com/owner/name')).toThrow(/github\.com/);
+    expect(() => normalizeRepo('https://example.com/owner/name')).toThrow(/github\.com/);
+    expect(() => normalizeRepo('https://github.com/owner')).toThrow(/owner\/name/);
+    expect(() => normalizeRepo('../..')).toThrow(/owner\/name/);
+    expect(() => normalizeRepo('x'.repeat(CHANNEL_REPO_MAX + 1))).toThrow(/at most 200/);
+  });
+
+  test('a blank repo is null, so create never stores a blank string', () => {
+    expect(cleanRepo('   ')).toBe(null);
+    expect(cleanRepo('')).toBe(null);
+    expect(channelInput({ name: 'work', repo: '  ' })).toEqual({ name: 'work' });
+  });
+});
+
+describe('channelPatch repo', () => {
+  test('a present-but-empty repo clears the column', () => {
+    expect(channelPatch({ repo: '' })).toEqual({ repo: null });
+    expect(channelPatch({ repo: '   ' })).toEqual({ repo: null });
+  });
+
+  test('a repo is normalized like channelInput', () => {
+    expect(channelPatch({ repo: ' owner/name ' })).toEqual({ repo: 'https://github.com/owner/name' });
+  });
+
+  test('an absent key leaves the repo alone', () => {
+    expect(channelPatch({ topic: 'x' })).toEqual({ topic: 'x' });
   });
 });
 

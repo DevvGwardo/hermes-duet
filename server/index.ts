@@ -20,6 +20,7 @@ import { hasSubscriptions, notify, publicKey, saveSubscription } from './push';
 import { abortActiveRuns, actOnCard, agentState, cancelTask, confirmTask, deliverableAction, deliverableApproval, executeTool, recoverOrphans, reopenTask, runBrief, runCheckin, startConnectorWatch, startHermesWatch, startUserTask, steerTask, stopMain, stopPage, submitSystem, submitUser } from './runner';
 import { ftsQuery, search } from './search';
 import { startScheduler } from './scheduler';
+import { suggestedConnectors } from './suggestions';
 import { downloadsPrompt, inboundIp, meetingPrompt, webhookMatches, webhookPrompt, type WatchedFile } from './triggers';
 import { checkMeetings, meetingPrepEnabled, recordWebhook, recordWebhookIp, startFolderWatch, webhookIpReady, webhookReady, webhookToken } from './triggers-runtime';
 import { MAX_UPLOAD_BYTES, checkBodySize, normalizeMime, saveUpload, uploadDir } from './uploads';
@@ -147,6 +148,7 @@ const API_METHODS: [RegExp, string[]][] = [
   [/^\/api\/triggers$/, ['GET']],
   [/^\/api\/events$/, ['GET']],
   [/^\/api\/capabilities$/, ['GET']],
+  [/^\/api\/suggestions$/, ['GET']],
   [/^\/api\/policy$/, ['GET']],
   [/^\/api\/browser\/(status|tabs|vaults)$/, ['GET']],
   [/^\/api\/browser\/(open|input|viewport|autofill)$/, ['POST']],
@@ -374,6 +376,14 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
     }
     if (path === '/api/events' && req.method === 'GET') return sseResponse(req);
     if (path === '/api/capabilities' && req.method === 'GET') return json(await capabilities());
+    // Read-only discovery: what is already connected, plus up to three suggestions the user can act on by hand.
+    if (path === '/api/suggestions' && req.method === 'GET') {
+      const [caps, connectors] = await Promise.all([capabilities(), listConnectors()]);
+      return json({
+        suggestions: suggestedConnectors({ capabilities: caps, connectors, channels: channels.all() }),
+        connected: { toolsets: caps.toolsets, apps: caps.apps, connectors },
+      });
+    }
     // The deterministic trust floor around approvals: what is always refused, even with an approval card.
     if (path === '/api/policy' && req.method === 'GET') return json({ blocks: HARD_BLOCKS });
 

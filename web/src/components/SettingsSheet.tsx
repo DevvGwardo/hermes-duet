@@ -4,6 +4,7 @@ import { api, enablePush, isStandalone, pushSupported } from '../api';
 import { useStore } from '../store';
 import { useDialogTrap } from '../hooks/useDialogTrap';
 import { Icon } from '../ui';
+import { ConnectorsSheet } from './ConnectorsSheet';
 import { WhatICanSee } from './WhatICanSee';
 
 export function SettingsSheet({ onClose }: { onClose: () => void }) {
@@ -17,6 +18,7 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
   const [connErr, setConnErr] = useState<string | null>(null);
   const [trig, setTrig] = useState<{ webhook_url: string; watch_dir: string | null; meeting_lead_minutes: number; triggers: { id: string; kind: string; last_triggered_at: number | null }[] } | null>(null);
   const [copied, setCopied] = useState(false);
+  const [showConnectors, setShowConnectors] = useState(false);
   // The hard-block policy is informational only; older servers don't serve it, so a failure just hides the section.
   const [policy, setPolicy] = useState<{ id: string; title: string; detail: string }[] | null>(null);
   const dialog = useRef<HTMLDivElement | null>(null);
@@ -137,6 +139,12 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
 
           <section>
             <h3>Connectors</h3>
+            <div className="setting-row">
+              <span>What is connected, and what to add next</span>
+              <button className="btn btn-ghost small" onClick={() => setShowConnectors(true)}>
+                Open
+              </button>
+            </div>
             <p className="muted small">Native apps on this Mac. Nothing leaves it: each one is a local CLI or AppleScript.</p>
             {connErr && <p className="card-error">{connErr}</p>}
             {!connectors && !connErr && <p className="muted small">Checking…</p>}
@@ -235,6 +243,7 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
           </section>
         </div>
       </div>
+      {showConnectors && <ConnectorsSheet onClose={() => setShowConnectors(false)} />}
     </div>
   );
 }

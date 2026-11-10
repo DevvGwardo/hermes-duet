@@ -68,6 +68,28 @@ test('instructions and group round-trip through create, read and update', () => 
   expect(channels.update(created.id, { instructions: null })?.instructions).toBeNull();
 });
 
+test('a repo round-trips through create, read and update', () => {
+  // `ChannelInput` is the cleaned shape channelInput produces, so the repo arrives already normalized.
+  const created = channels.create({ name: 'hc-repo', repo: 'https://github.com/owner/name' });
+  expect(created.repo).toBe('https://github.com/owner/name');
+  expect(channels.get(created.id)).toMatchObject({ repo: 'https://github.com/owner/name' });
+  // The list query carries it too, so the sheet can show the link without a second fetch.
+  expect(channels.all().find((c) => c.id === created.id)).toMatchObject({ repo: 'https://github.com/owner/name' });
+
+  const updated = channels.update(created.id, { repo: 'https://github.com/other/project' });
+  expect(updated?.repo).toBe('https://github.com/other/project');
+  // Absent keys leave the repo alone.
+  expect(channels.update(created.id, { topic: 'x' })?.repo).toBe('https://github.com/other/project');
+  // A null clears it back to nothing.
+  expect(channels.update(created.id, { repo: null })?.repo).toBeNull();
+});
+
+test('a channel created without a repo reads back as null', () => {
+  const created = channels.create({ name: 'hc-norepo' });
+  expect(created.repo ?? null).toBe(null);
+  expect(channels.all().find((c) => c.id === created.id)?.repo ?? null).toBe(null);
+});
+
 test('a channel created before instructions and groups still reads back fine', () => {
   const created = channels.create({ name: 'hc-plain', topic: 'old style' });
   const row = channels.get(created.id)!;
