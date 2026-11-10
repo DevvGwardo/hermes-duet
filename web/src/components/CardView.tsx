@@ -244,6 +244,11 @@ function PaymentDetails({ card }: { card: CardData }) {
         <strong>{price(card.amount_cents ?? 0)}</strong>
       </div>
       {card.merchant && <div className="payment-merchant">To {card.merchant}</div>}
+      {card.merchant_host && (
+        <div className="payment-merchant">
+          Site: {card.merchant_url ? <a href={card.merchant_url} target="_blank" rel="noopener noreferrer">{card.merchant_host}</a> : card.merchant_host}
+        </div>
+      )}
       {card.cap_cents ? (
         <div className="payment-cap">
           Capped at {price(card.cap_cents)} per payment{card.amount_cents !== undefined && card.amount_cents < card.cap_cents ? ` · ${price(card.cap_cents - card.amount_cents)} under the limit` : ''}
