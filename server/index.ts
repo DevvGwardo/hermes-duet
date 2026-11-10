@@ -4,21 +4,26 @@ import { brotliCompressSync, gzipSync } from 'node:zlib';
 import type { Snapshot } from '../shared/types';
 import { briefSpeech, speak, transcribeFile } from './audio';
 import { capabilities } from './capabilities';
-import { channelInput } from './channels';
+import { channelInput, channelPatch } from './channels';
 import { encodedPath, encodingHeaders, preferredEncoding } from './compress';
 import { createPairCode, deviceCookie, deviceFor, internalToken, isHttps, pairBlocked, redeemPairCode, sameOrigin } from './auth';
 import { listConnectors, testConnector } from './connectors';
 import { sseResponse } from './bus';
 import { config } from './config';
-import { type AttachmentRow, attachments, channels, db, devices, files, items, kv, newId, pages, prune, settings, tasks, toAttachment, triggers } from './db';
+import { MAX_EDIT_BYTES } from '../shared/edit';
+import { type AttachmentRow, attachments, channels, db, devices, files, items, kv, newId, pages, prune, routines, settings, tasks, toAttachment, triggers } from './db';
 import { UserError } from './errors';
+import { saveFileVersion } from './fileversions';
 import { hermes } from './hermes';
+import { MEMORY_MAX_BYTES, clearMemory, readMemory, writeMemory } from './memory';
 import { idempotencyKey, idempotentItem, limits, rememberIdempotent, type SlidingWindow } from './limits';
+import { HARD_BLOCKS } from './safety';
 import { presence } from './presence';
 import { hasSubscriptions, notify, publicKey, saveSubscription } from './push';
-import { abortActiveRuns, actOnCard, agentState, cancelTask, deliverableAction, deliverableApproval, executeTool, recoverOrphans, runBrief, runCheckin, startConnectorWatch, startHermesWatch, startUserTask, stopMain, stopPage, submitSystem, submitUser } from './runner';
+import { abortActiveRuns, actOnCard, agentState, cancelTask, confirmTask, deliverableAction, deliverableApproval, executeTool, recoverOrphans, removeRoutine, reopenTask, runBrief, runCheckin, runRoutineNow, saveRoutine, setRoutineEnabled, startConnectorWatch, startHermesWatch, startUserTask, steerTask, stopMain, stopPage, submitSystem, submitUser } from './runner';
 import { ftsQuery, search } from './search';
 import { startScheduler } from './scheduler';
+import { suggestedConnectors } from './suggestions';
 import { downloadsPrompt, inboundIp, meetingPrompt, webhookMatches, webhookPrompt, type WatchedFile } from './triggers';
 import { checkMeetings, meetingPrepEnabled, recordWebhook, recordWebhookIp, startFolderWatch, webhookIpReady, webhookReady, webhookToken } from './triggers-runtime';
 import { MAX_UPLOAD_BYTES, checkBodySize, normalizeMime, saveUpload, uploadDir } from './uploads';
@@ -65,9 +70,9 @@ export async function readTextCapped(req: Request, limit: number): Promise<strin
   return new TextDecoder().decode(Buffer.concat(chunks));
 }
 
-async function body<T = any>(req: Request): Promise<T> {
+async function body<T = any>(req: Request, limit = 256_000): Promise<T> {
   if (!(req.headers.get('content-type') ?? '').includes('application/json')) throw new Error('expected JSON');
-  const text = await readTextCapped(req, 256_000);
+  const text = await readTextCapped(req, limit);
   return (text ? JSON.parse(text) : {}) as T;
 }
 
@@ -140,17 +145,26 @@ const API_METHODS: [RegExp, string[]][] = [
   [/^\/api\/channels\/[\w-]+$/, ['DELETE']],
   [/^\/api\/channels\/[\w-]+\/seen$/, ['POST']],
   [/^\/api\/channels\/[\w-]+\/items$/, ['GET']],
+  [/^\/api\/routines$/, ['GET', 'POST']],
+  [/^\/api\/routines\/[\w-]+$/, ['DELETE']],
+  [/^\/api\/routines\/[\w-]+\/(run|pause|resume)$/, ['POST']],
   [/^\/api\/search$/, ['GET']],
   [/^\/api\/connectors$/, ['GET']],
   [/^\/api\/connectors\/[\w-]+\/test$/, ['POST']],
   [/^\/api\/triggers$/, ['GET']],
   [/^\/api\/events$/, ['GET']],
   [/^\/api\/capabilities$/, ['GET']],
+  [/^\/api\/suggestions$/, ['GET']],
+  [/^\/api\/memory$/, ['GET', 'PUT', 'DELETE']],
+  [/^\/api\/policy$/, ['GET']],
   [/^\/api\/browser\/(status|tabs|vaults)$/, ['GET']],
   [/^\/api\/browser\/(open|input|viewport|autofill)$/, ['POST']],
   [/^\/api\/messages$/, ['POST']],
   [/^\/api\/tasks$/, ['POST']],
   [/^\/api\/tasks\/[\w-]+\/cancel$/, ['POST']],
+  [/^\/api\/tasks\/[\w-]+\/confirm$/, ['POST']],
+  [/^\/api\/tasks\/[\w-]+\/reopen$/, ['POST']],
+  [/^\/api\/tasks\/[\w-]+\/message$/, ['POST']],
   [/^\/api\/uploads$/, ['POST']],
   [/^\/api\/uploads\/[\w-]+$/, ['GET']],
   [/^\/api\/audio\/transcribe$/, ['POST']],
@@ -158,6 +172,7 @@ const API_METHODS: [RegExp, string[]][] = [
   [/^\/api\/runs\/stop$/, ['POST']],
   [/^\/api\/pages\/[\w-]+$/, ['DELETE']],
   [/^\/api\/files\/[\w-]+$/, ['GET']],
+  [/^\/api\/files\/[\w-]+\/versions$/, ['POST']],
   [/^\/api\/settings$/, ['PUT']],
   [/^\/api\/brief\/run$/, ['POST']],
   [/^\/api\/brief\/[\w-]+\/audio$/, ['GET']],
@@ -289,6 +304,7 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
         has_more: page.has_more,
         pending: items.pendingCards(),
         tasks: tasks.recent(),
+        routines: routines.all(),
         files: files.all(),
         pages: pages.all(),
         channels: channels.all(),
@@ -311,7 +327,16 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
     // ---- topic channels (see server/channels.ts) ----
     if (path === '/api/channels' && req.method === 'GET') return json({ channels: channels.all() });
     if (path === '/api/channels' && req.method === 'POST') {
-      const channel = channels.create(channelInput(await body(req)));
+      const rawBody = await body(req);
+      // An `id` of a channel that is still open edits it (the sheet's save path); anything else creates.
+      if (typeof (rawBody as any)?.id === 'string' && (rawBody as any).id) {
+        const existing = channels.get((rawBody as any).id);
+        if (!existing) return err(404, 'no such channel');
+        const channel = channels.update(existing.id, channelPatch(rawBody));
+        broadcast({ type: 'channel', channel: channel! });
+        return json({ channel });
+      }
+      const channel = channels.create(channelInput(rawBody));
       broadcast({ type: 'channel', channel });
       return json({ channel });
     }
@@ -333,6 +358,27 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
       const before = url.searchParams.get('before') ?? '';
       if (before) return json(items.before(before, 100, channelItems[1]));
       return json(items.latest(100, channelItems[1]));
+    }
+
+    // ---- user-defined recurring routines ----
+    if (path === '/api/routines' && req.method === 'GET') return json({ routines: routines.all() });
+    if (path === '/api/routines' && req.method === 'POST') {
+      // `id` edits (the sheet's save path) exactly like the tool's routine_id; anything else creates.
+      const routine = saveRoutine(await body<Record<string, unknown>>(req));
+      return json({ routine });
+    }
+    const routineMatch = path.match(/^\/api\/routines\/([\w-]+)$/);
+    if (routineMatch && req.method === 'DELETE') {
+      if (!removeRoutine(routineMatch[1])) return err(404, 'no such routine');
+      return json({ ok: true });
+    }
+    const routineAction = path.match(/^\/api\/routines\/([\w-]+)\/(run|pause|resume)$/);
+    if (routineAction && req.method === 'POST') {
+      const id = routineAction[1];
+      if (routineAction[2] === 'run') return json({ routine: runRoutineNow(id) });
+      const routine = setRoutineEnabled(id, routineAction[2] === 'resume');
+      if (!routine) return err(404, 'no such routine');
+      return json({ routine });
     }
 
     // ---- global search over the thread, tasks, files and pages ----
@@ -360,6 +406,39 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
     }
     if (path === '/api/events' && req.method === 'GET') return sseResponse(req);
     if (path === '/api/capabilities' && req.method === 'GET') return json(await capabilities());
+    // Read-only discovery: what is already connected, plus up to three suggestions the user can act on by hand.
+    if (path === '/api/suggestions' && req.method === 'GET') {
+      const [caps, connectors] = await Promise.all([capabilities(), listConnectors()]);
+      return json({
+        suggestions: suggestedConnectors({ capabilities: caps, connectors, channels: channels.all() }),
+        connected: { toolsets: caps.toolsets, apps: caps.apps, connectors },
+      });
+    }
+
+    // ---- memory: the context file the agent starts each turn with ----
+    if (path === '/api/memory' && req.method === 'GET') return json(readMemory());
+    if (path === '/api/memory' && req.method === 'PUT') {
+      // The cap is on the text, not the JSON envelope: read a little past it so the size check below is what
+      // answers 413, and a body too large to read is the same answer rather than a generic 400.
+      let raw: string;
+      try {
+        raw = await readTextCapped(req, MEMORY_MAX_BYTES + 4096);
+      } catch {
+        return err(413, 'memory is too large');
+      }
+      let text: unknown;
+      try {
+        text = (raw ? JSON.parse(raw) : {})?.text;
+      } catch {
+        return err(400, 'expected JSON');
+      }
+      if (typeof text !== 'string') return err(400, 'text must be a string');
+      return json(writeMemory(text));
+    }
+    if (path === '/api/memory' && req.method === 'DELETE') return json(clearMemory());
+
+    // The deterministic trust floor around approvals: what is always refused, even with an approval card.
+    if (path === '/api/policy' && req.method === 'GET') return json({ blocks: HARD_BLOCKS });
 
     // ---- live browser pane (see server/browser.ts) ----
     if (path === '/api/browser/ws' && req.method === 'GET') {
@@ -535,6 +614,25 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
       await cancelTask(taskMatch[1]);
       return json({ ok: true });
     }
+    // The user's own completion is the real one; the agent's done only ever "looks done".
+    const taskConfirm = path.match(/^\/api\/tasks\/([\w-]+)\/(confirm|reopen)$/);
+    if (taskConfirm && req.method === 'POST') {
+      const task = taskConfirm[2] === 'confirm' ? confirmTask(taskConfirm[1]) : reopenTask(taskConfirm[1]);
+      return json({ task });
+    }
+    // Steering a running task mid-flight: the same budget as a chat message, the same cap, and a 409 — not a
+    // silent queue — when the task has no live run to steer.
+    const taskMessage = path.match(/^\/api\/tasks\/([\w-]+)\/message$/);
+    if (taskMessage && req.method === 'POST') {
+      const limited = tooMany(limits.messages, device, 'messages');
+      if (limited) return limited;
+      const { text } = await body<{ text?: string }>(req);
+      const t = String(text ?? '');
+      if (!t.trim()) return err(400, 'empty message');
+      if (t.length > MAX_MESSAGE) return err(400, 'message too long');
+      const { delivered } = await steerTask(taskMessage[1], t);
+      return json({ task: tasks.get(taskMessage[1]), delivered });
+    }
     const pageMatch = path.match(/^\/api\/pages\/([\w-]+)$/);
     if (pageMatch && req.method === 'DELETE') {
       await stopPage(pageMatch[1]);
@@ -543,6 +641,33 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
 
     const fileMatch = path.match(/^\/api\/files\/([\w-]+)$/);
     if (fileMatch && req.method === 'GET') return await serveFile(fileMatch[1], url.searchParams.has('download'));
+
+    // ---- editing a delivered file: save the text as a new version, keeping the original ----
+    const fileVersionMatch = path.match(/^\/api\/files\/([\w-]*)\/versions$/);
+    if (fileVersionMatch && req.method === 'POST') {
+      const existing = fileVersionMatch[1] ? files.get(fileVersionMatch[1]) : null;
+      if (!existing) return err(404, 'no such file');
+      // The cap is on the text, but JSON escaping can double its size (a file of newlines or quotes), so the
+      // door leaves room for that; the text itself is measured by saveFileVersion, which answers 413.
+      const limit = MAX_EDIT_BYTES * 2 + 4096;
+      if (tooLarge(req, limit)) return err(413, `edited files are limited to ${MAX_EDIT_BYTES / 1024 / 1024} MB`);
+      let raw: string;
+      try {
+        raw = await readTextCapped(req, limit);
+      } catch {
+        return err(413, `edited files are limited to ${MAX_EDIT_BYTES / 1024 / 1024} MB`);
+      }
+      let text: unknown;
+      try {
+        text = (JSON.parse(raw || '{}') as { text?: unknown } | null)?.text;
+      } catch {
+        return err(400, 'send the file text as JSON');
+      }
+      if (typeof text !== 'string') return err(400, 'send the file text as JSON');
+      const entry = saveFileVersion(existing.entry, text);
+      broadcast({ type: 'file', file: entry });
+      return json({ file: entry });
+    }
 
     // ---- interactive deliverables: buttons inside a delivered dashboard ----
     const deliverable = path.match(/^\/api\/deliverables\/([\w-]+)\/(action|approval)$/);
@@ -584,7 +709,7 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
     if (path === '/api/push/test' && req.method === 'POST') {
       const limited = tooMany(limits.pushTests, device, 'test notifications');
       if (limited) return limited;
-      const sent = await notify({ title: 'Hermes Duet', body: 'Notifications are working.', always: true }, { ignoreQuiet: true });
+      const sent = await notify({ title: 'Hermes Duet', body: 'Notifications are working.', always: true }, { ignoreQuiet: true, ignorePrefs: true });
       return json({ sent });
     }
     return methodNotAllowed(path, req.method) ?? err(404, 'not found');

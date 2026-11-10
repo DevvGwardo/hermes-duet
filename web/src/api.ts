@@ -1,5 +1,5 @@
 import { settledNotifications } from '../../shared/links';
-import type { Attachment, Capabilities, Channel, Connector, Item, SearchHit, ServerEvent, Settings, Snapshot, Task } from '../../shared/types';
+import type { Attachment, Capabilities, Channel, Connector, ConnectorSuggestion, FileEntry, Item, MemoryState, Routine, RoutineSchedule, SearchHit, ServerEvent, Settings, Snapshot, Task } from '../../shared/types';
 import { applyEvent, applySnapshot, channelItems, getState, hasMoreFor, mergeItems, prependItems, setChannel, setChannelMore, setState } from './store';
 
 class HttpError extends Error {
@@ -61,6 +61,11 @@ export const api = {
     call<{ item: Item }>('POST', `/api/cards/${encodeURIComponent(cardId)}/act`, { action, value }),
   stop: () => call<{ ok: true }>('POST', '/api/runs/stop'),
   cancelTask: (id: string) => call<{ ok: true }>('POST', `/api/tasks/${encodeURIComponent(id)}/cancel`),
+  /** The user's own completion: the real one. The agent's done only ever "looks done". */
+  confirmTask: (id: string) => call<{ task: Task }>('POST', `/api/tasks/${encodeURIComponent(id)}/confirm`),
+  reopenTask: (id: string) => call<{ task: Task }>('POST', `/api/tasks/${encodeURIComponent(id)}/reopen`),
+  /** Steer a running task mid-flight. `delivered` is false when the text was queued behind the live run instead. */
+  messageTask: (id: string, text: string) => call<{ task: Task; delivered: boolean }>('POST', `/api/tasks/${encodeURIComponent(id)}/message`, { text }),
   stopPage: (id: string) => call<{ ok: true }>('DELETE', `/api/pages/${encodeURIComponent(id)}`),
   saveSettings: (s: Partial<Settings>) => call<{ settings: Settings }>('PUT', '/api/settings', s),
   runBrief: () => call<{ ok: true }>('POST', '/api/brief/run'),
@@ -68,8 +73,20 @@ export const api = {
   subscribe: (sub: PushSubscriptionJSON) => call<{ ok: true }>('POST', '/api/push/subscribe', sub),
   testPush: () => call<{ sent: number }>('POST', '/api/push/test'),
   capabilities: () => call<Capabilities>('GET', '/api/capabilities'),
+  /** The context file the agent starts each turn with. */
+  memory: () => call<MemoryState>('GET', '/api/memory'),
+  saveMemory: (text: string) => call<MemoryState>('PUT', '/api/memory', { text }),
+  clearMemory: () => call<MemoryState>('DELETE', '/api/memory'),
+  /** The hard-block policy: what approvals can never authorize. Absent on old servers; callers must tolerate that. */
+  policy: () => call<{ blocks: { id: string; title: string; detail: string }[] }>('GET', '/api/policy'),
   connectors: () => call<{ connectors: Connector[] }>('GET', '/api/connectors'),
   testConnector: (id: string) => call<{ connector: Connector }>('POST', `/api/connectors/${encodeURIComponent(id)}/test`),
+  /** Read-only discovery: the connected summary plus at most three suggestions, with no install action. */
+  suggestions: () =>
+    call<{
+      suggestions: ConnectorSuggestion[];
+      connected: { toolsets: string[] | null; apps: string[]; connectors: Connector[] };
+    }>('GET', '/api/suggestions'),
   /** A button inside a delivered dashboard: becomes a turn in the general channel. */
   deliverableAction: (fileId: string, action: string, payload?: unknown) =>
     call<{ item: Item }>('POST', `/api/deliverables/${encodeURIComponent(fileId)}/action`, { action, payload }),
@@ -85,11 +102,24 @@ export const api = {
   autofill: (provider?: string) => call<{ host: string; vault: string; filled: { user: boolean; pass: boolean } }>('POST', '/api/browser/autofill', { provider }),
   viewport: (mode: 'mobile' | 'desktop') => call<{ mode: string }>('POST', '/api/browser/viewport', { mode }),
   channels: () => call<{ channels: Channel[] }>('GET', '/api/channels'),
-  createChannel: (name: string, topic?: string) => call<{ channel: Channel }>('POST', '/api/channels', { name, topic }),
+  createChannel: (name: string, topic?: string, extra?: { instructions?: string; group?: string; repo?: string }) =>
+    call<{ channel: Channel }>('POST', '/api/channels', { name, topic, ...extra }),
+  updateChannel: (id: string, patch: { topic?: string; instructions?: string; group?: string; repo?: string }) =>
+    call<{ channel: Channel }>('POST', '/api/channels', { id, ...patch }),
   archiveChannel: (id: string) => call<{ ok: true }>('DELETE', `/api/channels/${encodeURIComponent(id)}`),
   channelPage: (id: string) => call<{ items: Item[]; has_more: boolean }>('GET', `/api/channels/${encodeURIComponent(id)}/items`),
   seenChannel: (id: string) => call<{ ok: true }>('POST', `/api/channels/${encodeURIComponent(id)}/seen`),
   search: (q: string) => call<{ hits: SearchHit[]; terms: string[] }>('GET', `/api/search?q=${encodeURIComponent(q)}`),
+  /** Save an edited deliverable as a new version; the original file is kept. */
+  saveFileVersion: (id: string, text: string) => call<{ file: FileEntry }>('POST', `/api/files/${encodeURIComponent(id)}/versions`, { text }),
+  routines: () => call<{ routines: Routine[] }>('GET', '/api/routines'),
+  /** Create a routine, or update it when `routine_id` (or `id`) is passed. */
+  saveRoutine: (input: { routine_id?: string; id?: string; title: string; prompt: string; schedule: RoutineSchedule; channel_id?: string; enabled?: boolean }) =>
+    call<{ routine: Routine }>('POST', '/api/routines', input),
+  runRoutine: (id: string) => call<{ routine: Routine }>('POST', `/api/routines/${encodeURIComponent(id)}/run`),
+  pauseRoutine: (id: string) => call<{ routine: Routine }>('POST', `/api/routines/${encodeURIComponent(id)}/pause`),
+  resumeRoutine: (id: string) => call<{ routine: Routine }>('POST', `/api/routines/${encodeURIComponent(id)}/resume`),
+  removeRoutine: (id: string) => call<{ ok: true }>('DELETE', `/api/routines/${encodeURIComponent(id)}`),
 };
 
 /**
@@ -98,6 +128,8 @@ export const api = {
  */
 export async function openChannel(id: string) {
   setChannel(id);
+  // The dot clears the moment the channel opens; the server call persists seen_at for the next snapshot.
+  setState((s) => ({ channels: s.channels.map((c) => (c.id === id ? { ...c, seen_at: Date.now() } : c)) }));
   api.seenChannel(id).catch(() => {});
   // Ask the same question the thread answers: does this channel have loaded items? Rows from before topic channels
   // carry no `channel_id`, and `channelItems` already resolves those to general. Falling back to the id being opened

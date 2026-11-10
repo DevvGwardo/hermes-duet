@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
-import { channels, db, files, kv, newId, pages } from './db';
+import type { Settings } from '../shared/types';
+import { channels, db, files, kv, newId, pages, settings, tasks } from './db';
 import { search } from './search';
 
 test('new ids are compact, sortable and unique', () => {
@@ -52,6 +53,56 @@ test('reusing an archived channel without a topic keeps the one it had', () => {
   expect(channels.create({ name: 'hc-arch2' }).topic).toBe('kept');
 });
 
+test('instructions and group round-trip through create, read and update', () => {
+  const created = channels.create({ name: 'hc-rules', topic: 't', instructions: 'Be terse.', group: 'Work' });
+  expect(created.instructions).toBe('Be terse.');
+  expect(created.group).toBe('Work');
+  expect(channels.get(created.id)).toMatchObject({ instructions: 'Be terse.', group: 'Work' });
+  // The list query carries them too, so the strip can group without a second fetch.
+  expect(channels.all().find((c) => c.id === created.id)).toMatchObject({ instructions: 'Be terse.', group: 'Work' });
+
+  const updated = channels.update(created.id, { instructions: 'Be verbose.', group: null });
+  expect(updated).toMatchObject({ instructions: 'Be verbose.', group: null, topic: 't' });
+
+  // Absent keys leave the row alone; a null clears it back to nothing.
+  expect(channels.update(created.id, {})?.instructions).toBe('Be verbose.');
+  expect(channels.update(created.id, { instructions: null })?.instructions).toBeNull();
+});
+
+test('a repo round-trips through create, read and update', () => {
+  // `ChannelInput` is the cleaned shape channelInput produces, so the repo arrives already normalized.
+  const created = channels.create({ name: 'hc-repo', repo: 'https://github.com/owner/name' });
+  expect(created.repo).toBe('https://github.com/owner/name');
+  expect(channels.get(created.id)).toMatchObject({ repo: 'https://github.com/owner/name' });
+  // The list query carries it too, so the sheet can show the link without a second fetch.
+  expect(channels.all().find((c) => c.id === created.id)).toMatchObject({ repo: 'https://github.com/owner/name' });
+
+  const updated = channels.update(created.id, { repo: 'https://github.com/other/project' });
+  expect(updated?.repo).toBe('https://github.com/other/project');
+  // Absent keys leave the repo alone.
+  expect(channels.update(created.id, { topic: 'x' })?.repo).toBe('https://github.com/other/project');
+  // A null clears it back to nothing.
+  expect(channels.update(created.id, { repo: null })?.repo).toBeNull();
+});
+
+test('a channel created without a repo reads back as null', () => {
+  const created = channels.create({ name: 'hc-norepo' });
+  expect(created.repo ?? null).toBe(null);
+  expect(channels.all().find((c) => c.id === created.id)?.repo ?? null).toBe(null);
+});
+
+test('a channel created before instructions and groups still reads back fine', () => {
+  const created = channels.create({ name: 'hc-plain', topic: 'old style' });
+  const row = channels.get(created.id)!;
+  expect(row.topic).toBe('old style');
+  expect(row.instructions ?? null).toBe(null);
+  expect(row.group ?? null).toBe(null);
+});
+
+test('updating an unknown channel is a miss, not a throw', () => {
+  expect(channels.update('chan-no-such', { topic: 'x' })).toBe(null);
+});
+
 // The search index is a second copy of a file's title, so every write has to move both. A rename that reached the
 // row but not the index keeps the old title findable; an update for a file that isn't there puts a hit in search
 // that opens a 404 in Make. Both are one unit of work, not two.
@@ -74,4 +125,60 @@ test('removing a page takes its search row with it', () => {
   expect(search(db, 'retirement').some((h) => h.id === page.id)).toBe(true);
   pages.remove(page.id);
   expect(search(db, 'retirement').some((h) => h.id === page.id)).toBe(false);
+});
+
+// Settings are one JSON blob, so a row saved before the notification preferences existed has no keys for them.
+// The defaults must read as the behavior such an install already had: everything pushes, nothing muted, no cap.
+test('an old settings row reads as the behavior it always had', () => {
+  const before = kv.get<Partial<Settings> | null>('settings', null);
+  try {
+    kv.set('settings', { brief_enabled: false });
+    const s = settings.get();
+    expect(s.notify_tasks).toBe('all');
+    expect(s.notify_agent).toBe(true);
+    expect(s.muted_channels).toEqual([]);
+    expect(s.max_pushes_per_day).toBe(0);
+  } finally {
+    kv.set('settings', before ?? {});
+  }
+});
+
+test('settings.update validates the notification preferences and drops unknown channels', () => {
+  const c = channels.create({ name: 'hc-mute' });
+  const before = kv.get<Partial<Settings> | null>('settings', null);
+  try {
+    const next = settings.update({ notify_tasks: 'failures', notify_agent: false, muted_channels: [c.id, c.id, 'chan-nope'], max_pushes_per_day: 12 });
+    expect(next.notify_tasks).toBe('failures');
+    expect(next.notify_agent).toBe(false);
+    expect(next.muted_channels).toEqual([c.id]);
+    expect(next.max_pushes_per_day).toBe(12);
+  } finally {
+    kv.set('settings', before ?? {});
+  }
+});
+
+test('settings.update refuses a bad notification preference instead of storing it', () => {
+  expect(() => settings.update({ notify_tasks: 'sometimes' as any })).toThrow('notify_tasks');
+  expect(() => settings.update({ notify_agent: 'yes' as any })).toThrow('notify_agent');
+  expect(() => settings.update({ muted_channels: 'nope' as any })).toThrow('muted_channels');
+  expect(() => settings.update({ max_pushes_per_day: -1 })).toThrow('max_pushes_per_day');
+  expect(() => settings.update({ max_pushes_per_day: 101 })).toThrow('max_pushes_per_day');
+  expect(() => settings.update({ max_pushes_per_day: 2.5 })).toThrow('max_pushes_per_day');
+});
+
+test('a task is searchable by its result and its source quote', () => {
+  const task = {
+    id: newId(),
+    title: 'Permit research',
+    status: 'done' as const,
+    steps: [],
+    result: 'The city issued permit #4471.',
+    sources: [{ kind: 'url' as const, label: 'City permit office', quote: 'Permit #4471 was issued' }],
+    created_at: Date.now(),
+    updated_at: Date.now(),
+    background: true,
+  };
+  tasks.save(task);
+  expect(search(db, '4471').some((h) => h.id === task.id)).toBe(true);
+  expect(search(db, 'permit').some((h) => h.id === task.id && h.kind === 'task')).toBe(true);
 });

@@ -1,8 +1,14 @@
 // Route-level tests for the HTTP surface. They call the handlers directly, so no port is bound and no real device is
 // needed beyond a paired cookie.
-import { describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { MAX_EDIT_BYTES } from '../shared/edit';
+import type { FileEntry } from '../shared/types';
 import { createPairCode, deviceCookie, internalToken, redeemPairCode } from './auth';
-import { attachments, items, kv, newId, tasks } from './db';
+import { config } from './config';
+import { attachments, channels, files, items, kv, newId, pages, tasks } from './db';
 import { UserError } from './errors';
 import { hermes } from './hermes';
 import { GENERAL_CHANNEL } from './schema';
@@ -28,6 +34,7 @@ async function authed(path: string, init: RequestInit = {}) {
   return app(path, { ...init, headers: { cookie: await paired(), ...(init.headers as Record<string, string>) } });
 }
 const jsonPost = (body: unknown): RequestInit => ({ method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+const jsonPut = (body: unknown): RequestInit => ({ method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
 describe('paired routes', () => {
   test('health needs no pairing and reveals nothing', async () => {
@@ -67,6 +74,76 @@ describe('paired routes', () => {
     expect(res.status).toBe(400);
     const body = (await res.json()) as any;
     expect(body.error).toContain('letter or number');
+  });
+
+  test('creating a channel persists instructions and group', async () => {
+    const res = await authed('/api/channels', jsonPost({ name: `rules-${newId().slice(-6)}`, topic: 't', instructions: 'Be terse.', group: 'Work' }));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any;
+    expect(body.channel.instructions).toBe('Be terse.');
+    expect(body.channel.group).toBe('Work');
+  });
+
+  test('posting an id updates the channel, and empty clears a field', async () => {
+    const created = (await (await authed('/api/channels', jsonPost({ name: `edit-${newId().slice(-6)}`, instructions: 'Old.', group: 'Home' }))).json()) as any;
+    const res = await authed('/api/channels', jsonPost({ id: created.channel.id, instructions: 'New.', group: '' }));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any;
+    expect(body.channel.instructions).toBe('New.');
+    expect(body.channel.group).toBe(null);
+  });
+
+  test('updating a channel that is not there is a 404', async () => {
+    const res = await authed('/api/channels', jsonPost({ id: 'chan-no-such', topic: 'x' }));
+    expect(res.status).toBe(404);
+  });
+
+  test('creating a channel stores a normalized repo', async () => {
+    const res = await authed('/api/channels', jsonPost({ name: `repo-${newId().slice(-6)}`, repo: ' owner/name ' }));
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as any).channel.repo).toBe('https://github.com/owner/name');
+  });
+
+  test('updating a channel repo normalizes it, and empty clears it', async () => {
+    const created = (await (await authed('/api/channels', jsonPost({ name: `repoedit-${newId().slice(-6)}` }))).json()) as any;
+    const updated = await authed('/api/channels', jsonPost({ id: created.channel.id, repo: 'https://github.com/other/project.git' }));
+    expect(((await updated.json()) as any).channel.repo).toBe('https://github.com/other/project');
+    const cleared = await authed('/api/channels', jsonPost({ id: created.channel.id, repo: '' }));
+    expect(((await cleared.json()) as any).channel.repo).toBe(null);
+  });
+
+  test('a repo that is not owner/name or a GitHub URL is a 400 with the reason', async () => {
+    const res = await authed('/api/channels', jsonPost({ name: `badrepo-${newId().slice(-6)}`, repo: 'gitlab.com/owner/name' }));
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as any).error).toMatch(/github\.com/);
+  });
+
+  test('/api/suggestions needs a paired device', async () => {
+    const res = await app('/api/suggestions');
+    expect(res.status).toBe(401);
+  });
+
+  test('/api/suggestions returns the connected summary and read-only suggestions', async () => {
+    const res = await authed('/api/suggestions');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any;
+    expect(Array.isArray(body.suggestions)).toBe(true);
+    expect(body.suggestions.length).toBeLessThanOrEqual(3);
+    expect(Array.isArray(body.connected.apps)).toBe(true);
+    expect(Array.isArray(body.connected.connectors)).toBe(true);
+    expect(body.connected.toolsets === null || Array.isArray(body.connected.toolsets)).toBe(true);
+    for (const s of body.suggestions) {
+      expect(typeof s.id).toBe('string');
+      expect(typeof s.title).toBe('string');
+      expect(typeof s.detail).toBe('string');
+    }
+  });
+
+  test('marking a channel seen records it, and a missing one is a 404', async () => {
+    const created = (await (await authed('/api/channels', jsonPost({ name: `seen-${newId().slice(-6)}` }))).json()) as any;
+    expect((await authed(`/api/channels/${created.channel.id}/seen`, { method: 'POST' })).status).toBe(200);
+    expect(channels.get(created.channel.id)?.seen_at).toBeGreaterThan(0);
+    expect((await authed('/api/channels/chan-no-such/seen', { method: 'POST' })).status).toBe(404);
   });
 
   test('a background task carries its attachment into the thread and the prompt', async () => {
@@ -182,6 +259,18 @@ describe('paired routes', () => {
     expect(body.error).toBe('card not found');
     expect(body.code).toBe('not_found');
     expect(body.request_id).toBeTruthy();
+  });
+
+  test('the hard-block policy lists every always-refused category', async () => {
+    const res = await authed('/api/policy');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any;
+    expect(Array.isArray(body.blocks)).toBe(true);
+    expect(body.blocks.map((b: any) => b.id)).toEqual(['bank-wire', 'securities-crypto', 'account-access', 'credential-change', 'account-creation']);
+    for (const b of body.blocks) {
+      expect(typeof b.title).toBe('string');
+      expect(typeof b.detail).toBe('string');
+    }
   });
 });
 
@@ -299,5 +388,283 @@ describe('thread paging', () => {
     expect(res.status).toBe(200);
     const older = (await res.json()) as any;
     expect(older.items.every((i: any) => i.created_at <= oldest.created_at)).toBe(true);
+  });
+});
+
+describe('user-confirmed task completion', () => {
+  const doneTask = () => {
+    const now = Date.now();
+    const t = { id: newId(), title: 'hc route done', status: 'done' as const, steps: [], created_at: now, updated_at: now, background: true };
+    tasks.save(t);
+    return t;
+  };
+
+  test('confirm stamps the user completion and reopen clears it', async () => {
+    const t = doneTask();
+    const confirmed = await authed(`/api/tasks/${t.id}/confirm`, { method: 'POST' });
+    expect(confirmed.status).toBe(200);
+    const cbody = (await confirmed.json()) as any;
+    expect(cbody.task.confirmed_at).toBeTruthy();
+    expect(cbody.task.status).toBe('done');
+    expect(tasks.get(t.id)!.confirmed_at).toBe(cbody.task.confirmed_at);
+
+    const reopened = await authed(`/api/tasks/${t.id}/reopen`, { method: 'POST' });
+    expect(reopened.status).toBe(200);
+    expect(((await reopened.json()) as any).task.confirmed_at).toBeUndefined();
+    expect(tasks.get(t.id)!.confirmed_at).toBeUndefined();
+  });
+
+  test('confirming a task nobody started is a 404, not a 500', async () => {
+    const res = await authed('/api/tasks/no-such-task/confirm', { method: 'POST' });
+    expect(res.status).toBe(404);
+    expect(((await res.json()) as any).error).toBe('no such task');
+  });
+
+  test('a wrong method on the new routes answers 405 with Allow', async () => {
+    const t = doneTask();
+    for (const route of [`/api/tasks/${t.id}/confirm`, `/api/tasks/${t.id}/reopen`, `/api/tasks/${t.id}/message`]) {
+      const res = await authed(route, { method: 'GET' });
+      expect(res.status).toBe(405);
+      expect(res.headers.get('allow')).toBe('POST');
+    }
+  });
+
+  test('steering validates like a chat message: auth, non-empty, capped', async () => {
+    const t = doneTask();
+    // No cookie means not paired, even for a well-formed steer.
+    const anon = await app(`/api/tasks/${t.id}/message`, jsonPost({ text: 'go faster' }));
+    expect(anon.status).toBe(401);
+
+    const empty = await authed(`/api/tasks/${t.id}/message`, jsonPost({ text: '   ' }));
+    expect(empty.status).toBe(400);
+    expect(((await empty.json()) as any).error).toBe('empty message');
+
+    const long = await authed(`/api/tasks/${t.id}/message`, jsonPost({ text: 'x'.repeat(20_001) }));
+    expect(long.status).toBe(400);
+    expect(((await long.json()) as any).error).toBe('message too long');
+  });
+
+  test('steering a task with no live run is a 409, not a silent queue', async () => {
+    const t = doneTask();
+    const res = await authed(`/api/tasks/${t.id}/message`, jsonPost({ text: 'one more thing' }));
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as any).error).toContain('nothing to steer');
+  });
+});
+
+describe('notification preferences', () => {
+  const put = (body: unknown) => authed('/api/settings', { ...jsonPost(body), method: 'PUT' });
+  const savedSettings = () => kv.get<Record<string, unknown> | null>('settings', null);
+
+  test('a valid patch is stored and returned', async () => {
+    const before = savedSettings();
+    try {
+      const res = await put({ notify_tasks: 'failures', notify_agent: false, max_pushes_per_day: 5 });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as any;
+      expect(body.settings.notify_tasks).toBe('failures');
+      expect(body.settings.notify_agent).toBe(false);
+      expect(body.settings.max_pushes_per_day).toBe(5);
+    } finally {
+      kv.set('settings', before ?? {});
+    }
+  });
+
+  test('muted channels must exist: unknown ids are dropped and duplicates collapse', async () => {
+    const before = savedSettings();
+    try {
+      const res = await put({ muted_channels: [GENERAL_CHANNEL, GENERAL_CHANNEL, 'chan-nope'] });
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as any).settings.muted_channels).toEqual([GENERAL_CHANNEL]);
+    } finally {
+      kv.set('settings', before ?? {});
+    }
+  });
+
+  test('a bad enum, cap or channel list is a 400 with a reason, not a silent ignore', async () => {
+    for (const patch of [
+      { notify_tasks: 'sometimes' },
+      { notify_agent: 'yes' },
+      { muted_channels: 'nope' },
+      { max_pushes_per_day: -1 },
+      { max_pushes_per_day: 101 },
+      { max_pushes_per_day: 2.5 },
+    ]) {
+      const res = await put(patch);
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as any).error).toBeTruthy();
+    }
+  });
+});
+
+describe('file versions', () => {
+  /** A delivered file on disk, registered like deliver_file would have done. */
+  const stored = (name: string, mime: string, over: Partial<FileEntry> = {}) => {
+    const id = newId();
+    const dir = join(config.dataDir, 'files', id);
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, name);
+    writeFileSync(path, 'original text', 'utf8');
+    return files.add({ id, title: name, name, mime, size: 13, created_at: Date.now(), ...over }, path);
+  };
+
+  test('saving text creates a new linked version and leaves the original alone', async () => {
+    const base = stored('notes.md', 'text/markdown', { task_id: 'task-1', page_id: 'page-1' });
+    const res = await authed(`/api/files/${base.id}/versions`, jsonPost({ text: 'edited text' }));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any;
+    expect(body.file.id).not.toBe(base.id);
+    expect(body.file.version_of).toBe(base.id);
+    expect(body.file.title).toBe(base.title);
+    expect(body.file.name).toBe(base.name);
+    expect(body.file.mime).toBe(base.mime);
+    expect(body.file.task_id).toBe('task-1');
+    expect(body.file.page_id).toBe('page-1');
+    expect(body.file.size).toBe(Buffer.byteLength('edited text', 'utf8'));
+    // The original row and its bytes are untouched, and the new file has its own storage path.
+    expect(files.get(base.id)!.entry.version_of).toBeUndefined();
+    expect(await Bun.file(files.get(base.id)!.path).text()).toBe('original text');
+    expect(files.get(body.file.id)!.path).not.toBe(files.get(base.id)!.path);
+    expect(await Bun.file(files.get(body.file.id)!.path).text()).toBe('edited text');
+    // The new version is served like any other deliverable.
+    const got = await authed(`/api/files/${body.file.id}`);
+    expect(got.status).toBe(200);
+    expect(await got.text()).toBe('edited text');
+  });
+
+  test('a file that is not text is refused with a clear sentence, not a 500', async () => {
+    for (const [name, mime] of [
+      ['scan.pdf', 'application/pdf'],
+      ['photo.png', 'image/png'],
+      ['archive.zip', 'application/zip'],
+    ] as const) {
+      const base = stored(name, mime);
+      const res = await authed(`/api/files/${base.id}/versions`, jsonPost({ text: 'x' }));
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as any).error).toContain('only text files');
+      expect(files.all().some((f) => f.version_of === base.id)).toBe(false);
+    }
+  });
+
+  test('a text over 2 MB is refused with 413', async () => {
+    const base = stored('big.md', 'text/markdown');
+    const res = await authed(`/api/files/${base.id}/versions`, jsonPost({ text: 'a'.repeat(MAX_EDIT_BYTES + 1) }));
+    expect(res.status).toBe(413);
+    expect(((await res.json()) as any).error).toContain('2 MB');
+    expect(files.all().some((f) => f.version_of === base.id)).toBe(false);
+    expect(await Bun.file(files.get(base.id)!.path).text()).toBe('original text');
+  });
+
+  test('a text of exactly 2 MB is accepted, even when escaping doubles the body', async () => {
+    const base = stored('edges.md', 'text/markdown');
+    const text = '\n'.repeat(MAX_EDIT_BYTES);
+    const res = await authed(`/api/files/${base.id}/versions`, jsonPost({ text }));
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as any).file.size).toBe(MAX_EDIT_BYTES);
+  });
+
+  test('an oversized body is refused at the door', async () => {
+    const base = stored('big.md', 'text/markdown');
+    const res = await authed(`/api/files/${base.id}/versions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-length': String(MAX_EDIT_BYTES * 2 + 8192) },
+    });
+    expect(res.status).toBe(413);
+  });
+
+  test('a missing text field is a 400, not an empty file', async () => {
+    const base = stored('notes.md', 'text/markdown');
+    for (const payload of [{}, { text: 42 }, { text: null }]) {
+      const res = await authed(`/api/files/${base.id}/versions`, jsonPost(payload));
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as any).error).toBe('send the file text as JSON');
+    }
+    expect(files.all().some((f) => f.version_of === base.id)).toBe(false);
+  });
+
+  test('an unknown or empty file id is a 404', async () => {
+    const missing = await authed('/api/files/no-such-file/versions', jsonPost({ text: 'x' }));
+    expect(missing.status).toBe(404);
+    expect(((await missing.json()) as any).error).toBe('no such file');
+    const empty = await authed('/api/files//versions', jsonPost({ text: 'x' }));
+    expect(empty.status).toBe(404);
+  });
+
+  test('an unpaired request is refused, and a wrong method gets 405 with Allow', async () => {
+    const base = stored('notes.md', 'text/markdown');
+    const anon = await app(`/api/files/${base.id}/versions`, jsonPost({ text: 'x' }));
+    expect(anon.status).toBe(401);
+    const wrong = await authed(`/api/files/${base.id}/versions`);
+    expect(wrong.status).toBe(405);
+    expect(wrong.headers.get('allow')).toBe('POST');
+  });
+});
+
+describe('memory routes', () => {
+  const ORIGINAL_CONTEXT = config.contextFile;
+  let dir: string;
+  let path: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'duet-memory-route-'));
+    path = join(dir, 'context.local.md');
+    config.contextFile = path;
+  });
+  afterEach(() => {
+    config.contextFile = ORIGINAL_CONTEXT;
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('GET returns the default empty state with the configured path', async () => {
+    const res = await authed('/api/memory');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ path, text: '', max_bytes: 32768 });
+  });
+
+  test('PUT writes the text and GET reads it back', async () => {
+    const text = '- Tasks: run `todo list --today`';
+    const put = await authed('/api/memory', jsonPut({ text }));
+    expect(put.status).toBe(200);
+    expect(((await put.json()) as any).text).toBe(text);
+    expect(readFileSync(path, 'utf8')).toBe(text);
+    const get = await authed('/api/memory');
+    expect(((await get.json()) as any).text).toBe(text);
+  });
+
+  test('PUT over the 32 KB cap is a 413 and writes nothing', async () => {
+    const res = await authed('/api/memory', jsonPut({ text: 'x'.repeat(32769) }));
+    expect(res.status).toBe(413);
+    expect(existsSync(path)).toBe(false);
+  });
+
+  test('DELETE clears the file and returns the empty state', async () => {
+    await authed('/api/memory', jsonPut({ text: 'remember this' }));
+    const res = await authed('/api/memory', { method: 'DELETE' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ path, text: '', max_bytes: 32768 });
+    expect(existsSync(path)).toBe(false);
+  });
+
+  test('needs pairing, like every other app route', async () => {
+    expect((await app('/api/memory')).status).toBe(401);
+    expect((await app('/api/memory', jsonPut({ text: 'x' }))).status).toBe(401);
+    expect((await app('/api/memory', { method: 'DELETE' })).status).toBe(401);
+  });
+
+  test('ignores a path in the body: only the configured context file is touched', async () => {
+    const other = join(dir, 'other.md');
+    writeFileSync(other, 'untouched');
+    const res = await authed('/api/memory', jsonPut({ path: other, text: 'redirected' }));
+    expect(res.status).toBe(200);
+    expect(readFileSync(other, 'utf8')).toBe('untouched');
+    expect(readFileSync(path, 'utf8')).toBe('redirected');
+    const get = await authed('/api/memory');
+    expect(((await get.json()) as any).path).toBe(path);
+  });
+
+  test('a wrong method is a 405 with Allow', async () => {
+    const res = await authed('/api/memory', { method: 'POST' });
+    expect(res.status).toBe(405);
+    expect(res.headers.get('allow')).toBe('GET, PUT, DELETE');
   });
 });

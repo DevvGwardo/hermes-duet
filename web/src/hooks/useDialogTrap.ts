@@ -53,11 +53,15 @@ export function useDialogTrap(ref: RefObject<HTMLElement | null>) {
     });
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Tab') return;
+      const at = document.activeElement as HTMLElement | null;
+      // A sheet can open another sheet (Settings → Memory). Only the innermost dialog traps focus; the outer one
+      // must not pull focus back out of the dialog the user is actually in.
+      const owner = at?.closest?.('.sheet, .browser-pane');
+      if (owner && !root.contains(owner)) return;
       const stops = tabbables(root);
       if (!stops.length) return;
       const first = stops[0];
       const last = stops[stops.length - 1];
-      const at = document.activeElement as HTMLElement | null;
       if (!root.contains(at)) {
         // Focus never entered (or slipped out through an iframe): pull it back.
         e.preventDefault();

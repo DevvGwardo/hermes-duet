@@ -1,7 +1,7 @@
 // Full-text search over the thread and the things the agent produced. The SQL lives here and takes a Database, so a
 // test can drive it against an in-memory copy of the schema without touching the real install.
 import type { Database } from 'bun:sqlite';
-import type { SearchHit } from '../shared/types';
+import type { CardData, Item, SearchHit, Source, Task } from '../shared/types';
 
 const MAX_TERMS = 8;
 const MAX_QUERY = 200;
@@ -27,6 +27,87 @@ export function ftsQuery(raw: string): { match: string; terms: string[] } | null
 function trimSnippet(s: string): string {
   const t = s.replace(/\s+/g, ' ').trim();
   return t.length > MAX_SNIPPET ? `${t.slice(0, MAX_SNIPPET - 1)}…` : t;
+}
+
+/** A source's searchable text: the chip label and the verbatim quote backing it. */
+export function sourceText(sources: Source[] | undefined): string[] {
+  const out: string[] = [];
+  for (const s of sources ?? []) {
+    if (s.label) out.push(s.label);
+    if (s.quote) out.push(s.quote);
+  }
+  return out;
+}
+
+/**
+ * Everything searchable on one item, flattened to plain text. This is the single place that knows which card
+ * subfields matter, so a decision, a draft, a follow-up or a line item is findable like a message. Pure on purpose:
+ * the trigger-free index writer, the boot reindex and the tests all call this one function.
+ */
+export function searchText(item: Item): string {
+  const parts: string[] = [];
+  const add = (v: unknown) => {
+    if (typeof v === 'string' && v.trim()) parts.push(v.trim());
+  };
+  add(item.text);
+  const card: CardData | undefined = item.card;
+  if (card) {
+    add(card.title);
+    add(card.body);
+    add(card.draft);
+    add(card.content);
+    add(card.destination);
+    add(card.action_label);
+    add(card.scan_warning);
+    add(card.merchant);
+    add(card.card_summary);
+    for (const r of card.recipients ?? []) add(r);
+    for (const o of card.options ?? []) add(o);
+    for (const e of card.entries ?? []) {
+      add(e.title);
+      add(e.detail);
+      add(e.draft);
+      add(e.action_message);
+      add(e.action_label);
+      parts.push(...sourceText(e.sources));
+    }
+    for (const w of card.watching ?? []) {
+      add(w.title);
+      add(w.detail);
+      parts.push(...sourceText(w.sources));
+    }
+    for (const f of card.follow_ups ?? []) {
+      add(f.label);
+      add(f.message);
+    }
+    for (const c of card.checklist ?? []) add(c.text);
+    for (const m of card.metrics ?? []) {
+      add(m.label);
+      add(m.value);
+      add(m.delta);
+    }
+    for (const p of card.line_items ?? []) add(p.title);
+    parts.push(...sourceText(card.sources));
+  }
+  return parts.join('\n');
+}
+
+/** The searchable body of a task: its result, progress, instructions, suggested follow-ups and sources. */
+export function taskSearchText(task: Task): string {
+  const parts = [task.result, task.progress, task.instructions, ...sourceText(task.sources)];
+  for (const f of task.follow_ups ?? []) parts.push(f.label, f.message);
+  return parts.filter(Boolean).join('\n');
+}
+
+/**
+ * Replace one item's search row. The whole row is rewritten, so an edit never leaves the old text findable, and an
+ * item with nothing searchable leaves no row at all. `channelId` is passed in because the caller already knows it.
+ */
+export function indexItem(database: Database, item: Item, channelId: string) {
+  database.query('DELETE FROM fts_items WHERE item_id = ?').run(item.id);
+  const text = searchText(item);
+  if (!text.trim()) return;
+  database.query('INSERT INTO fts_items(item_id, channel_id, kind, text) VALUES (?, ?, ?, ?)').run(item.id, channelId, item.kind, text);
 }
 
 interface Row {

@@ -1,9 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { SearchHit } from '../../../shared/types';
+import type { Channel, SearchHit } from '../../../shared/types';
 import { openChannel, api } from '../api';
 import { setChannel, useStore } from '../store';
 import { useDialogTrap } from '../hooks/useDialogTrap';
 import { Icon } from '../ui';
+
+/** True when the channel has activity the user has not opened yet. The open channel never shows one. */
+export function isUnread(c: Channel, active: string | null): boolean {
+  return c.id !== active && (c.last_at ?? 0) > (c.seen_at ?? 0);
+}
 
 /**
  * The channel strip above the thread: one pill per topic thread, "#" for the rest. The general channel stays first
@@ -25,6 +30,7 @@ export function ChannelsStrip({ onSearch, onManage }: { onSearch: () => void; on
           >
             <Icon.hash size={13} />
             {c.slug}
+            {isUnread(c, active) && <span className="unread-dot" aria-label="Unread" />}
           </button>
         ))}
         <button className="channel-pill add" onClick={onManage} aria-label="New channel or manage channels">
@@ -38,14 +44,22 @@ export function ChannelsStrip({ onSearch, onManage }: { onSearch: () => void; on
   );
 }
 
-/** Create a channel, or archive one that has served its purpose. Its history stays searchable either way. */
+/** Create a channel, archive one that has served its purpose, or edit a channel's topic, group and standing instructions. */
 export function ChannelsSheet({ onClose }: { onClose: () => void }) {
   const channels = useStore((s) => s.channels);
   const active = useStore((s) => s.channelId);
   const [name, setName] = useState('');
   const [topic, setTopic] = useState('');
+  const [group, setGroup] = useState('');
+  const [repo, setRepo] = useState('');
+  const [instructions, setInstructions] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [eTopic, setETopic] = useState('');
+  const [eGroup, setEGroup] = useState('');
+  const [eRepo, setERepo] = useState('');
+  const [eInstructions, setEInstructions] = useState('');
   const dialog = useRef<HTMLDivElement | null>(null);
   useDialogTrap(dialog);
 
@@ -55,18 +69,64 @@ export function ChannelsSheet({ onClose }: { onClose: () => void }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
+  // Group headings only when at least one channel is grouped; the general channel stays pinned first.
+  const sections = useMemo(() => {
+    const rest = channels.slice(1);
+    if (!rest.some((c) => c.group)) return null;
+    const byGroup = new Map<string, Channel[]>();
+    const ungrouped: Channel[] = [];
+    for (const c of rest) {
+      if (c.group) {
+        const list = byGroup.get(c.group) ?? [];
+        list.push(c);
+        byGroup.set(c.group, list);
+      } else ungrouped.push(c);
+    }
+    return { names: [...byGroup.keys()].sort((a, b) => a.localeCompare(b)), byGroup, ungrouped };
+  }, [channels]);
+
   async function create(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
     setErr(null);
     try {
-      const { channel } = await api.createChannel(name.trim(), topic.trim() || undefined);
+      const { channel } = await api.createChannel(name.trim(), topic.trim() || undefined, {
+        ...(instructions.trim() ? { instructions: instructions.trim() } : {}),
+        ...(group.trim() ? { group: group.trim() } : {}),
+        ...(repo.trim() ? { repo: repo.trim() } : {}),
+      });
       setName('');
       setTopic('');
+      setGroup('');
+      setRepo('');
+      setInstructions('');
       await openChannel(channel.id);
       onClose();
     } catch (e: any) {
       setErr(e?.message ?? 'Could not create that channel.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function startEdit(c: Channel) {
+    setEditing(c.id);
+    setETopic(c.topic ?? '');
+    setEGroup(c.group ?? '');
+    setERepo(c.repo ?? '');
+    setEInstructions(c.instructions ?? '');
+    setErr(null);
+  }
+
+  async function saveEdit(id: string) {
+    setBusy(true);
+    setErr(null);
+    try {
+      // Empty strings clear the field server-side; absent keys would leave it alone.
+      await api.updateChannel(id, { topic: eTopic.trim(), instructions: eInstructions.trim(), group: eGroup.trim(), repo: eRepo.trim() });
+      setEditing(null);
+    } catch (e: any) {
+      setErr(e?.message ?? 'Could not save that channel.');
     } finally {
       setBusy(false);
     }
@@ -88,6 +148,89 @@ export function ChannelsSheet({ onClose }: { onClose: () => void }) {
     }
   }
 
+  function row(c: Channel, isGeneral: boolean) {
+    return (
+      <li key={c.id} className={`channel-row ${c.id === active ? 'on' : ''}`}>
+        <div className="channel-row-wrap">
+          <button className="channel-row-main" onClick={() => openChannel(c.id).then(onClose).catch(() => {})}>
+            <span className="channel-hash">
+              <Icon.hash size={14} />
+            </span>
+            <span className="row-main">
+              <span className="row-title">
+                {c.slug}
+                {isUnread(c, active) && <span className="unread-dot" aria-label="Unread" />}
+              </span>
+              <span className="row-sub">{c.topic || (isGeneral ? 'Briefs, check-ins, background results' : 'No topic yet')}</span>
+            </span>
+            {c.id === active && <Icon.check size={16} />}
+          </button>
+          <span className="channel-row-actions">
+            {c.repo && (
+              <a
+                className="channel-repo"
+                href={c.repo}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={`Open ${c.repo} in a new tab`}
+                aria-label={`Open ${c.repo}`}
+              >
+                <Icon.globe size={14} />
+                <span className="channel-repo-text">{c.repo.replace(/^https?:\/\//, '')}</span>
+              </a>
+            )}
+            <button className="icon-btn" disabled={busy} onClick={() => (editing === c.id ? setEditing(null) : startEdit(c))} aria-label={`Edit ${c.slug}`} title="Edit channel">
+              <Icon.pencil size={16} />
+            </button>
+            {!isGeneral && (
+              <button className="icon-btn" disabled={busy} onClick={() => archive(c.id)} aria-label={`Archive ${c.slug}`} title="Archive channel">
+                <Icon.archive size={16} />
+              </button>
+            )}
+          </span>
+        </div>
+        {editing === c.id && (
+          <form
+            className="channel-form channel-edit"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void saveEdit(c.id);
+            }}
+          >
+            <input value={eTopic} onChange={(e) => setETopic(e.target.value)} placeholder="What it is for (optional)" aria-label="Channel topic" maxLength={200} />
+            <input value={eGroup} onChange={(e) => setEGroup(e.target.value)} placeholder="Group (optional)" aria-label="Channel group" maxLength={40} />
+            <input
+              value={eRepo}
+              onChange={(e) => setERepo(e.target.value)}
+              placeholder="Repo (owner/name or GitHub URL, optional)"
+              aria-label="Channel repo"
+              maxLength={200}
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+            />
+            <textarea
+              value={eInstructions}
+              onChange={(e) => setEInstructions(e.target.value)}
+              placeholder="Standing instructions for this channel (optional)"
+              aria-label="Channel instructions"
+              maxLength={2000}
+              rows={3}
+            />
+            <span className="channel-edit-btns">
+              <button className="btn btn-primary small" disabled={busy} type="submit">
+                {busy ? 'Saving…' : 'Save'}
+              </button>
+              <button className="btn small" disabled={busy} type="button" onClick={() => setEditing(null)}>
+                Cancel
+              </button>
+            </span>
+          </form>
+        )}
+      </li>
+    );
+  }
+
   return (
     <div className="sheet-backdrop" onClick={onClose}>
       <div ref={dialog} className="sheet channels-sheet" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Channels">
@@ -103,33 +246,45 @@ export function ChannelsSheet({ onClose }: { onClose: () => void }) {
         <div className="settings-body">
           <section>
             <h3>Open</h3>
-            <ul className="list">
-              {channels.map((c) => (
-                <li key={c.id} className={`channel-row ${c.id === active ? 'on' : ''}`}>
-                  <button className="channel-row-main" onClick={() => openChannel(c.id).then(onClose).catch(() => {})}>
-                    <span className="channel-hash">
-                      <Icon.hash size={14} />
-                    </span>
-                    <span className="row-main">
-                      <span className="row-title">{c.slug}</span>
-                      <span className="row-sub">{c.topic || (c.id === channels[0]?.id ? 'Briefs, check-ins, background results' : 'No topic yet')}</span>
-                    </span>
-                    {c.id === active && <Icon.check size={16} />}
-                  </button>
-                  {c.id !== channels[0]?.id && (
-                    <button className="icon-btn" disabled={busy} onClick={() => archive(c.id)} aria-label={`Archive ${c.slug}`} title="Archive channel">
-                      <Icon.archive size={16} />
-                    </button>
-                  )}
-                </li>
-              ))}
-            </ul>
+            {sections ? (
+              <>
+                <ul className="list">{channels.length > 0 && row(channels[0], true)}</ul>
+                {sections.names.map((g) => (
+                  <div key={g}>
+                    <h4 className="channel-group-head">{g}</h4>
+                    <ul className="list">{sections.byGroup.get(g)!.map((c) => row(c, false))}</ul>
+                  </div>
+                ))}
+                {sections.ungrouped.length > 0 && <ul className="list">{sections.ungrouped.map((c) => row(c, false))}</ul>}
+              </>
+            ) : (
+              <ul className="list">{channels.map((c, i) => row(c, i === 0))}</ul>
+            )}
           </section>
           <section>
             <h3>New channel</h3>
             <form className="channel-form" onSubmit={create}>
               <input value={name} onChange={(e) => setName(e.target.value)} placeholder="taxes" aria-label="Channel name" maxLength={40} autoCapitalize="off" />
               <input value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="What it is for (optional)" aria-label="Channel topic" maxLength={200} />
+              <input value={group} onChange={(e) => setGroup(e.target.value)} placeholder="Group (optional)" aria-label="Channel group" maxLength={40} />
+              <input
+                value={repo}
+                onChange={(e) => setRepo(e.target.value)}
+                placeholder="Repo (owner/name or GitHub URL, optional)"
+                aria-label="Channel repo"
+                maxLength={200}
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+              />
+              <textarea
+                value={instructions}
+                onChange={(e) => setInstructions(e.target.value)}
+                placeholder="Standing instructions (optional)"
+                aria-label="Channel instructions"
+                maxLength={2000}
+                rows={3}
+              />
               <button className="btn btn-primary small" disabled={busy || !name.trim()}>
                 {busy ? 'Creating…' : 'Create'}
               </button>

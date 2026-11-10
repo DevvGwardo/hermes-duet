@@ -114,3 +114,25 @@ describe('sameLoginSite', () => {
     expect(sameLoginSite('example.com', '')).toBe(false);
   });
 });
+
+// fillCard checks this predicate immediately before typing a single character: the card approved for one host must
+// never be typed into a tab that moved elsewhere. These pin the exact rule the fill relies on.
+describe('fillCard host rule', () => {
+  const approved = 'shop.example.com';
+
+  test('the approved host and its www form are fillable', () => {
+    expect(sameLoginSite(approved, 'shop.example.com')).toBe(true);
+    expect(sameLoginSite(approved, 'www.shop.example.com')).toBe(true);
+  });
+
+  test('a tab that moved away is refused', () => {
+    expect(sameLoginSite(approved, 'evil.test')).toBe(false);
+    expect(sameLoginSite(approved, 'shop.example.com.evil.test')).toBe(false);
+    expect(sameLoginSite(approved, 'example.com')).toBe(false);
+    expect(sameLoginSite(approved, '')).toBe(false);
+  });
+
+  test('a card with no bound host is never fillable', () => {
+    expect(sameLoginSite('', 'shop.example.com')).toBe(false);
+  });
+});

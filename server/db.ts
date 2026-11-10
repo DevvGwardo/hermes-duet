@@ -1,10 +1,12 @@
 import { Database } from 'bun:sqlite';
 import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { type Attachment, type Channel, type FileEntry, type Item, type Page, type Settings, type Task, attachmentKind } from '../shared/types';
-import { type ChannelInput, slugFor } from './channels';
+import { type Attachment, type Channel, type FileEntry, type Item, type Page, type Routine, type Settings, type Task, attachmentKind } from '../shared/types';
+import { type ChannelInput, type ChannelPatch, slugFor } from './channels';
 import { config } from './config';
+import { UserError } from './errors';
 import { lockDownDataDir } from './permissions';
+import { indexItem, taskSearchText } from './search';
 import { GENERAL_CHANNEL, SCHEMA_VERSION, applySchema } from './schema';
 
 mkdirSync(config.dataDir, { recursive: true });
@@ -102,19 +104,22 @@ function createMainSession(): string {
 }
 
 const channelGet = db.query<ChannelRow, [string]>(
-  'SELECT id, name, slug, topic, session_id, seen_at, archived_at, created_at, updated_at FROM channels WHERE id = ?',
+  'SELECT id, name, slug, topic, instructions, "group", repo, session_id, seen_at, archived_at, created_at, updated_at FROM channels WHERE id = ?',
 );
 const channelAll = db.query<ChannelRow, [string]>(
-  `SELECT c.id, c.name, c.slug, c.topic, c.session_id, c.seen_at, c.archived_at, c.created_at, c.updated_at,
+  `SELECT c.id, c.name, c.slug, c.topic, c.instructions, c."group", c.repo, c.session_id, c.seen_at, c.archived_at, c.created_at, c.updated_at,
           (SELECT MAX(i.created_at) FROM items i WHERE i.channel_id = c.id) AS last_at
    FROM channels c WHERE c.archived_at IS NULL
    ORDER BY CASE WHEN c.id = ? THEN 0 ELSE 1 END, coalesce(last_at, c.created_at) DESC`,
 );
 const channelBySlug = db.query<ChannelRow, [string]>('SELECT * FROM channels WHERE slug = ?');
 const channelInsert = db.query(
-  'INSERT INTO channels(id, name, slug, topic, session_id, seen_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+  'INSERT INTO channels(id, name, slug, topic, instructions, "group", repo, session_id, seen_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
 );
-const channelTouch = db.query('UPDATE channels SET name = ?, topic = ?, archived_at = NULL, updated_at = ? WHERE id = ?');
+// Full-row touch for an un-archived channel: provided fields replace, absent ones keep what the row had.
+const channelTouch = db.query(
+  'UPDATE channels SET name = ?, topic = ?, instructions = ?, "group" = ?, repo = ?, archived_at = NULL, updated_at = ? WHERE id = ?',
+);
 const channelArchive = db.query('UPDATE channels SET archived_at = ?, updated_at = ? WHERE id = ?');
 const channelSeen = db.query('UPDATE channels SET seen_at = ? WHERE id = ?');
 
@@ -128,7 +133,7 @@ export const channels = {
     if (row) return row;
     const session = kv.get<string>('main_session', '') || createMainSession();
     const now = Date.now();
-    channelInsert.run(GENERAL_CHANNEL, 'general', 'general', 'Everything that is not a project of its own', session, null, now, now);
+    channelInsert.run(GENERAL_CHANNEL, 'general', 'general', 'Everything that is not a project of its own', null, null, null, session, null, now, now);
     return channelGet.get(GENERAL_CHANNEL)!;
   },
   all(): ChannelRow[] {
@@ -151,24 +156,64 @@ export const channels = {
     const reuse = () => {
       const existing = channels.bySlug(slug);
       if (!existing) return null;
-      // A channel that is still open is not being "reused", it is the same channel: return it untouched. Touching it
-      // here would let `POST /api/channels {"name":"Work"}` silently erase the topic of the live #work.
-      if (existing.archived_at == null) return existing;
-      // Archived: bring it back, keeping its topic when the caller did not name a new one.
-      channelTouch.run(input.name, input.topic ?? existing.topic ?? null, now, existing.id);
+      // A live channel of the same name is the same channel: only fill in fields the caller actually sent, so
+      // `POST /api/channels {"name":"Work"}` still cannot erase the topic of the live #work.
+      if (existing.archived_at == null) {
+        const patch: ChannelPatch = {};
+        if (input.topic !== undefined) patch.topic = input.topic;
+        if (input.instructions !== undefined) patch.instructions = input.instructions;
+        if (input.group !== undefined) patch.group = input.group;
+        if (input.repo !== undefined) patch.repo = input.repo;
+        if (Object.keys(patch).length) return channels.update(existing.id, patch);
+        return existing;
+      }
+      // Archived: bring it back, keeping each field when the caller did not name a new one.
+      channelTouch.run(
+        input.name,
+        input.topic ?? existing.topic ?? null,
+        input.instructions ?? existing.instructions ?? null,
+        input.group ?? existing.group ?? null,
+        input.repo ?? existing.repo ?? null,
+        now,
+        existing.id,
+      );
       return channelGet.get(existing.id)!;
     };
     const found = reuse();
     if (found) return found;
     const id = `chan-${slug}-${newId().slice(-4)}`;
     try {
-      tx(() => channelInsert.run(id, input.name, slug, input.topic ?? null, `duet-channel-${slug}`, null, now, now));
+      tx(() =>
+        channelInsert.run(id, input.name, slug, input.topic ?? null, input.instructions ?? null, input.group ?? null, input.repo ?? null, `duet-channel-${slug}`, null, now, now),
+      );
     } catch (e: any) {
       // Another create won the slug between the read and the insert: that is the same "already archived" answer.
       const again = reuse();
       if (again) return again;
       throw e;
     }
+    return channelGet.get(id)!;
+  },
+  /**
+   * Update a channel's editable fields. Only keys present in the patch are written (`null` clears the column),
+   * so the sheet can send topic/instructions/group together and the general channel can gain standing rules too.
+   */
+  update(id: string, patch: ChannelPatch): ChannelRow | null {
+    const existing = channelGet.get(id);
+    if (!existing) return null;
+    const sets: string[] = [];
+    const args: unknown[] = [];
+    // `group` is a reserved word: quoted here, bare in the returned row like every other column.
+    for (const [col, value] of [['topic', patch.topic], ['instructions', patch.instructions], ['"group"', patch.group], ['repo', patch.repo]] as const) {
+      if (value !== undefined) {
+        sets.push(`${col} = ?`);
+        args.push(value);
+      }
+    }
+    if (!sets.length) return existing;
+    sets.push('updated_at = ?');
+    args.push(Date.now(), id);
+    db.query(`UPDATE channels SET ${sets.join(', ')} WHERE id = ?`).run(...(args as (string | number | null)[]));
     return channelGet.get(id)!;
   },
   archive(id: string): boolean {
@@ -239,15 +284,21 @@ const itemsChannel = db.query('UPDATE items SET channel_id = ? WHERE id = ?');
 
 export const items = {
   save(item: Item) {
-    itemUpsert.run({
-      $id: item.id,
-      $kind: item.kind,
-      $created_at: item.created_at,
-      $updated_at: item.updated_at,
-      $run_id: item.run_id ?? null,
-      $task_id: item.task_id ?? null,
-      $channel_id: item.channel_id ?? GENERAL_CHANNEL,
-      $json: JSON.stringify(item),
+    // The row and its search text are one unit: a card edit that reached the table but not the index would keep the
+    // old draft findable under the new one.
+    const channelId = item.channel_id ?? GENERAL_CHANNEL;
+    tx(() => {
+      itemUpsert.run({
+        $id: item.id,
+        $kind: item.kind,
+        $created_at: item.created_at,
+        $updated_at: item.updated_at,
+        $run_id: item.run_id ?? null,
+        $task_id: item.task_id ?? null,
+        $channel_id: channelId,
+        $json: JSON.stringify(item),
+      });
+      indexItem(db, item, channelId);
     });
     return item;
   },
@@ -353,7 +404,7 @@ export const tasks = {
         $updated_at: task.updated_at,
         $json: JSON.stringify(task),
       });
-      searchIndex.put(task.id, 'task', task.title, [task.result, task.progress, task.instructions].filter(Boolean).join('\n'));
+      searchIndex.put(task.id, 'task', task.title, taskSearchText(task));
     });
     return task;
   },
@@ -428,6 +479,32 @@ export const pages = {
       db.query('DELETE FROM pages WHERE id = ?').run(id);
       searchIndex.remove(id);
     });
+  },
+};
+
+// ---------- routines ----------
+const routineGet = db.query<{ json: string }, [string]>('SELECT json FROM routines WHERE id = ?');
+// Soonest first: the scheduler reads the list in due order and the sheet shows the same order.
+const routineAll = db.query<{ json: string }, []>('SELECT json FROM routines ORDER BY next_run, created_at, id');
+const routineUpsert = db.query(
+  `INSERT INTO routines(id, enabled, next_run, created_at, json) VALUES (?, ?, ?, ?, ?)
+   ON CONFLICT(id) DO UPDATE SET enabled = excluded.enabled, next_run = excluded.next_run, json = excluded.json`,
+);
+const routineDelete = db.query('DELETE FROM routines WHERE id = ?');
+export const routines = {
+  all(): Routine[] {
+    return routineAll.all().map((r) => JSON.parse(r.json) as Routine);
+  },
+  get(id: string): Routine | null {
+    const row = routineGet.get(id);
+    return row ? (JSON.parse(row.json) as Routine) : null;
+  },
+  save(routine: Routine) {
+    routineUpsert.run(routine.id, routine.enabled ? 1 : 0, routine.next_run ?? null, routine.created_at, JSON.stringify(routine));
+    return routine;
+  },
+  remove(id: string) {
+    return routineDelete.run(id).changes > 0;
   },
 };
 
@@ -544,6 +621,8 @@ export const triggers = {
 };
 
 // ---------- settings ----------
+const NOTIFY_TASKS = ['all', 'failures', 'off'] as const;
+export const MAX_PUSHES_PER_DAY = 100;
 const DEFAULT_SETTINGS: Settings = {
   brief_enabled: true,
   brief_time: '07:30',
@@ -551,6 +630,11 @@ const DEFAULT_SETTINGS: Settings = {
   quiet_start: '21:30',
   quiet_end: '07:00',
   timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+  // An install saved before these existed behaved as "everything pushes": keep that until the user says otherwise.
+  notify_tasks: 'all',
+  notify_agent: true,
+  muted_channels: [],
+  max_pushes_per_day: 0,
 };
 export const settings = {
   get(): Settings {
@@ -569,6 +653,32 @@ export const settings = {
         new Intl.DateTimeFormat('en-US', { timeZone: patch.timezone });
         clean.timezone = patch.timezone;
       } catch {}
+    }
+    // Notification preferences are validated rather than ignored: a typo must not quietly turn the phone off.
+    if (patch.notify_tasks !== undefined) {
+      if (typeof patch.notify_tasks !== 'string' || !NOTIFY_TASKS.includes(patch.notify_tasks as (typeof NOTIFY_TASKS)[number])) {
+        throw new UserError("notify_tasks must be 'all', 'failures' or 'off'");
+      }
+      clean.notify_tasks = patch.notify_tasks as Settings['notify_tasks'];
+    }
+    if (patch.notify_agent !== undefined) {
+      if (typeof patch.notify_agent !== 'boolean') throw new UserError('notify_agent must be true or false');
+      clean.notify_agent = patch.notify_agent;
+    }
+    if (patch.muted_channels !== undefined) {
+      if (!Array.isArray(patch.muted_channels) || patch.muted_channels.some((id) => typeof id !== 'string')) {
+        throw new UserError('muted_channels must be an array of channel ids');
+      }
+      // Unknown ids are dropped, duplicates collapsed. `channels.get` sees archived channels too, so a mute on one
+      // survives until the user clears it.
+      clean.muted_channels = [...new Set((patch.muted_channels as string[]).filter((id) => channels.get(id) !== null))];
+    }
+    if (patch.max_pushes_per_day !== undefined) {
+      const cap = patch.max_pushes_per_day;
+      if (typeof cap !== 'number' || !Number.isInteger(cap) || cap < 0 || cap > MAX_PUSHES_PER_DAY) {
+        throw new UserError(`max_pushes_per_day must be a whole number between 0 and ${MAX_PUSHES_PER_DAY}`);
+      }
+      clean.max_pushes_per_day = cap;
     }
     const next = { ...settings.get(), ...clean };
     kv.set('settings', next);

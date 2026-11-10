@@ -216,3 +216,17 @@ test('a failed call surfaces the server error message and status', async () => {
     s.restore();
   }
 });
+
+test('saveFileVersion posts the edited text to the version route', async () => {
+  const s = stubFetch(() => ok({ file: { id: 'v2', version_of: 'v1' } }));
+  try {
+    const res = await api.saveFileVersion('v1', '# Edited');
+    expect(s.calls[0].url).toBe('/api/files/v1/versions');
+    expect(s.calls[0].init.method).toBe('POST');
+    expect(s.calls[0].init.credentials).toBe('include');
+    expect(JSON.parse(s.calls[0].init.body)).toEqual({ text: '# Edited' });
+    expect(res.file.version_of).toBe('v1');
+  } finally {
+    s.restore();
+  }
+});

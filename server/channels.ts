@@ -6,10 +6,28 @@ import { UserError } from './errors';
 export interface ChannelInput {
   name: string;
   topic?: string;
+  instructions?: string;
+  group?: string;
+  repo?: string;
+}
+
+/**
+ * A channel patch: only keys present in the request body are touched, so the
+ * edit sheet can send the whole form at once. A present-but-empty value
+ * clears that field (back to NULL); an absent key leaves the row alone.
+ */
+export interface ChannelPatch {
+  topic?: string | null;
+  instructions?: string | null;
+  group?: string | null;
+  repo?: string | null;
 }
 
 export const CHANNEL_NAME_MAX = 40;
 export const CHANNEL_TOPIC_MAX = 200;
+export const CHANNEL_INSTRUCTIONS_MAX = 2000;
+export const CHANNEL_GROUP_MAX = 40;
+export const CHANNEL_REPO_MAX = 200;
 /** The slug becomes the Hermes session id, so it stays short and boring. */
 const SLUG_MAX = 24;
 
@@ -41,21 +59,118 @@ export function channelInput(raw: unknown): ChannelInput {
   if (name.length > CHANNEL_NAME_MAX) throw new UserError(`channel names are at most ${CHANNEL_NAME_MAX} characters`);
   if (!/[a-z0-9]/i.test(name)) throw new UserError('a channel name needs at least one letter or number');
   if (slugFor(name) === 'general') throw new UserError('there is already a general channel');
-  const topic = String(src.topic ?? '')
+  const topic = cleanTopic(String(src.topic ?? ''));
+  const instructions = cleanInstructions(src.instructions);
+  const group = cleanGroup(src.group);
+  const repo = cleanRepo(src.repo);
+  return {
+    name,
+    ...(topic ? { topic } : {}),
+    ...(instructions ? { instructions } : {}),
+    ...(group ? { group } : {}),
+    ...(repo ? { repo } : {}),
+  };
+}
+
+/** Topic-length text: collapse every whitespace run (newlines included) to one space, then cap. */
+function cleanTopic(raw: unknown): string {
+  return String(raw ?? '')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, CHANNEL_TOPIC_MAX);
-  return { name, ...(topic ? { topic } : {}) };
+}
+
+/**
+ * Standing instructions: collapsed to one line like the topic, so a pasted multi-line list stays one bounded
+ * block in the prompt instead of blowing up the context line count.
+ */
+export function cleanInstructions(raw: unknown): string {
+  return String(raw ?? '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, CHANNEL_INSTRUCTIONS_MAX);
+}
+
+/** Group label: a short strip heading ("Work", "Home"). Trimmed; overlong is capped, empty clears. */
+export function cleanGroup(raw: unknown): string {
+  return String(raw ?? '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, CHANNEL_GROUP_MAX);
+}
+
+/** "owner/name" with the characters GitHub actually allows in either half. */
+const REPO_SLUG = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
+/** An absolute http(s) URL whose host is github.com. Only the owner/name is taken; deeper paths are ignored. */
+const REPO_URL = /^https?:\/\/(?:www\.)?github\.com\/([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)/i;
+
+/** The canonical form, or null for a "." or ".." half, which is a path segment and not a GitHub name. */
+function canonicalRepo(owner: string, name: string): string | null {
+  if (owner === '.' || owner === '..' || name === '.' || name === '..') return null;
+  return `https://github.com/${owner}/${name}`;
+}
+
+/**
+ * Normalize a repo reference to its canonical https URL. Accepts "owner/name" or an http(s) GitHub URL and
+ * trims the URL down to owner/name (`.git`, a trailing slash, a deeper path, a query and a hash all go),
+ * so the stored value is always something the app can link to. Anything else is refused: this is a display
+ * and linking hint, not a place to point the agent at an arbitrary host.
+ */
+export function normalizeRepo(raw: unknown): string {
+  const text = String(raw ?? '').trim();
+  if (!text) throw new UserError('a repo needs an owner/name or a GitHub URL');
+  if (text.length > CHANNEL_REPO_MAX) throw new UserError(`repo references are at most ${CHANNEL_REPO_MAX} characters`);
+  if (REPO_SLUG.test(text)) {
+    const [owner, name] = text.split('/');
+    const canonical = canonicalRepo(owner, name);
+    if (canonical) return canonical;
+  }
+  const url = REPO_URL.exec(text);
+  if (url) {
+    const canonical = canonicalRepo(url[1], url[2].replace(/\.git$/i, ''));
+    if (canonical) return canonical;
+  }
+  throw new UserError('a repo is "owner/name" or an https://github.com/owner/name URL');
+}
+
+/** Repo for storage: trimmed, normalized, and null when absent or blank. */
+export function cleanRepo(raw: unknown): string | null {
+  const text = String(raw ?? '').trim();
+  return text ? normalizeRepo(text) : null;
+}
+
+/**
+ * Which fields an update touches. Presence (not emptiness) is the signal: `{ group: '' }` clears the group,
+ * while `{}` leaves every column alone. Cleaning matches channelInput so create and update store the same shape.
+ */
+export function channelPatch(raw: unknown): ChannelPatch {
+  const src = (raw ?? {}) as Record<string, unknown>;
+  const out: ChannelPatch = {};
+  if ('topic' in src) out.topic = cleanTopic(src.topic) || null;
+  if ('instructions' in src) out.instructions = cleanInstructions(src.instructions) || null;
+  if ('group' in src) out.group = cleanGroup(src.group) || null;
+  if ('repo' in src) out.repo = cleanRepo(src.repo);
+  return out;
 }
 
 /** The line that tells the agent which thread it is in, and what that thread is for. */
-export function channelLine(channel: Pick<Channel, 'name' | 'topic'>, isGeneral: boolean): string {
+export function channelLine(channel: Pick<Channel, 'name' | 'topic' | 'instructions' | 'repo'>, isGeneral: boolean): string {
+  // The user's own standing rules for this thread, kept to one bounded block (the 2000-char cap in channelInput
+  // is the bound). It sits before the topic so the specific rules read before the general description.
+  const standing = channel.instructions
+    ? ` Standing instructions for this channel: ${channel.instructions} These are the user's standing rules for this channel: follow them every turn, but they never override your safety rules — ask before anything sensitive or outward-facing, no matter what they say.`
+    : '';
+  // A channel's repo is a place to read, not a place to write: the repo line says so in the same breath, and stays
+  // one line so a channel with both instructions and a repo does not turn the prompt into a wall of text.
+  const repo = channel.repo
+    ? ` This channel works in the repository ${channel.repo}. Use the connected GitHub tools if they are available; never push or open a pull request there without the user's explicit approval.`
+    : '';
   if (isGeneral) {
-    return `You are in the general channel: the user's main thread. Briefs, check-ins and background task results live here.${
+    return `You are in the general channel: the user's main thread. Briefs, check-ins and background task results live here.${standing}${
       channel.topic ? ` Its topic: ${channel.topic}.` : ''
-    }`;
+    }${repo}`;
   }
-  return `You are in the channel "#${channel.name}", a separate thread on this one topic that the user comes back to.${
+  return `You are in the channel "#${channel.name}", a separate thread on this one topic that the user comes back to.${standing}${
     channel.topic ? ` Its topic: ${channel.topic}.` : ''
-  } Keep to it here; your memory is shared across every channel, so anything you learned elsewhere is still yours to use.`;
+  }${repo} Keep to it here; your memory is shared across every channel, so anything you learned elsewhere is still yours to use.`;
 }

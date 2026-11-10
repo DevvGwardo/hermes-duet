@@ -3,7 +3,7 @@ import type { Attachment, FileEntry, Item, Page, Task } from '../shared/types';
 import { channels, items, kv, newId, runs, tasks } from './db';
 import { HermesError, hermes } from './hermes';
 import { GENERAL_CHANNEL } from './schema';
-import { agentState, briefDedupeAllowed, cancelTask, deliverableAction, deliverableApproval, executeTool, mainSessionId, pageRefreshing, recoverOrphans, runBrief, settleHermesAsk, startUserTask, stopMain, submitUser, __resetBriefDedupe } from './runner';
+import { agentState, briefDedupeAllowed, cancelTask, confirmTask, deliverableAction, deliverableApproval, executeTool, mainSessionId, pageRefreshing, recoverOrphans, reopenTask, runBrief, settleHermesAsk, startUserTask, steerTask, stopMain, submitUser, __resetBriefDedupe } from './runner';
 
 // Tests must never trigger real Hermes gateway turns unless explicitly stubbed
 hermes.hasKey = () => false;
@@ -505,4 +505,181 @@ test("scheduled briefs are never deduped by the manual window", () => {
   expect(briefDedupeAllowed(now)).toBe(true);
   // runBrief with scheduled source must not consult the manual dedupe clock.
   __resetBriefDedupe();
+});
+
+// The agent's done only ever "looks done": update_task stamps the first finish and keeps it, without changing status.
+test('update_task done stamps agent_done_at once and keeps status done', async () => {
+  const t: Task = { id: newId(), title: 'hc stamp', status: 'running', steps: [], created_at: Date.now(), updated_at: Date.now(), background: true };
+  tasks.save(t, 'duet-task-hc-stamp');
+  await executeTool('update_task', { task_id: t.id, status: 'done' });
+  const first = tasks.get(t.id)!;
+  expect(first.status).toBe('done');
+  expect(first.agent_done_at).toBeTruthy();
+  await executeTool('update_task', { task_id: t.id, status: 'done', progress: 'polishing' });
+  const second = tasks.get(t.id)!;
+  expect(second.status).toBe('done');
+  expect(second.agent_done_at).toBe(first.agent_done_at);
+  expect(second.confirmed_at).toBeUndefined();
+});
+
+test('update_task for other statuses leaves agent_done_at alone', async () => {
+  const t: Task = { id: newId(), title: 'hc no stamp', status: 'running', steps: [], created_at: Date.now(), updated_at: Date.now(), background: true };
+  tasks.save(t, 'duet-task-hc-nostamp');
+  await executeTool('update_task', { task_id: t.id, status: 'waiting', progress: 'thinking' });
+  expect(tasks.get(t.id)!.agent_done_at).toBeUndefined();
+});
+
+// Steering goes to the task's live run through hermes.steer, with task attribution on the text.
+test('steerTask delivers to the live run', async () => {
+  const steered: { id: string; text: string }[] = [];
+  const restore = stubHermes({
+    ...silentRun('r-steer-live'),
+    steer: async (id: string, text: string) => {
+      steered.push({ id, text });
+      return { accepted: true };
+    },
+    stop: async () => {
+      throw new HermesError(404, 'no such run');
+    },
+  });
+  const { task } = startUserTask('steerable work');
+  try {
+    await until(() => agentState().background_running === 1);
+    const r = await steerTask(task.id, 'use blue for the headings');
+    expect(r.delivered).toBe(true);
+    expect(steered).toHaveLength(1);
+    expect(steered[0]!.id).toBe('r-steer-live');
+    expect(steered[0]!.text).toContain('use blue for the headings');
+  } finally {
+    await cancelTask(task.id).catch(() => {});
+    restore();
+  }
+});
+
+// A steer Hermes refuses is queued as its own turn in the task's session — same conversation, never sent twice.
+test('a refused steer is queued, not lost', async () => {
+  const restore = stubHermes({
+    ...silentRun('r-steer-queued'),
+    steer: async () => {
+      throw new HermesError(502, 'gateway hiccup');
+    },
+    stop: async () => {
+      throw new HermesError(404, 'no such run');
+    },
+  });
+  const { task } = startUserTask('flaky steer work');
+  try {
+    await until(() => agentState().background_running === 1);
+    const r = await steerTask(task.id, 'hold that thought');
+    expect(r.delivered).toBe(false);
+  } finally {
+    await cancelTask(task.id).catch(() => {});
+    restore();
+  }
+});
+
+test('steerTask refuses a task with no live run instead of queueing silently', async () => {
+  const done: Task = { id: newId(), title: 'hc over', status: 'done', steps: [], created_at: Date.now(), updated_at: Date.now(), background: true };
+  tasks.save(done, 'duet-task-hc-over');
+  const errDone = await steerTask(done.id, 'one more thing').catch((e) => e);
+  expect(errDone.message).toContain('nothing to steer');
+  expect(errDone.status).toBe(409);
+
+  // Running on paper but with no run attached is still not live.
+  const ghost: Task = { id: newId(), title: 'hc ghost', status: 'running', steps: [], created_at: Date.now(), updated_at: Date.now(), background: true };
+  tasks.save(ghost, 'duet-task-hc-ghost');
+  const errGhost = await steerTask(ghost.id, 'hello?').catch((e) => e);
+  expect(errGhost.message).toContain('not running right now');
+  expect(errGhost.status).toBe(409);
+
+  const errMissing = await steerTask('no-such-task', 'hello?').catch((e) => e);
+  expect(errMissing.status).toBe(404);
+});
+
+// Only the user completes a task: confirm stamps it (and the handover card), reopen clears it but keeps history.
+test('confirm and reopen bracket the user completion', () => {
+  const t: Task = { id: newId(), title: 'hc user done', status: 'done', steps: [], created_at: Date.now(), updated_at: Date.now(), background: true };
+  tasks.save(t, 'duet-task-hc-userdone');
+  const confirmed = confirmTask(t.id);
+  expect(confirmed.confirmed_at).toBeTruthy();
+  expect(confirmed.status).toBe('done');
+  const reopened = reopenTask(t.id);
+  expect(reopened.confirmed_at).toBeUndefined();
+  expect(reopened.agent_done_at).toBe(tasks.get(t.id)!.agent_done_at);
+});
+
+test('confirm refreshes the handover card in place', () => {
+  const t: Task = { id: newId(), title: 'hc card done', status: 'done', steps: [], created_at: Date.now(), updated_at: Date.now(), background: true };
+  const cardId = newId();
+  const now = Date.now();
+  tasks.save({ ...t, handover_id: cardId }, 'duet-task-hc-carddone');
+  items.save({
+    id: cardId,
+    kind: 'card',
+    created_at: now,
+    updated_at: now,
+    channel_id: GENERAL_CHANNEL,
+    task_id: t.id,
+    card: { type: 'handover', title: t.title, status: 'info', task_id: t.id },
+  });
+  confirmTask(t.id);
+  expect(items.get(cardId)!.card!.confirmed_at).toBe(tasks.get(t.id)!.confirmed_at);
+  reopenTask(t.id);
+  expect(items.get(cardId)!.card!.confirmed_at).toBeUndefined();
+});
+
+// Structured citations: valid sources ride on the entry or the task, and an
+// unknown local id fails the tool call instead of posting a chip that opens nothing.
+test('brief entries keep their sources through posting', async () => {
+  const src = items.save({
+    id: newId(),
+    kind: 'user',
+    text: 'Dana wrote about the lease',
+    channel_id: GENERAL_CHANNEL,
+    created_at: Date.now(),
+    updated_at: Date.now(),
+  });
+  await executeTool('post_brief', {
+    title: 'Heads up: 1 thing',
+    entries: [{ title: 'Cite the lease reply', sources: [{ kind: 'item', id: src.id, label: "Dana's email" }] }],
+  });
+  const card = items.latest(50).items.find((i) => i.card?.type === 'brief' && i.card.entries?.some((e) => e.title === 'Cite the lease reply'));
+  expect(card?.card?.entries?.[0]?.sources).toEqual([{ kind: 'item', id: src.id, label: "Dana's email" }]);
+});
+
+test('a brief entry naming an unknown id fails the tool call and posts nothing', async () => {
+  const err = await executeTool('post_brief', {
+    title: 'Heads up: 1 thing',
+    entries: [{ title: 'Cite nothing at all', sources: [{ kind: 'file', id: 'no-such-file', label: 'Deck' }] }],
+  }).catch((e) => e);
+  expect(err).toBeInstanceOf(Error);
+  expect(err.message).toContain('no file with id');
+  expect(items.latest(50).items.some((i) => i.card?.entries?.some((e) => e.title === 'Cite nothing at all'))).toBe(false);
+});
+
+test('a task result keeps its sources, and an unknown id fails the call', async () => {
+  const t: Task = {
+    id: newId(),
+    title: 'Cite work',
+    status: 'running',
+    steps: [],
+    created_at: Date.now(),
+    updated_at: Date.now(),
+    background: true,
+  };
+  tasks.save(t, 'sess-cite-test');
+  await executeTool('update_task', {
+    task_id: t.id,
+    result: 'Rent moved to Friday',
+    sources: [{ kind: 'url', url: 'https://example.com/rent', label: 'Ledger' }],
+  });
+  expect(tasks.get(t.id)!.sources).toEqual([{ kind: 'url', url: 'https://example.com/rent', label: 'Ledger' }]);
+  const err = await executeTool('update_task', {
+    task_id: t.id,
+    sources: [{ kind: 'page', id: 'no-such-page', label: 'Dashboard' }],
+  }).catch((e) => e);
+  expect(err).toBeInstanceOf(Error);
+  expect(err.message).toContain('no page with id');
+  // The failed call leaves the earlier citations alone.
+  expect(tasks.get(t.id)!.sources).toEqual([{ kind: 'url', url: 'https://example.com/rent', label: 'Ledger' }]);
 });

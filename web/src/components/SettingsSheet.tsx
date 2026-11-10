@@ -4,12 +4,16 @@ import { api, enablePush, isStandalone, pushSupported } from '../api';
 import { useStore } from '../store';
 import { useDialogTrap } from '../hooks/useDialogTrap';
 import { Icon } from '../ui';
+import { ConnectorsSheet } from './ConnectorsSheet';
+import { MemorySheet } from './MemorySheet';
+import { RoutinesSheet } from './RoutinesSheet';
 import { WhatICanSee } from './WhatICanSee';
 
 export function SettingsSheet({ onClose }: { onClose: () => void }) {
   const settings = useStore((s) => s.settings);
   const pushEnabled = useStore((s) => s.pushEnabled);
   const agent = useStore((s) => s.agent);
+  const channels = useStore((s) => s.channels);
   const [pushMsg, setPushMsg] = useState<string | null>(null);
   const [briefMsg, setBriefMsg] = useState<string | null>(null);
   const [connectors, setConnectors] = useState<Connector[] | null>(null);
@@ -17,14 +21,23 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
   const [connErr, setConnErr] = useState<string | null>(null);
   const [trig, setTrig] = useState<{ webhook_url: string; watch_dir: string | null; meeting_lead_minutes: number; triggers: { id: string; kind: string; last_triggered_at: number | null }[] } | null>(null);
   const [copied, setCopied] = useState(false);
+  const [showConnectors, setShowConnectors] = useState(false);
+  const [routinesOpen, setRoutinesOpen] = useState(false);
+  const [memoryOpen, setMemoryOpen] = useState(false);
+  // The hard-block policy is informational only; older servers don't serve it, so a failure just hides the section.
+  const [policy, setPolicy] = useState<{ id: string; title: string; detail: string }[] | null>(null);
   const dialog = useRef<HTMLDivElement | null>(null);
   useDialogTrap(dialog);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    // Escape closes the routines, connectors or memory sheet first when one is open on top of this one.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || routinesOpen || showConnectors || memoryOpen) return;
+      onClose();
+    };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [onClose, routinesOpen, showConnectors, memoryOpen]);
 
   // Probes run AppleScript, so they load when the sheet opens rather than with every snapshot.
   useEffect(() => {
@@ -33,6 +46,7 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
       .then((r) => setConnectors(r.connectors))
       .catch((e) => setConnErr(e?.message ?? 'Could not check connectors.'));
     api.triggers().then(setTrig).catch(() => {});
+    api.policy().then((r) => setPolicy(r.blocks)).catch(() => {});
   }, []);
 
   if (!settings) return null;
@@ -88,6 +102,57 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
               )}
             </div>
             {pushMsg && <p className="muted small">{pushMsg}</p>}
+            <div className="setting-row">
+              <span>Task pushes</span>
+              <select value={settings.notify_tasks ?? 'all'} onChange={(e) => save({ notify_tasks: e.target.value as Settings['notify_tasks'] })}>
+                <option value="all">Every finish</option>
+                <option value="failures">Failures only</option>
+                <option value="off">Off</option>
+              </select>
+            </div>
+            <label className="setting-row">
+              <span>Agent notifications</span>
+              <input type="checkbox" className="switch" checked={settings.notify_agent ?? true} onChange={(e) => save({ notify_agent: e.target.checked })} />
+            </label>
+            <label className="setting-row">
+              <span>Max pushes a day</span>
+              <input
+                type="number"
+                min={0}
+                max={100}
+                value={settings.max_pushes_per_day ?? 0}
+                onChange={(e) => {
+                  const v = e.target.valueAsNumber;
+                  if (Number.isFinite(v)) save({ max_pushes_per_day: Math.trunc(v) });
+                }}
+              />
+            </label>
+            <div className="setting-row column">
+              <span>Mute a channel</span>
+              <div className="mute-list">
+                {channels.map((c) => {
+                  const muted = (settings.muted_channels ?? []).includes(c.id);
+                  return (
+                    <label key={c.id} className="mute-row">
+                      <input
+                        type="checkbox"
+                        checked={muted}
+                        onChange={(e) =>
+                          save({
+                            muted_channels: e.target.checked
+                              ? [...(settings.muted_channels ?? []), c.id]
+                              : (settings.muted_channels ?? []).filter((id) => id !== c.id),
+                          })
+                        }
+                      />
+                      <span>#{c.name}</span>
+                    </label>
+                  );
+                })}
+                {!channels.length && <span className="muted small">No channels yet.</span>}
+              </div>
+            </div>
+            <p className="muted small">Approvals and questions always reach you. A muted channel still posts in its thread.</p>
           </section>
 
           <section>
@@ -133,7 +198,24 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
           </section>
 
           <section>
+            <h3>Routines</h3>
+            <p className="muted small">Background tasks on a schedule you write in plain language: every Monday at 9, every 6 hours.</p>
+            <div className="setting-row">
+              <span>Scheduled routines</span>
+              <button className="btn btn-ghost small" onClick={() => setRoutinesOpen(true)}>
+                Manage
+              </button>
+            </div>
+          </section>
+
+          <section>
             <h3>Connectors</h3>
+            <div className="setting-row">
+              <span>What is connected, and what to add next</span>
+              <button className="btn btn-ghost small" onClick={() => setShowConnectors(true)}>
+                Open
+              </button>
+            </div>
             <p className="muted small">Native apps on this Mac. Nothing leaves it: each one is a local CLI or AppleScript.</p>
             {connErr && <p className="card-error">{connErr}</p>}
             {!connectors && !connErr && <p className="muted small">Checking…</p>}
@@ -208,13 +290,39 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
             </div>
           </section>
 
+          {policy && policy.length > 0 && (
+            <section>
+              <h3>Always refused</h3>
+              <p className="muted small">No approval card can authorize these. The agent is told to refuse them outright.</p>
+              <ul className="connector-list">
+                {policy.map((b) => (
+                  <li key={b.id} className="connector">
+                    <span className="connector-main">
+                      <span className="connector-name">{b.title}</span>
+                      <span className="connector-detail">{b.detail}</span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
           <section>
             <h3>What I can see</h3>
             <p className="muted small">Loaded before your first message, every turn.</p>
             <WhatICanSee />
+            <div className="setting-row">
+              <span>Memory</span>
+              <button className="btn btn-ghost small" onClick={() => setMemoryOpen(true)}>
+                Edit
+              </button>
+            </div>
           </section>
         </div>
       </div>
+      {showConnectors && <ConnectorsSheet onClose={() => setShowConnectors(false)} />}
+      {routinesOpen && <RoutinesSheet onClose={() => setRoutinesOpen(false)} />}
+      {memoryOpen && <MemorySheet onClose={() => setMemoryOpen(false)} />}
     </div>
   );
 }

@@ -31,13 +31,13 @@ View the [full-size infographic](docs/brand/what-it-does.png), or expand the det
 
 - **One thread.** Chat, tool activity and cards live in one conversation. **Tasks** tracks running and finished work, and **Make** collects every file it hands you. Settings → **What I can see** lists what the agent starts each turn with: your context sources, its Hermes skills and enabled tools, and connected MCP apps. A blank thread shows a one-line version.
 - **Comes to you.** It sends a morning brief at the time you pick, plus optional check-ins (3× a day or hourly) that stay quiet unless something needs you. Notifications arrive by web push, and quiet hours are respected: a question, interrupted work, finished task or agent `notify` that would have pushed during them is held, and comes back as one "While you were away" push when they end (skipped if the morning brief is due within the hour, since it lists what is waiting). Approvals and the brief itself still push during quiet hours. A device that has the app on screen gets no push (the app reports when it is visible), and the service worker shows every push it receives, because iOS revokes subscriptions that push silently. The app re-registers its subscription each time it opens, and takes the banner for an approval or question off the lock screen once that card is decided or expired. On a device where the app isn't open, the next push that arrives anyway does the same: each push lists the approvals and questions still waiting, and the service worker closes older ones that aren't on it (no push is ever sent just to clear a banner).
-- **Asks before it acts.** Sending messages as you, paying, deleting, posting and signing all go through an **Approve / Not now** card first. Quick decisions become tappable questions.
+- **Asks before it acts.** Sending messages as you, paying, deleting, posting and signing all go through a structured **Approve / Not now** card first (action, destination, every recipient — no vague "do the thing" approvals). Outbound text is scanned on this machine for secrets (card numbers, SSNs, private keys, API keys): a secret blocks the card until the agent redacts it, and anything sensitive-but-shareable (like an IBAN) is flagged on the card for you to check. Quick decisions become tappable questions. Always refused, even with approval: bank/wire transfers, securities or crypto trading, logging into someone else's account, password/2FA changes, and creating accounts.
 - **Works in the background.** Bigger jobs (decks, dashboards, research) run as tasks in their own Hermes session, while you keep chatting.
 - **Steer or stop.** A message sent mid-run steers the live turn, and Stop interrupts it. One that arrives too late for the turn to use (Hermes returns it as `pending_steer`) goes out as the next turn.
 - **Survives restarts.** If the Hermes gateway restarts mid-run, Duet unpauses the session, retries what got blocked, and asks whether to pick up the interrupted work. A standing page's scheduled refresh is not asked about: it starts over once on its own, and a second interruption counts as a failed refresh. A morning brief that fails before posting leaves a "Run it now / Skip today" card and a push, so the day's brief isn't silently lost. A run that goes 45 minutes without a single event (a wedged tool or model call; `DUET_RUN_TIMEOUT_MS`) is stopped, unless it is waiting on a Hermes approval or question for you, so it can't hold the thread or a task slot forever; a long task that keeps reporting steps is never cut off. A chat turn that fails (a model error, or a stopped hung run) leaves a "Try … again?" card and a push. The card says why it stopped and what last finished. Sending a new message instead retires that card, since the conversation carries on.
 - **Talk, photograph, or type.** Tap the mic to record a voice memo — transcribed on your machine by whisper.cpp, so it works offline — or take a photo / attach a PDF of a receipt, a whiteboard or a form. Attachments are stored under `data/uploads` and handed to the agent as file paths, so a vision model can read them. Every brief has a **Listen** button that reads it aloud (macOS `say`, Piper, or any OpenAI-compatible TTS) with a lock-screen player.
 - **Channels.** Long projects get their own thread (`#taxes`, `#home`, `#launch`) with its own Hermes session, while memory and files are shared. The general channel keeps briefs, check-ins and task results. Everything — every channel, task, delivered file and standing page — is indexed in SQLite FTS5 and searchable from the magnifier (⌘K).
-- **Spending needs a receipt.** `request_payment` posts an itemized payment card with a total that must add up and sit under `DUET_MAX_TRANSACTION_LIMIT`. Approving it can issue a single-use virtual card from Privacy.com, Stripe Issuing or Revolut, capped at exactly that total for one hour, and type it into the agent's browser. The card number never reaches the model, the database or a log line.
+- **Spending needs a receipt.** `request_payment` posts an itemized payment card with a total that must add up and sit under `DUET_MAX_TRANSACTION_LIMIT`, bound to the exact checkout page (`merchant_url`). Approving it can issue a single-use virtual card from Privacy.com, Stripe Issuing or Revolut, capped at exactly that total for one hour, and type it into the agent's browser — but only while the tab is still on that merchant's host. The card number never reaches the model, the database or a log line.
 - **Event-driven, not just scheduled.** A webhook URL (GitHub, Stripe, Zapier, `curl`) wakes the agent with the payload; a new receipt in `~/Downloads` gets looked at; a meeting entering the next 15 minutes gets a prep card. Quiet hours still apply.
 - **Deliverables that answer back.** HTML the agent builds gets a `window.Duet.sendAction()` / `requestApproval()` bridge, so a dashboard's buttons reach it. Standing pages get a **Compare** slider that wipes between yesterday's version and today's.
 - **Lighter logins.** The live pane can autofill a saved login through the 1Password or Bitwarden CLI instead of you typing a password on a phone keyboard, and can render the page at 390×844 so mobile sites behave.
@@ -110,8 +110,22 @@ echo "DUET_PUBLIC_URL=https://<your-mac>.<your-tailnet>.ts.net:8443" >> .env && 
 
 1. On the phone, with Tailscale connected, open that URL.
 2. Share → **Add to Home Screen**, then open it from the Home Screen.
-3. Run `hermes-duet pair` on your Mac and enter the code.
+3. Run `hermes-duet pair` on the host and enter the code.
 4. Tap the gear → Notifications → **Turn on**.
+
+### Always-on
+
+Briefs, check-ins, the watched folder, meeting prep, webhook delivery and background tasks all run on the host, so
+the host has to be awake: a sleeping or lid-closed laptop waits rather than runs, even though the app still opens on
+your phone. A Linux mini-PC, NAS or VPS is the intended always-on host — see
+[docs/DEPLOY.md#always-on-host](docs/DEPLOY.md#always-on-host) for systemd, Tailscale, backups, Docker and the
+honest limits (wake-on-LAN is not always-on, and there is one Hermes gateway per install today).
+
+### Native apps
+
+The installable PWA is deliberate: one web surface that runs anywhere, updates with the server, and works with the
+phone's push and camera. A native iOS/Android shell is deferred until the web surface is stable (see
+[parity §4.11](docs/CLAUDE-DUET-PARITY.md#411-nativemobile-polish)) — there are no native apps today.
 
 ### Tell it where your life lives
 

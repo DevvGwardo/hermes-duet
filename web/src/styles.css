@@ -1283,6 +1283,42 @@ code {
   overflow-wrap: anywhere;
 }
 
+/* Structured approval scope: what kind of action, who gets it, where it happens. */
+.approval-meta {
+  margin: 12px 0 0;
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+}
+.approval-meta-row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+.approval-meta dt {
+  flex: none;
+  width: 52px;
+  font: 600 11px var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--bronze);
+}
+.approval-meta dd {
+  margin: 0;
+  color: var(--paper);
+  overflow-wrap: anywhere;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.recipient-chip {
+  padding: 2px 8px;
+  border: 1.5px solid var(--line-2);
+  border-radius: 20px;
+  font-size: 12.5px;
+  background: rgba(0, 0, 0, 0.25);
+}
+
 .brief {
   list-style: none;
   margin: 12px 0 0;
@@ -1403,6 +1439,41 @@ code {
 .watching .page-link {
   display: inline;
   margin: 0 0 0 8px;
+}
+
+/* Provenance chips: muted metadata, not calls to action. file/page/url chips
+   open or link out; item/task/connector labels just sit there. */
+.sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.sources .chip {
+  margin-top: 0;
+}
+.chip.source {
+  background: transparent;
+  border-color: var(--line-2);
+  border-style: dashed;
+  color: var(--dim);
+  box-shadow: none;
+  text-decoration: none;
+  font-weight: 500;
+}
+a.chip.source {
+  display: inline-block;
+}
+.chip.source:not(.is-label):hover {
+  border-color: var(--gold);
+  color: var(--gold);
+  background: rgba(255, 215, 0, 0.06);
+}
+.chip.source.is-label {
+  cursor: default;
+}
+.watching .sources {
+  margin-top: 4px;
 }
 
 .checklist ul,
@@ -1785,6 +1856,104 @@ li.done .tick {
 .task-detail .btn {
   margin-top: 12px;
 }
+
+/* The task detail sheet: the same sheet chrome as settings and the viewer, with the task's own sections inside. */
+.task-sheet {
+  height: calc(100dvh - 24px - env(safe-area-inset-top));
+}
+.task-sheet-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 18px 22px;
+}
+.task-confirm {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 12px 0 4px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: #0d0d0d;
+  border: 1.5px solid var(--line-2);
+  font-weight: 650;
+  color: var(--paper);
+}
+.task-confirm.is-confirmed {
+  color: var(--gold);
+}
+.task-confirm span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.task-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+.task-actions .btn {
+  margin-top: 0;
+}
+.task-sources {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.task-sources li {
+  font-size: 13.5px;
+  color: var(--dim);
+  border-left: 2px solid var(--gold);
+  padding-left: 10px;
+}
+.task-source-label {
+  font-weight: 650;
+  color: var(--paper-2);
+}
+.task-source-quote {
+  display: block;
+  color: var(--faint);
+  font-style: italic;
+  margin-top: 2px;
+}
+.task-composer {
+  border-top: 2px solid #000;
+  box-shadow: 0 -1px 0 var(--line);
+  padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
+  background: linear-gradient(180deg, var(--ink-1), #131313);
+}
+.task-composer-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.task-composer-row textarea {
+  flex: 1;
+  border: 2px solid var(--line-2);
+  border-radius: 8px;
+  background: #000;
+  color: var(--paper);
+  padding: 8px 12px;
+  font-size: 16px; /* >=16px stops iOS zoom-on-focus */
+  line-height: 1.4;
+  resize: none;
+  outline: 0;
+  max-height: 120px;
+}
+.task-composer-row textarea:focus {
+  border-color: var(--gold);
+}
+.task-composer-hint {
+  margin: 0;
+  padding: 10px 18px calc(10px + env(safe-area-inset-bottom));
+  font: 400 12px var(--mono);
+  color: var(--faint);
+  border-top: 2px solid #000;
+}
 .pane .muted.pad {
   padding: 18px;
   border-radius: 8px;
@@ -2000,6 +2169,38 @@ li.done .tick {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+.setting-row select,
+.setting-row input[type='number'] {
+  background: #000;
+  border: 1.5px solid var(--line-2);
+  border-radius: 5px;
+  padding: 6px 10px;
+  /* 16px is the threshold below which iOS zooms the whole page when a field takes focus. */
+  font: 400 16px var(--mono);
+  color: var(--paper);
+  color-scheme: dark;
+  max-width: 170px;
+}
+.mute-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.mute-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+  color: var(--paper-2);
+  font-size: 14px;
+  cursor: pointer;
+}
+.mute-row input {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  accent-color: var(--gold);
 }
 .switch {
   appearance: none;
@@ -2917,6 +3118,126 @@ li.done .tick {
 .channel-form .btn {
   height: 38px;
 }
+/* A gold dot on a strip pill or sheet row: the channel has messages newer than the last open. */
+.unread-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  display: inline-block;
+  border-radius: 50%;
+  background: var(--gold);
+  box-shadow: 0 0 0 2px rgba(255, 215, 0, 0.2);
+}
+.row-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+/* Group headings only render when at least one channel is grouped. */
+.channel-group-head {
+  margin: 12px 0 2px;
+  font: 600 11px var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+/* The sheet row stacks the inline editor under the row itself. */
+.channel-row {
+  display: block;
+}
+.channel-row-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.channel-row-actions {
+  flex: none;
+  display: flex;
+  gap: 2px;
+}
+.channel-form textarea {
+  flex: 1 1 100%;
+  min-height: 64px;
+  background: #0d0d0d;
+  border: 1.5px solid var(--line-2);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 16px; /* >=16px stops iOS zoom-on-focus */
+  color: var(--paper);
+  resize: vertical;
+}
+.channel-form textarea:focus {
+  outline: 0;
+  border-color: var(--gold);
+}
+/* Memory sheet: the context file, editable in place. */
+.memory-sheet p.muted.small {
+  overflow-wrap: anywhere;
+}
+.memory-sheet textarea {
+  width: 100%;
+  min-height: 220px;
+  background: #0d0d0d;
+  border: 1.5px solid var(--line-2);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--paper);
+  resize: vertical;
+}
+.memory-sheet textarea:focus {
+  outline: 0;
+  border-color: var(--gold);
+}
+.memory-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 6px 0;
+  font: 12px var(--mono);
+  color: var(--faint);
+}
+.memory-over {
+  color: var(--danger);
+}
+.memory-btns {
+  display: flex;
+  gap: 10px;
+  margin-top: 6px;
+}
+.channel-edit {
+  margin: 0 0 10px;
+  padding: 10px;
+  border: 1.5px solid var(--line-2);
+  border-radius: 8px;
+  background: #0d0d0d;
+}
+.channel-edit-btns {
+  display: flex;
+  gap: 8px;
+}
+/* The repo a channel works in, shown as a small linked chip on the row. */
+.channel-repo {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 170px;
+  font: 400 11px var(--mono);
+  color: var(--gold);
+  text-decoration: none;
+}
+.channel-repo > svg {
+  flex: none;
+}
+.channel-repo-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.channel-repo:hover {
+  text-decoration: underline;
+}
 
 /* ---------------------------------------------------------------- search */
 .search-sheet {
@@ -3271,6 +3592,38 @@ li.done .tick {
   gap: 6px;
   padding: 6px 0;
 }
+/* Read-only connector discovery. The suggestion cards carry no action: the hint is guidance, not a button. */
+.connectors-sheet {
+  height: auto;
+  max-height: calc(100dvh - 60px);
+}
+.suggest-list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+}
+.suggest-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 0;
+  border-bottom: 1.5px dashed var(--line);
+}
+.suggest-card:last-child {
+  border-bottom: 0;
+}
+.suggest-title {
+  font-weight: 650;
+  color: var(--paper);
+}
+.suggest-detail {
+  font-size: 13px;
+  color: var(--dim);
+}
+.suggest-hint {
+  font-size: 12px;
+  color: var(--faint);
+}
 .hook-row {
   display: flex;
   gap: 8px;
@@ -3360,6 +3713,85 @@ li.done .tick {
   accent-color: var(--gold);
 }
 
+/* Editing a deliverable: the source textarea fills the sheet, with the save bar pinned to the bottom. */
+.viewer-edit {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.viewer-edit textarea {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  resize: none;
+  border: 0;
+  padding: 14px 16px;
+  font: 14px/1.55 var(--mono);
+  color: var(--paper-2);
+  background: rgba(0, 0, 0, 0.25);
+}
+.viewer-edit textarea:focus {
+  outline: 0;
+  background: rgba(0, 0, 0, 0.4);
+}
+.viewer-edit iframe {
+  flex: 1;
+  min-height: 0;
+  border: 0;
+  background: #fff;
+}
+.viewer-edit img {
+  max-width: 100%;
+  max-height: 100%;
+  margin: auto;
+  display: block;
+  object-fit: contain;
+}
+.viewer-edit-toggle {
+  display: flex;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1.5px solid var(--line-2);
+  background: var(--ink-1);
+}
+.viewer-edit-toggle button {
+  padding: 5px 12px;
+  border-radius: 5px;
+  border: 1.5px solid var(--line-2);
+  color: var(--faint);
+  font: 600 12px var(--mono);
+}
+.viewer-edit-toggle button.on {
+  border-color: var(--gold);
+  color: var(--gold);
+  background: rgba(255, 215, 0, 0.08);
+}
+.viewer-edit-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+  border-top: 2px solid #000;
+  background: linear-gradient(0deg, #181818, var(--ink-1));
+}
+.viewer-edit-error {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--danger);
+  font: 400 12px var(--mono);
+}
+/* A small "edited" marker on a file the user saved a version of. */
+.edited-chip {
+  align-self: flex-start;
+  margin-top: 5px;
+  padding: 2px 8px;
+  font-size: 10.5px;
+}
+
 @media (min-width: 900px) {
   .channels {
     padding: 10px max(16px, calc((100% - var(--col)) / 2)) 4px;
@@ -3393,4 +3825,86 @@ li.done .tick {
   display: flex;
   gap: 10px;
   justify-content: center;
+}
+
+/* ---------------------------------------------------------------- routines */
+.routine-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px 12px 16px;
+}
+.routine-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.routine-actions {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+  max-width: 190px;
+}
+.routine-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.routine-form input,
+.routine-form textarea,
+.routine-form select {
+  width: 100%;
+  background: #0d0d0d;
+  border: 1.5px solid var(--line-2);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 16px; /* >=16px stops iOS zoom-on-focus */
+  color: var(--paper);
+}
+.routine-form textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+.routine-form input:focus,
+.routine-form textarea:focus,
+.routine-form select:focus {
+  outline: 0;
+  border-color: var(--gold);
+}
+.routine-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--paper-2);
+}
+.routine-field input,
+.routine-field select {
+  width: auto;
+  flex: 0 1 180px;
+}
+.day-row {
+  display: flex;
+  gap: 6px;
+}
+.day-chip {
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+  border: 1.5px solid var(--line-2);
+  color: var(--faint);
+  font: 600 13px var(--mono);
+}
+.day-chip.on {
+  background: var(--paper);
+  color: #111;
+  border-color: #000;
+}
+.routine-form-btns {
+  display: flex;
+  gap: 8px;
 }

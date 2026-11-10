@@ -1,7 +1,9 @@
 import webpush from 'web-push';
+import type { Settings } from '../shared/types';
 import { db, items, kv, settings } from './db';
 import { config } from './config';
-import { inQuietHours } from './clock';
+import { inQuietHours, localParts } from './clock';
+import { isExempt, bumpSentDay, shouldPush, type NotifyCategory, type SentDay } from './notify-prefs';
 import { presence } from './presence';
 import { holdPush, type HeldPush } from './held';
 import { askMarks } from './approval';
@@ -62,10 +64,35 @@ export interface PushPayload {
   /** Set at send time by `askMarks`: every approval and question still pending, when few enough to fit. */
   open?: string[];
   sent_at?: number;
+  /** Which notification preference decides this push; absent means 'system'. */
+  category?: NotifyCategory;
+  /** The thread this push belongs to, for muted_channels. */
+  channel_id?: string;
 }
 
-export async function notify(p: PushPayload, opts: { ignoreQuiet?: boolean } = {}): Promise<number> {
-  if (!opts.ignoreQuiet && inQuietHours(settings.get())) {
+/** One kv value for the day's sent count, reset when the local date moves on. */
+const SENT_DAY_KEY = 'push_sent_day';
+
+function sentDay(s: Settings): SentDay {
+  const date = localParts(s.timezone).date;
+  const stored = kv.get<SentDay | null>(SENT_DAY_KEY, null);
+  return stored && stored.date === date ? stored : { date, count: 0 };
+}
+
+export async function notify(p: PushPayload, opts: { ignoreQuiet?: boolean; ignorePrefs?: boolean } = {}): Promise<number> {
+  const s = settings.get();
+  const category = p.category ?? 'system';
+  const exempt = isExempt(category);
+  if (!opts.ignorePrefs) {
+    const decision = shouldPush({ category, settings: s, channelId: p.channel_id, todayCount: sentDay(s).count });
+    if (!decision.send) {
+      // Dropped here, before quiet hours would hold it: a muted or capped push must never come back later as a
+      // "While you were away" surprise, and it is not recorded as sent.
+      console.log(`[push] held back (${decision.reason ?? 'by preferences'})`);
+      return 0;
+    }
+  }
+  if (!opts.ignoreQuiet && inQuietHours(s)) {
     // Held, not dropped: the scheduler sends one "While you were away" push for what is still worth it once
     // quiet hours end.
     kv.set('push_held', holdPush(kv.get<HeldPush[]>('push_held', []), p, Date.now()));
@@ -92,5 +119,11 @@ export async function notify(p: PushPayload, opts: { ignoreQuiet?: boolean } = {
       }
     }),
   );
+  // Only a push that actually reached a device spends the daily budget; suppressed and held pushes never get here,
+  // and approvals/questions are exempt from the cap.
+  if (sent > 0 && !opts.ignorePrefs && !exempt) {
+    const day = sentDay(s);
+    kv.set(SENT_DAY_KEY, bumpSentDay(day, day.date));
+  }
   return sent;
 }

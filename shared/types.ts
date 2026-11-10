@@ -15,6 +15,22 @@ export type CardType =
 
 export type CardStatus = 'pending' | 'approved' | 'declined' | 'answered' | 'expired' | 'info';
 
+/**
+ * Where a claim, number or summary came from. The server checks local ids exist and the client renders a chip or
+ * link, so provenance is part of the record instead of a sentence in prose.
+ */
+export interface Source {
+  kind: 'item' | 'task' | 'file' | 'page' | 'url' | 'connector' | 'other';
+  /** item/task/file/page id, when the source is one of ours. */
+  id?: string;
+  /** Absolute http(s) URL for a web source. */
+  url?: string;
+  /** What to show on the chip, e.g. "Dana's email, 9:12 AM". */
+  label: string;
+  /** Short verbatim excerpt backing the claim. */
+  quote?: string;
+}
+
 export interface BriefEntry {
   title: string;
   detail?: string;
@@ -30,6 +46,8 @@ export interface BriefEntry {
   skipped_at?: number;
   /** The entry is about a standing page: its version when the brief was posted, opened by tapping "Open page". */
   file_id?: string;
+  /** Where the claim came from: the email, file, page or URL this entry is based on. */
+  sources?: Source[];
 }
 
 /** Something the agent is keeping an eye on that doesn't need a decision; listed muted under a brief, never pushed. */
@@ -38,6 +56,8 @@ export interface WatchEntry {
   detail?: string;
   /** Same as BriefEntry.file_id: a line about a standing page opens it. */
   file_id?: string;
+  /** Where the claim came from. */
+  sources?: Source[];
 }
 
 /** A one-tap next step; tapping sends `message` to the main thread as the user. */
@@ -78,6 +98,20 @@ export interface CardData {
   draft?: string;
   /** approval: the user changed `draft` before approving, so `draft` now holds their version. */
   edited?: boolean;
+  /** approval: what kind of action this is, so the card can show destination and every recipient. */
+  action?: 'send_email' | 'send_message' | 'post' | 'delete' | 'sign' | 'pay' | 'other';
+  /** approval: where it happens: a host ("mail.google.com"), an app, or a channel ("#general"). */
+  destination?: string;
+  /** approval: exactly who receives it. Required for send actions. */
+  recipients?: string[];
+  /** approval: the outbound text when it differs from `draft`; `draft` stays the editable version. */
+  content?: string;
+  /** approval: the page the action happens on, when there is one. */
+  url?: string;
+  /** Set when the outbound scan found something that should not leave the machine; shown on the card. */
+  scan_warning?: string;
+  /** Where the card's claims came from. */
+  sources?: Source[];
   options?: string[]; // choice
   entries?: BriefEntry[]; // brief: decisions, ranked high to low
   watching?: WatchEntry[]; // brief
@@ -88,6 +122,8 @@ export interface CardData {
   follow_ups?: FollowUp[]; // handover
   /** handover: the task failed or stopped; `body` is the reason. */
   failed?: boolean;
+  /** handover: set when the user tapped "Mark done" on this card; the task's own `confirmed_at` is the record. */
+  confirmed_at?: number;
   /** failed handover: the task's instructions were kept, so "Try again" can restart it. */
   retry?: boolean;
   decision?: string; // what the user picked
@@ -111,6 +147,10 @@ export interface CardData {
   /** Total the user is approving, in the currency's minor unit (cents). */
   amount_cents?: number;
   currency?: string;
+  /** The exact page the checkout is on. A single-use card is only typed into this merchant's host. */
+  merchant_url?: string;
+  /** Host derived from merchant_url; what the browser must still be on immediately before the card is filled. */
+  merchant_host?: string;
   /** The hard ceiling the total was checked against (config.maxTransactionCents). */
   cap_cents?: number;
   line_items?: PaymentItem[];
@@ -178,6 +218,12 @@ export interface Channel {
   name: string;
   slug: string;
   topic?: string;
+  /** Standing instructions for this channel, injected into the agent's context before the topic line. */
+  instructions?: string;
+  /** Optional group name for the channel strip ("Work", "Home"); absent means ungrouped. */
+  group?: string;
+  /** A repository this channel works in: "owner/name" or an http(s) GitHub URL. */
+  repo?: string;
   /** The Hermes session this channel talks to. */
   session_id: string;
   /** Last time the user opened it here, for the unread dot. */
@@ -213,7 +259,43 @@ export interface Connector {
   hint?: string;
 }
 
+/**
+ * A read-only "what to connect next" card. The app never installs or authorizes anything: the hint is
+ * guidance the user follows by hand.
+ */
+export interface ConnectorSuggestion {
+  id: string;
+  title: string;
+  detail: string;
+  hint?: string;
+}
+
 export type TaskStatus = 'queued' | 'running' | 'waiting' | 'done' | 'failed' | 'cancelled';
+
+/** When a user-defined routine runs. Times are local wall-clock "HH:MM". */
+export type RoutineSchedule =
+  | { kind: 'daily'; time: string }
+  | { kind: 'weekly'; time: string; weekdays: number[] } // 0 Sunday .. 6 Saturday
+  | { kind: 'interval'; every_minutes: number };
+
+/** A recurring job the user created in plain language, run as a background task. */
+export interface Routine {
+  id: string;
+  title: string;
+  /** Self-contained instructions for the task it starts. */
+  prompt: string;
+  schedule: RoutineSchedule;
+  /** Which channel its task and handover belong to; absent means general. */
+  channel_id?: string;
+  enabled: boolean;
+  last_run?: number;
+  last_result?: string;
+  last_task_id?: string;
+  /** Next due time in epoch ms, kept in sync by the scheduler and every edit. */
+  next_run?: number;
+  created_at: number;
+  updated_at: number;
+}
 
 export interface TaskStep {
   text: string;
@@ -237,10 +319,18 @@ export interface Task {
   retried_at?: number;
   /** A standing page's scheduled refresh: the file it delivers becomes the page's current version. */
   page_id?: string;
+  /** The user-defined routine that started this task, so its result can flow back to the routine. */
+  routine_id?: string;
   /** Which channel to hand the result back in; absent means general. */
   channel_id?: string;
   /** Page refresh only: the agent's one line on what changed since the previous version. */
   changed?: string;
+  /** Where the task's result came from (files, pages, items, URLs). */
+  sources?: Source[];
+  /** When the agent reported it finished. Still "looks done": only `confirmed_at` is the user's completion. */
+  agent_done_at?: number;
+  /** When the user tapped Done. The real completion; never set by the agent. */
+  confirmed_at?: number;
   created_at: number;
   updated_at: number;
   background: boolean;
@@ -277,6 +367,8 @@ export interface FileEntry {
   task_id?: string | null;
   /** Set when this file became a version of that standing page; lists show only a page's newest version. */
   page_id?: string;
+  /** Set when the user edited this deliverable: the earlier file this replaced. Newest version wins in lists. */
+  version_of?: string;
   created_at: number;
 }
 
@@ -287,6 +379,14 @@ export interface Settings {
   quiet_start: string; // "HH:MM"
   quiet_end: string;
   timezone: string;
+  /** Which task pushes to send: every finish, only failures, or none. Approvals always push. */
+  notify_tasks?: 'all' | 'failures' | 'off';
+  /** Agent `notify` pushes. */
+  notify_agent?: boolean;
+  /** Channels whose pushes are muted; their cards still post in the thread. */
+  muted_channels?: string[];
+  /** Soft daily push cap, approvals excluded; 0 or absent means no cap. */
+  max_pushes_per_day?: number;
 }
 
 export interface AgentState {
@@ -295,6 +395,19 @@ export interface AgentState {
   queued: number;
   hermes: 'ok' | 'down' | 'unknown';
   background_running: number;
+}
+
+/**
+ * The context file the agent starts every turn with, editable from Settings ("memory"). The server only ever
+ * touches its configured path, so `path` is informational; the API takes no path of its own.
+ */
+export interface MemoryState {
+  /** The configured context file (context.local.md unless DUET_CONTEXT_FILE says otherwise). */
+  path: string;
+  /** Its current content; '' when it is missing or empty. */
+  text: string;
+  /** Server-side cap on `text`, in UTF-8 bytes. */
+  max_bytes: number;
 }
 
 /** What the agent already has before the first message ("What I can see"). Names only, never config values. */
@@ -317,6 +430,8 @@ export interface Snapshot {
   /** Every pending card, including ones older than the `items` page. */
   pending: Item[];
   tasks: Task[];
+  /** User-defined recurring routines, when the routines feature is enabled. */
+  routines?: Routine[];
   files: FileEntry[];
   pages: Page[];
   /** Topic channels, newest activity last. The app opens the general one first. */
@@ -330,6 +445,8 @@ export type ServerEvent =
   | { type: 'item'; item: Item }
   | { type: 'delta'; item_id: string; text: string }
   | { type: 'task'; task: Task }
+  | { type: 'routine'; routine: Routine }
+  | { type: 'routine_removed'; id: string }
   | { type: 'file'; file: FileEntry }
   | { type: 'page'; page: Page }
   | { type: 'page_removed'; id: string }

@@ -2,6 +2,20 @@
 
 const taskId = { type: 'string', description: 'The Hermes Duet task id this belongs to, if you are working on a task (it appears in your instructions as "Hermes Duet task <id>"). If a call is refused because several turns are running at once, pass "main" when you are the main conversation.' };
 const PAGE_ID_DESC = 'Optional. When this line is about a standing page (the brief prompt lists them as "page <id>"), its id; tapping the line then opens the page.';
+const SOURCES_DESC =
+  'Cite where every number or claim came from: one entry per source, at most 6. Use real ids from items, tasks, pages or files (never invent one), or an absolute http(s) URL.';
+const sourceSchema = {
+  type: 'object',
+  properties: {
+    kind: { type: 'string', enum: ['item', 'task', 'file', 'page', 'url', 'connector', 'other'] },
+    id: { type: 'string', description: 'The item, task, file or page id this came from. Required for item/task/file/page; never invent one.' },
+    url: { type: 'string', description: 'Absolute http(s) URL. Required for url sources.' },
+    label: { type: 'string', description: 'What to show on the chip, e.g. "Dana\'s email, 9:12 AM".' },
+    quote: { type: 'string', description: 'Short verbatim excerpt backing the claim (at most 300 characters).' },
+  },
+  required: ['kind', 'label'],
+};
+const sourcesField = { type: 'array', description: SOURCES_DESC, items: sourceSchema, maxItems: 6 };
 
 export const TOOLS = [
   {
@@ -21,6 +35,27 @@ export const TOOLS = [
             'For messages, emails and posts: the exact text you will send, as plain text without headers. The user can edit it on the card; if they do, the APPROVED message contains their version and you must send that text exactly.',
         },
         action_label: { type: 'string', description: 'Primary button verb, e.g. "Send", "Pay $640", "Delete". Default "Approve".' },
+        action: {
+          type: 'string',
+          enum: ['send_email', 'send_message', 'post', 'delete', 'sign', 'pay', 'other'],
+          description:
+            'What kind of action this is. Send actions need destination plus at least one recipient. Default "other".',
+        },
+        destination: {
+          type: 'string',
+          description: 'Where it happens: a host ("mail.google.com"), an app, or a channel ("#general"). Required for send, post, delete and sign.',
+        },
+        recipients: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Exactly who receives it (names, addresses or handles). Required for send_email/send_message; shown as chips on the card.',
+        },
+        content: {
+          type: 'string',
+          description:
+            'The outbound text when it differs from draft (e.g. a rendered body alongside the plain-text draft). Draft stays the editable version; when content is absent, draft is used.',
+        },
+        url: { type: 'string', description: 'The page the action happens on, when there is one. Must be an http(s) URL.' },
         replaces: {
           type: 'string',
           description:
@@ -45,6 +80,7 @@ export const TOOLS = [
       type: 'object',
       properties: {
         merchant: { type: 'string', description: 'Vendor or store name, e.g. "Amtrak".' },
+        merchant_url: { type: 'string', description: 'The exact checkout page, e.g. "https://shop.example.com/checkout". The single-use card is only typed into this page\'s host.' },
         amount_cents: { type: 'number', description: 'Total in cents (2450 for $24.50). Must equal the items.' },
         currency: { type: 'string', description: 'Three-letter code. Default USD.' },
         items: {
@@ -62,7 +98,7 @@ export const TOOLS = [
         },
         task_id: taskId,
       },
-      required: ['merchant', 'amount_cents', 'items'],
+      required: ['merchant', 'merchant_url', 'amount_cents', 'items'],
     },
   },
   {
@@ -128,6 +164,7 @@ export const TOOLS = [
                   'The entry then gets a button (action_label, default "Send as drafted") that hands this exact draft back to you to go ahead with; for anything outward-facing you then call request_approval with it.',
               },
               page_id: { type: 'string', description: PAGE_ID_DESC },
+              sources: sourcesField,
             },
             required: ['title'],
           },
@@ -137,7 +174,7 @@ export const TOOLS = [
           description: 'Optional. Things you are tracking that need no decision yet, e.g. "Package arrives Thursday". Muted, never notifies.',
           items: {
             type: 'object',
-            properties: { title: { type: 'string' }, detail: { type: 'string' }, page_id: { type: 'string', description: PAGE_ID_DESC } },
+            properties: { title: { type: 'string' }, detail: { type: 'string' }, page_id: { type: 'string', description: PAGE_ID_DESC }, sources: sourcesField },
             required: ['title'],
           },
         },
@@ -149,6 +186,7 @@ export const TOOLS = [
     name: 'post_card',
     description:
       'Show structured progress or results as a card in the thread. type "checklist" for multi-step plans (pass all items with done flags), "metrics" for a small dashboard of numbers, "note" for anything else. ' +
+      'Cite where every number or claim came from in sources. ' +
       'Pass card_id from a previous call to update that card in place instead of posting a new one (do this as checklist items get done).',
     inputSchema: {
       type: 'object',
@@ -171,6 +209,7 @@ export const TOOLS = [
           },
         },
         card_id: { type: 'string', description: 'Update this existing card instead of creating one.' },
+        sources: sourcesField,
         task_id: taskId,
       },
       required: ['type', 'title'],
@@ -217,6 +256,49 @@ export const TOOLS = [
     },
   },
   {
+    name: 'save_routine',
+    description:
+      'Save a user-defined routine: a background task that runs on a schedule you choose (daily, weekly on picked days, or every N minutes). ' +
+      'Each run starts a background task in its own session with its own context and hands the result back on a handover card, so the instructions must be complete and self-contained. ' +
+      'Returns the routine and its next run. Pass routine_id to update an existing routine instead of creating another.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'Short name, e.g. "Weekly inbox summary". At most 120 characters.' },
+        prompt: {
+          type: 'string',
+          description:
+            'Self-contained instructions for the task it starts each run: the goal, the sources, what to deliver. The task gets a fresh session that knows nothing else, and its result reaches the user on a handover card.',
+        },
+        schedule: {
+          type: 'object',
+          description: 'When it runs, in the user\'s local time.',
+          properties: {
+            kind: { type: 'string', enum: ['daily', 'weekly', 'interval'] },
+            time: { type: 'string', description: 'HH:MM (24-hour), local time. For daily and weekly.' },
+            weekdays: { type: 'array', items: { type: 'number' }, description: 'For weekly: 0-6 (Sunday-Saturday) or 1-7 (Monday-Sunday).' },
+            every_minutes: { type: 'number', description: 'For interval: 15 to 10080 (one week).' },
+          },
+          required: ['kind'],
+        },
+        channel_id: { type: 'string', description: 'Optional channel the task and its handover belong to; absent means the general thread.' },
+        enabled: { type: 'boolean', description: 'Default true. false saves it paused.' },
+        routine_id: { type: 'string', description: 'An existing routine to update.' },
+      },
+      required: ['title', 'prompt', 'schedule'],
+    },
+  },
+  {
+    name: 'remove_routine',
+    description:
+      'Remove a user-defined routine so it stops running. Its past tasks and handover cards stay in the thread; only the schedule is deleted.',
+    inputSchema: {
+      type: 'object',
+      properties: { routine_id: { type: 'string', description: 'The routine to remove.' } },
+      required: ['routine_id'],
+    },
+  },
+  {
     name: 'start_task',
     description:
       'Start a larger piece of work in the background (research, building a deck/model/dashboard, multi-step errands) so the conversation stays free. ' +
@@ -233,7 +315,8 @@ export const TOOLS = [
   },
   {
     name: 'update_task',
-    description: 'Update a Hermes Duet task\'s progress line, steps or status so the user can see where it stands.',
+    description:
+      'Update a Hermes Duet task\'s progress line, steps or status so the user can see where it stands. When the result states numbers or claims, cite where each came from in sources (real ids or an http(s) URL).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -242,6 +325,7 @@ export const TOOLS = [
         steps: { type: 'array', items: { type: 'object', properties: { text: { type: 'string' }, done: { type: 'boolean' } }, required: ['text'] } },
         status: { type: 'string', enum: ['running', 'waiting', 'done', 'failed'] },
         result: { type: 'string', description: 'Final outcome, when done or failed (for failed, the reason). One or two lines; it is the body of the handover card.' },
+        sources: sourcesField,
         changed: {
           type: 'string',
           description: 'Standing page refreshes only: one line on the single most important thing that changed since the previous version ("No change since yesterday" if nothing did).',

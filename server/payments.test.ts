@@ -6,9 +6,12 @@ const ITEMS = [
   { title: 'Coffee', price_cents: 350, quantity: 2 },
 ];
 
+const CHECKOUT = 'https://shop.amtrak.com/checkout';
+const payArgs = (extra: Record<string, unknown> = {}) => ({ merchant: 'Amtrak', merchant_url: CHECKOUT, amount_cents: 3150, items: ITEMS, ...extra });
+
 describe('paymentInput', () => {
   test('totals the receipt and accepts a matching amount', () => {
-    const input = paymentInput({ merchant: 'Amtrak', amount_cents: 3150, items: ITEMS });
+    const input = paymentInput(payArgs());
     expect(input.amount_cents).toBe(3150);
     expect(input.currency).toBe('USD');
     expect(input.items).toHaveLength(2);
@@ -16,38 +19,66 @@ describe('paymentInput', () => {
   });
 
   test('the items are the source of truth', () => {
-    const input = paymentInput({ merchant: 'Amtrak', items: ITEMS });
+    const input = paymentInput({ merchant: 'Amtrak', merchant_url: CHECKOUT, items: ITEMS });
     expect(input.amount_cents).toBe(3150);
   });
 
   test('a total that disagrees with the items is refused', () => {
-    expect(() => paymentInput({ merchant: 'Amtrak', amount_cents: 9999, items: ITEMS })).toThrow(/add up to/);
+    expect(() => paymentInput(payArgs({ amount_cents: 9999 }))).toThrow(/add up to/);
   });
 
   test('the hard cap applies to the total, in cents', () => {
-    expect(() => paymentInput({ merchant: 'Car', amount_cents: 100_000, items: [{ title: 'Car', price_cents: 100_000 }] }, 50_000)).toThrow(/over the \$500\.00/);
-    expect(paymentInput({ merchant: 'Car', items: [{ title: 'Car', price_cents: 49_999 }] }, 50_000).amount_cents).toBe(49_999);
+    expect(() => paymentInput({ merchant: 'Car', merchant_url: 'https://cars.example.com/buy', amount_cents: 100_000, items: [{ title: 'Car', price_cents: 100_000 }] }, 50_000)).toThrow(/over the \$500\.00/);
+    expect(paymentInput({ merchant: 'Car', merchant_url: 'https://cars.example.com/buy', items: [{ title: 'Car', price_cents: 49_999 }] }, 50_000).amount_cents).toBe(49_999);
   });
 
   test('rejects missing or malformed lines', () => {
-    expect(() => paymentInput({ merchant: '', items: ITEMS })).toThrow(/merchant/);
-    expect(() => paymentInput({ merchant: 'X', items: [] })).toThrow(/itemized/);
-    expect(() => paymentInput({ merchant: 'X', items: [{ price_cents: 100 }] })).toThrow(/title/);
-    expect(() => paymentInput({ merchant: 'X', items: [{ title: 'a', price_cents: -1 }] })).toThrow(/price_cents/);
-    expect(() => paymentInput({ merchant: 'X', items: [{ title: 'a', price_cents: 1.5 }] })).toThrow(/price_cents/);
-    expect(() => paymentInput({ merchant: 'X', items: [{ title: 'a', price_cents: 1, quantity: 0 }] })).toThrow(/quantity/);
-    expect(() => paymentInput({ merchant: 'X', items: [{ title: 'a', price_cents: 0 }] })).toThrow(/more than zero/);
+    expect(() => paymentInput(payArgs({ merchant: '' }))).toThrow(/merchant/);
+    expect(() => paymentInput(payArgs({ items: [] }))).toThrow(/itemized/);
+    expect(() => paymentInput(payArgs({ items: [{ price_cents: 100 }] }))).toThrow(/title/);
+    expect(() => paymentInput(payArgs({ items: [{ title: 'a', price_cents: -1 }] }))).toThrow(/price_cents/);
+    expect(() => paymentInput(payArgs({ items: [{ title: 'a', price_cents: 1.5 }] }))).toThrow(/price_cents/);
+    expect(() => paymentInput(payArgs({ items: [{ title: 'a', price_cents: 1, quantity: 0 }] }))).toThrow(/quantity/);
+    expect(() => paymentInput(payArgs({ items: [{ title: 'a', price_cents: 0 }] }))).toThrow(/more than zero/);
   });
 
   test('currency must be a code', () => {
-    expect(paymentInput({ merchant: 'X', currency: 'eur', items: [{ title: 'a', price_cents: 1 }] }).currency).toBe('EUR');
-    expect(() => paymentInput({ merchant: 'X', currency: 'euros', items: [{ title: 'a', price_cents: 1 }] })).toThrow(/three-letter/);
+    expect(paymentInput({ merchant: 'X', merchant_url: 'https://x.example.com/', currency: 'eur', items: [{ title: 'a', price_cents: 1 }] }).currency).toBe('EUR');
+    expect(() => paymentInput({ merchant: 'X', merchant_url: 'https://x.example.com/', currency: 'euros', items: [{ title: 'a', price_cents: 1 }] })).toThrow(/three-letter/);
+  });
+
+  test('the checkout page is required and the host is derived from it', () => {
+    const input = paymentInput({ merchant: 'Amtrak', merchant_url: 'https://shop.amtrak.com/checkout', items: ITEMS });
+    expect(input.merchant_url).toBe('https://shop.amtrak.com/checkout');
+    expect(input.merchant_host).toBe('shop.amtrak.com');
+  });
+
+  test('a subdomain checkout keeps its full host', () => {
+    const input = paymentInput({ merchant: 'X', merchant_url: 'https://pay.example.co.uk/p', items: [{ title: 'a', price_cents: 1 }] });
+    expect(input.merchant_host).toBe('pay.example.co.uk');
+    expect(input.merchant_url).toBe('https://pay.example.co.uk/p');
+  });
+
+  test('checkout pages that are not http(s) are refused', () => {
+    const items = [{ title: 'a', price_cents: 1 }];
+    expect(() => paymentInput({ merchant: 'X', items })).toThrow(/merchant_url/);
+    expect(() => paymentInput({ merchant: 'X', items, merchant_url: '' })).toThrow(/merchant_url/);
+    expect(() => paymentInput({ merchant: 'X', items, merchant_url: 'javascript:alert(1)' })).toThrow(/http\(s\)/);
+    expect(() => paymentInput({ merchant: 'X', items, merchant_url: 'file:///etc/passwd' })).toThrow(/http\(s\)/);
+    expect(() => paymentInput({ merchant: 'X', items, merchant_url: 'data:text/html,<h1>x</h1>' })).toThrow(/http\(s\)/);
+  });
+
+  test('relative URLs and URLs with no host are refused', () => {
+    const items = [{ title: 'a', price_cents: 1 }];
+    expect(() => paymentInput({ merchant: 'X', items, merchant_url: '/checkout' })).toThrow(/absolute/);
+    expect(() => paymentInput({ merchant: 'X', items, merchant_url: 'shop.example.com/checkout' })).toThrow(/absolute/);
+    expect(() => paymentInput({ merchant: 'X', items, merchant_url: 'https://' })).toThrow(/absolute/);
   });
 });
 
 describe('paymentCard', () => {
   test('is an itemized, capped payment card', () => {
-    const card = paymentCard(paymentInput({ merchant: 'Amtrak', items: ITEMS }), { cardProvider: 'privacy' });
+    const card = paymentCard(paymentInput(payArgs()), { cardProvider: 'privacy' });
     expect(card.type).toBe('payment');
     expect(card.status).toBe('pending');
     expect(card.title).toBe('Pay $31.50 to Amtrak');
@@ -57,13 +88,20 @@ describe('paymentCard', () => {
     expect(card.body).toContain('single-use privacy card');
   });
 
+  test('the card carries the merchant binding and names the site it is typed into', () => {
+    const card = paymentCard(paymentInput(payArgs()), { cardProvider: 'privacy' });
+    expect(card.merchant_url).toBe(CHECKOUT);
+    expect(card.merchant_host).toBe('shop.amtrak.com');
+    expect(card.body).toContain('shop.amtrak.com');
+  });
+
   test('without a provider it is a plain spend authorization', () => {
-    const card = paymentCard(paymentInput({ merchant: 'Amtrak', items: ITEMS }));
+    const card = paymentCard(paymentInput(payArgs()));
     expect(card.body).toContain('No card provider');
   });
 
   test('never carries card details', () => {
-    const card = paymentCard(paymentInput({ merchant: 'Amtrak', items: ITEMS }), { cardProvider: 'stripe' });
+    const card = paymentCard(paymentInput(payArgs()), { cardProvider: 'stripe' });
     const json = JSON.stringify(card);
     expect(json).not.toMatch(/\bpan\b|cvv|cvc|card_number/i);
   });
@@ -78,7 +116,7 @@ describe('paymentDecision', () => {
 });
 
 describe('paymentPrompt', () => {
-  const card = paymentCard(paymentInput({ merchant: 'Amtrak', items: ITEMS }));
+  const card = paymentCard(paymentInput(payArgs()));
 
   test('declining tells the agent to stop', () => {
     const p = paymentPrompt(card, 'card-1', { approved: false });
