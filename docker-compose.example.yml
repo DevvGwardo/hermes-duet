@@ -1,0 +1,29 @@
+# Optional convenience wrapper around the Dockerfile — a labelled example, not the required install path.
+#
+# systemd on a small always-on Linux host (docs/DEPLOY.md#always-on-host) does the same job with less to keep in
+# sync. Copy this file to docker-compose.yml, copy .env.example to .env and fill it in, then:
+#
+#   docker compose up -d
+#   docker exec hermes-duet bin/hermes-duet pair
+#
+# The image already sets DUET_HOST=0.0.0.0, DUET_PORT=7456, DUET_INTERNAL_PORT=7457 and DUET_DATA_DIR=/data.
+# Publish only 7456: the internal listener on 7457 stays on loopback inside the container.
+#
+# Chromium runs inside the container (DUET_CHROME_BIN=/usr/bin/chromium, DUET_CHROME_PROFILE=/data/chrome), so the
+# host's browser profile is never the agent's surface, and CDP on 9333 stays inside the container. The native
+# Calendar/Reminders/Mail connectors are macOS-only and report unsupported on Linux.
+services:
+  hermes-duet:
+    build: .
+    image: hermes-duet
+    container_name: hermes-duet
+    restart: unless-stopped
+    ports:
+      - "7456:7456"
+    env_file:
+      - .env
+    volumes:
+      - hermes-duet-data:/data
+
+volumes:
+  hermes-duet-data:
