@@ -403,3 +403,48 @@ describe('user-confirmed task completion', () => {
     expect(((await res.json()) as any).error).toContain('nothing to steer');
   });
 });
+
+describe('notification preferences', () => {
+  const put = (body: unknown) => authed('/api/settings', { ...jsonPost(body), method: 'PUT' });
+  const savedSettings = () => kv.get<Record<string, unknown> | null>('settings', null);
+
+  test('a valid patch is stored and returned', async () => {
+    const before = savedSettings();
+    try {
+      const res = await put({ notify_tasks: 'failures', notify_agent: false, max_pushes_per_day: 5 });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as any;
+      expect(body.settings.notify_tasks).toBe('failures');
+      expect(body.settings.notify_agent).toBe(false);
+      expect(body.settings.max_pushes_per_day).toBe(5);
+    } finally {
+      kv.set('settings', before ?? {});
+    }
+  });
+
+  test('muted channels must exist: unknown ids are dropped and duplicates collapse', async () => {
+    const before = savedSettings();
+    try {
+      const res = await put({ muted_channels: [GENERAL_CHANNEL, GENERAL_CHANNEL, 'chan-nope'] });
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as any).settings.muted_channels).toEqual([GENERAL_CHANNEL]);
+    } finally {
+      kv.set('settings', before ?? {});
+    }
+  });
+
+  test('a bad enum, cap or channel list is a 400 with a reason, not a silent ignore', async () => {
+    for (const patch of [
+      { notify_tasks: 'sometimes' },
+      { notify_agent: 'yes' },
+      { muted_channels: 'nope' },
+      { max_pushes_per_day: -1 },
+      { max_pushes_per_day: 101 },
+      { max_pushes_per_day: 2.5 },
+    ]) {
+      const res = await put(patch);
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as any).error).toBeTruthy();
+    }
+  });
+});

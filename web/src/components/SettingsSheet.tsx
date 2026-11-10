@@ -10,6 +10,7 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
   const settings = useStore((s) => s.settings);
   const pushEnabled = useStore((s) => s.pushEnabled);
   const agent = useStore((s) => s.agent);
+  const channels = useStore((s) => s.channels);
   const [pushMsg, setPushMsg] = useState<string | null>(null);
   const [briefMsg, setBriefMsg] = useState<string | null>(null);
   const [connectors, setConnectors] = useState<Connector[] | null>(null);
@@ -91,6 +92,57 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
               )}
             </div>
             {pushMsg && <p className="muted small">{pushMsg}</p>}
+            <div className="setting-row">
+              <span>Task pushes</span>
+              <select value={settings.notify_tasks ?? 'all'} onChange={(e) => save({ notify_tasks: e.target.value as Settings['notify_tasks'] })}>
+                <option value="all">Every finish</option>
+                <option value="failures">Failures only</option>
+                <option value="off">Off</option>
+              </select>
+            </div>
+            <label className="setting-row">
+              <span>Agent notifications</span>
+              <input type="checkbox" className="switch" checked={settings.notify_agent ?? true} onChange={(e) => save({ notify_agent: e.target.checked })} />
+            </label>
+            <label className="setting-row">
+              <span>Max pushes a day</span>
+              <input
+                type="number"
+                min={0}
+                max={100}
+                value={settings.max_pushes_per_day ?? 0}
+                onChange={(e) => {
+                  const v = e.target.valueAsNumber;
+                  if (Number.isFinite(v)) save({ max_pushes_per_day: Math.trunc(v) });
+                }}
+              />
+            </label>
+            <div className="setting-row column">
+              <span>Mute a channel</span>
+              <div className="mute-list">
+                {channels.map((c) => {
+                  const muted = (settings.muted_channels ?? []).includes(c.id);
+                  return (
+                    <label key={c.id} className="mute-row">
+                      <input
+                        type="checkbox"
+                        checked={muted}
+                        onChange={(e) =>
+                          save({
+                            muted_channels: e.target.checked
+                              ? [...(settings.muted_channels ?? []), c.id]
+                              : (settings.muted_channels ?? []).filter((id) => id !== c.id),
+                          })
+                        }
+                      />
+                      <span>#{c.name}</span>
+                    </label>
+                  );
+                })}
+                {!channels.length && <span className="muted small">No channels yet.</span>}
+              </div>
+            </div>
+            <p className="muted small">Approvals and questions always reach you. A muted channel still posts in its thread.</p>
           </section>
 
           <section>

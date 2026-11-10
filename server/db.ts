@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { type Attachment, type Channel, type FileEntry, type Item, type Page, type Settings, type Task, attachmentKind } from '../shared/types';
 import { type ChannelInput, type ChannelPatch, slugFor } from './channels';
 import { config } from './config';
+import { UserError } from './errors';
 import { lockDownDataDir } from './permissions';
 import { GENERAL_CHANNEL, SCHEMA_VERSION, applySchema } from './schema';
 
@@ -585,6 +586,8 @@ export const triggers = {
 };
 
 // ---------- settings ----------
+const NOTIFY_TASKS = ['all', 'failures', 'off'] as const;
+export const MAX_PUSHES_PER_DAY = 100;
 const DEFAULT_SETTINGS: Settings = {
   brief_enabled: true,
   brief_time: '07:30',
@@ -592,6 +595,11 @@ const DEFAULT_SETTINGS: Settings = {
   quiet_start: '21:30',
   quiet_end: '07:00',
   timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+  // An install saved before these existed behaved as "everything pushes": keep that until the user says otherwise.
+  notify_tasks: 'all',
+  notify_agent: true,
+  muted_channels: [],
+  max_pushes_per_day: 0,
 };
 export const settings = {
   get(): Settings {
@@ -610,6 +618,32 @@ export const settings = {
         new Intl.DateTimeFormat('en-US', { timeZone: patch.timezone });
         clean.timezone = patch.timezone;
       } catch {}
+    }
+    // Notification preferences are validated rather than ignored: a typo must not quietly turn the phone off.
+    if (patch.notify_tasks !== undefined) {
+      if (typeof patch.notify_tasks !== 'string' || !NOTIFY_TASKS.includes(patch.notify_tasks as (typeof NOTIFY_TASKS)[number])) {
+        throw new UserError("notify_tasks must be 'all', 'failures' or 'off'");
+      }
+      clean.notify_tasks = patch.notify_tasks as Settings['notify_tasks'];
+    }
+    if (patch.notify_agent !== undefined) {
+      if (typeof patch.notify_agent !== 'boolean') throw new UserError('notify_agent must be true or false');
+      clean.notify_agent = patch.notify_agent;
+    }
+    if (patch.muted_channels !== undefined) {
+      if (!Array.isArray(patch.muted_channels) || patch.muted_channels.some((id) => typeof id !== 'string')) {
+        throw new UserError('muted_channels must be an array of channel ids');
+      }
+      // Unknown ids are dropped, duplicates collapsed. `channels.get` sees archived channels too, so a mute on one
+      // survives until the user clears it.
+      clean.muted_channels = [...new Set((patch.muted_channels as string[]).filter((id) => channels.get(id) !== null))];
+    }
+    if (patch.max_pushes_per_day !== undefined) {
+      const cap = patch.max_pushes_per_day;
+      if (typeof cap !== 'number' || !Number.isInteger(cap) || cap < 0 || cap > MAX_PUSHES_PER_DAY) {
+        throw new UserError(`max_pushes_per_day must be a whole number between 0 and ${MAX_PUSHES_PER_DAY}`);
+      }
+      clean.max_pushes_per_day = cap;
     }
     const next = { ...settings.get(), ...clean };
     kv.set('settings', next);
