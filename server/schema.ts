@@ -95,6 +95,19 @@ CREATE TABLE IF NOT EXISTS attachments (
 CREATE INDEX IF NOT EXISTS attachments_item ON attachments(item_id);
 `);
 
+  // User-defined recurring routines. The columns the scheduler filters on (enabled, next_run) stay out of the JSON;
+  // `json` carries the whole Routine, including the self-contained prompt.
+  db.exec(`
+CREATE TABLE IF NOT EXISTS routines (
+  id TEXT PRIMARY KEY,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  next_run INTEGER,
+  created_at INTEGER NOT NULL,
+  json TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS routines_next_run ON routines(next_run);
+`);
+
   // Event-driven proactivity: webhooks, watched folders, calendar proximity.
   db.exec(`
 CREATE TABLE IF NOT EXISTS triggers (

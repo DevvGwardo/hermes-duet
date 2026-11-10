@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import type { Channel, Item, Snapshot } from '../../shared/types';
+import type { Channel, Item, Routine, Snapshot } from '../../shared/types';
 import { applyEvent, applySnapshot, channelItems, getState, mergeItems, setState } from './store';
 
 const item = (id: string, extra: Partial<Item> = {}): Item => ({ id, kind: 'card', created_at: 1, updated_at: 1, ...extra });
@@ -56,6 +56,17 @@ test('item events upsert and deltas append text', () => {
   expect(getState().items.find((i) => i.id === 'm')?.text).toBe('hello');
   applyEvent({ type: 'item', item: item('m', { text: 'replaced' }) });
   expect(getState().items.filter((i) => i.id === 'm')).toHaveLength(1);
+});
+
+test('the snapshot carries routines soonest-first, and their events upsert and remove', () => {
+  const routine = (id: string, next_run: number) => ({ id, title: id, prompt: 'p', schedule: { kind: 'daily', time: '09:00' }, enabled: true, next_run, created_at: 1, updated_at: 1 }) as Routine;
+  applySnapshot(snapshot({ routines: [routine('later', 2000), routine('soon', 1000)] }));
+  expect(getState().routines.map((r) => r.id)).toEqual(['soon', 'later']);
+  applyEvent({ type: 'routine', routine: routine('soon', 500) });
+  expect(getState().routines.map((r) => r.id)).toEqual(['soon', 'later']);
+  expect(getState().routines.find((r) => r.id === 'soon')?.next_run).toBe(500);
+  applyEvent({ type: 'routine_removed', id: 'soon' });
+  expect(getState().routines.map((r) => r.id)).toEqual(['later']);
 });
 
 test('general stays first and removing the open channel falls back', () => {

@@ -10,14 +10,14 @@ import { createPairCode, deviceCookie, deviceFor, internalToken, isHttps, pairBl
 import { listConnectors, testConnector } from './connectors';
 import { sseResponse } from './bus';
 import { config } from './config';
-import { type AttachmentRow, attachments, channels, db, devices, files, items, kv, newId, pages, prune, settings, tasks, toAttachment, triggers } from './db';
+import { type AttachmentRow, attachments, channels, db, devices, files, items, kv, newId, pages, prune, routines, settings, tasks, toAttachment, triggers } from './db';
 import { UserError } from './errors';
 import { hermes } from './hermes';
 import { idempotencyKey, idempotentItem, limits, rememberIdempotent, type SlidingWindow } from './limits';
 import { HARD_BLOCKS } from './safety';
 import { presence } from './presence';
 import { hasSubscriptions, notify, publicKey, saveSubscription } from './push';
-import { abortActiveRuns, actOnCard, agentState, cancelTask, confirmTask, deliverableAction, deliverableApproval, executeTool, recoverOrphans, reopenTask, runBrief, runCheckin, startConnectorWatch, startHermesWatch, startUserTask, steerTask, stopMain, stopPage, submitSystem, submitUser } from './runner';
+import { abortActiveRuns, actOnCard, agentState, cancelTask, confirmTask, deliverableAction, deliverableApproval, executeTool, recoverOrphans, removeRoutine, reopenTask, runBrief, runCheckin, runRoutineNow, saveRoutine, setRoutineEnabled, startConnectorWatch, startHermesWatch, startUserTask, steerTask, stopMain, stopPage, submitSystem, submitUser } from './runner';
 import { ftsQuery, search } from './search';
 import { startScheduler } from './scheduler';
 import { downloadsPrompt, inboundIp, meetingPrompt, webhookMatches, webhookPrompt, type WatchedFile } from './triggers';
@@ -141,6 +141,9 @@ const API_METHODS: [RegExp, string[]][] = [
   [/^\/api\/channels\/[\w-]+$/, ['DELETE']],
   [/^\/api\/channels\/[\w-]+\/seen$/, ['POST']],
   [/^\/api\/channels\/[\w-]+\/items$/, ['GET']],
+  [/^\/api\/routines$/, ['GET', 'POST']],
+  [/^\/api\/routines\/[\w-]+$/, ['DELETE']],
+  [/^\/api\/routines\/[\w-]+\/(run|pause|resume)$/, ['POST']],
   [/^\/api\/search$/, ['GET']],
   [/^\/api\/connectors$/, ['GET']],
   [/^\/api\/connectors\/[\w-]+\/test$/, ['POST']],
@@ -294,6 +297,7 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
         has_more: page.has_more,
         pending: items.pendingCards(),
         tasks: tasks.recent(),
+        routines: routines.all(),
         files: files.all(),
         pages: pages.all(),
         channels: channels.all(),
@@ -347,6 +351,27 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
       const before = url.searchParams.get('before') ?? '';
       if (before) return json(items.before(before, 100, channelItems[1]));
       return json(items.latest(100, channelItems[1]));
+    }
+
+    // ---- user-defined recurring routines ----
+    if (path === '/api/routines' && req.method === 'GET') return json({ routines: routines.all() });
+    if (path === '/api/routines' && req.method === 'POST') {
+      // `id` edits (the sheet's save path) exactly like the tool's routine_id; anything else creates.
+      const routine = saveRoutine(await body<Record<string, unknown>>(req));
+      return json({ routine });
+    }
+    const routineMatch = path.match(/^\/api\/routines\/([\w-]+)$/);
+    if (routineMatch && req.method === 'DELETE') {
+      if (!removeRoutine(routineMatch[1])) return err(404, 'no such routine');
+      return json({ ok: true });
+    }
+    const routineAction = path.match(/^\/api\/routines\/([\w-]+)\/(run|pause|resume)$/);
+    if (routineAction && req.method === 'POST') {
+      const id = routineAction[1];
+      if (routineAction[2] === 'run') return json({ routine: runRoutineNow(id) });
+      const routine = setRoutineEnabled(id, routineAction[2] === 'resume');
+      if (!routine) return err(404, 'no such routine');
+      return json({ routine });
     }
 
     // ---- global search over the thread, tasks, files and pages ----

@@ -2,7 +2,7 @@ import { copyFileSync, mkdirSync, statSync } from 'node:fs';
 import { basename, extname, join } from 'node:path';
 import { deliverySource } from './delivery';
 import { askAge } from '../shared/age';
-import type { AgentState, Attachment, CardData, CardStatus, FileEntry, Item, Page, Task, TaskStep, ToolStep } from '../shared/types';
+import type { AgentState, Attachment, CardData, CardStatus, FileEntry, Item, Page, Routine, Task, TaskStep, ToolStep } from '../shared/types';
 import { DRAFT_MAX, PROMPT_ENDED, REPLACED, WITHDRAWN, approvalDecision, approvalPush, deadPrompts, replaceRefusal, turnNote, withdrawRefusal } from './approval';
 import { BRIEF_RETRY, SKIP_MEMORY_DAYS, briefCard, briefFailure, briefTitle, checkinOutcome, morningOutcome, notifyRefusal, raisedToday, skipEntry, skippedLately, useAction, useDraft } from './brief';
 import { broadcast } from './bus';
@@ -10,9 +10,10 @@ import { channelLine } from './channels';
 import { inQuietHours, localParts } from './clock';
 import { config } from './config';
 import { connectorBrief, listConnectors } from './connectors';
-import { channels, files, items, kv, newId, pages, runs, settings, tasks, tx } from './db';
+import { channels, files, items, kv, newId, pages, routines, runs, settings, tasks, tx } from './db';
 import { UserError } from './errors';
 import { GENERAL_CHANNEL } from './schema';
+import { nextRun, routineInput, scheduleLabel } from './routines';
 import { followUps, handoverCard, useFollowUp } from './handover';
 import { parseSources, type SourceKind } from './sources';
 import { HermesError, hermes, type RunEvent } from './hermes';
@@ -904,6 +905,8 @@ function finishBody(l: Lane, run: ActiveRun, status: 'done' | 'error' | 'stopped
 function onTaskRunEnd(taskId: string, run: ActiveRun, status: 'done' | 'error' | 'stopped', error?: string) {
   const t = tasks.get(taskId);
   if (!t || t.status === 'cancelled') return;
+  // Captured before the task is rewritten below: a routine's own row is what the result flows back to.
+  const routineId = t.routine_id;
   const waiting = items.pendingCards().some((c) => c.card?.task_id === taskId);
   // A run that dies after the agent already marked the task done still hands its result over.
   if ((status === 'error' || status === 'stopped') && t.status !== 'done') {
@@ -920,6 +923,16 @@ function onTaskRunEnd(taskId: string, run: ActiveRun, status: 'done' | 'error' |
     }
   }
   announceEnd(tasks.get(taskId)!);
+  // A routine's task ending is the routine's result. The next run already moved when the task started, so a failure
+  // still advances the schedule; this only records how the run went.
+  if (routineId) {
+    const r = routines.get(routineId);
+    const final = tasks.get(taskId);
+    if (r && final) {
+      const result = final.status === 'failed' ? final.result || 'Failed.' : final.status === 'done' ? final.result || 'Finished.' : final.result || 'Stopped.';
+      putRoutine({ ...r, last_result: result });
+    }
+  }
 }
 
 /** A task that ended done or failed: its handover card, a note for the main session, and one push. */
@@ -2039,6 +2052,17 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
     }
     case 'save_page':
       return savePage(args, o.taskId);
+    case 'save_routine': {
+      const saved = saveRoutine(args);
+      const at = saved.next_run
+        ? new Date(saved.next_run).toLocaleString('en-US', { timeZone: settings.get().timezone, weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+        : '—';
+      return `Saved routine ${saved.id} ("${saved.title}"): ${scheduleLabel(saved.schedule)}, next ${at}. Each run starts a background task in its own session with a handover card, so the instructions must be self-contained.`;
+    }
+    case 'remove_routine': {
+      const id = req(args.routine_id, 'routine_id', 64);
+      return removeRoutine(id) ? `Routine ${id} removed.` : `No routine ${id}.`;
+    }
     case 'update_task': {
       const id = req(args.task_id, 'task_id', 64);
       const t = tasks.get(id);
@@ -2155,7 +2179,7 @@ const pageOf = (taskId: string | null) => {
   return pageId ? pages.get(pageId) : null;
 };
 
-function startTask(title: string, instructions: string, steps: string[], pageId?: string, channelId?: string): Task {
+function startTask(title: string, instructions: string, steps: string[], pageId?: string, channelId?: string, routineId?: string): Task {
   const now = Date.now();
   const task: Task = {
     id: newId(),
@@ -2168,12 +2192,88 @@ function startTask(title: string, instructions: string, steps: string[], pageId?
     background: true,
     instructions,
     page_id: pageId,
+    routine_id: routineId,
     ...(channelId && channelId !== GENERAL_CHANNEL && { channel_id: channelId }),
   };
   const sessionId = `duet-task-${task.id}`;
   putTask(task, sessionId);
   enqueue({ kind: 'task', sessionId, taskId: task.id, channelId: channels.forTask(task), input: taskPrompt(task, instructions) });
   return task;
+}
+
+// ---------------------------------------------------------------------------
+// Routines (user-defined recurring tasks)
+// ---------------------------------------------------------------------------
+
+/** Store a routine and tell every open app about it. */
+export function putRoutine(routine: Routine): Routine {
+  routine.updated_at = Date.now();
+  routines.save(routine);
+  broadcast({ type: 'routine', routine });
+  return routine;
+}
+
+/** Remove a routine and tell every open app it is gone. */
+export function removeRoutine(id: string): boolean {
+  if (!routines.get(id)) return false;
+  routines.remove(id);
+  broadcast({ type: 'routine_removed', id });
+  return true;
+}
+
+/** save_routine and POST /api/routines share this: validate, create or update, and recompute the next run. */
+export function saveRoutine(raw: Record<string, unknown>): Routine {
+  const input = routineInput(raw);
+  const id = String(raw.routine_id ?? raw.id ?? '').trim();
+  const existing = id ? routines.get(id) : null;
+  if (id && !existing) throw new UserError(`no routine ${id}`, 404);
+  if (input.channel_id && !channels.get(input.channel_id)) throw new UserError('no such channel', 404);
+  const now = Date.now();
+  // An update that does not mention `enabled` keeps the state it had: the edit form changes the schedule, not whether
+  // the routine is paused, so saving it must not silently resume one the user paused.
+  const enabled = raw.enabled === undefined ? (existing ? existing.enabled : true) : raw.enabled !== false;
+  const routine: Routine = existing
+    ? { ...existing, ...input, enabled, updated_at: now }
+    : { id: newId(), ...input, enabled, created_at: now, updated_at: now };
+  routine.next_run = nextRun(routine.schedule, now, settings.get().timezone);
+  return putRoutine(routine);
+}
+
+/**
+ * Start a routine's task now. The scheduler advances `next_run` before calling this; this stamps the run on the
+ * routine (last_run, last_task_id, "Started") and broadcasts it, so a slow run can't be picked up twice.
+ */
+export function startRoutine(routine: Routine): Routine {
+  const channel = routine.channel_id ? channels.get(routine.channel_id) : channels.general();
+  if (!channel) throw new UserError('no such channel', 404);
+  const task = startTask(routine.title, routine.prompt, [], undefined, channel.id, routine.id);
+  const now = Date.now();
+  return putRoutine({
+    ...routine,
+    last_run: now,
+    last_task_id: task.id,
+    last_result: 'Started',
+    next_run: nextRun(routine.schedule, now, settings.get().timezone),
+    updated_at: now,
+  });
+}
+
+/** The Run now button: start a routine immediately, whether or not it is paused. */
+export function runRoutineNow(id: string): Routine {
+  const routine = routines.get(id);
+  if (!routine) throw new UserError('no such routine', 404);
+  return startRoutine(routine);
+}
+
+/** Pause or resume. Resuming recomputes the next run from now, so a routine doesn't fire one it missed while paused. */
+export function setRoutineEnabled(id: string, enabled: boolean): Routine | null {
+  const existing = routines.get(id);
+  if (!existing) return null;
+  return putRoutine({
+    ...existing,
+    enabled,
+    next_run: nextRun(existing.schedule, Date.now(), settings.get().timezone),
+  });
 }
 
 // ---------------------------------------------------------------------------

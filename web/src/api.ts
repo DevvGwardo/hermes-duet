@@ -1,5 +1,5 @@
 import { settledNotifications } from '../../shared/links';
-import type { Attachment, Capabilities, Channel, Connector, Item, SearchHit, ServerEvent, Settings, Snapshot, Task } from '../../shared/types';
+import type { Attachment, Capabilities, Channel, Connector, Item, Routine, RoutineSchedule, SearchHit, ServerEvent, Settings, Snapshot, Task } from '../../shared/types';
 import { applyEvent, applySnapshot, channelItems, getState, hasMoreFor, mergeItems, prependItems, setChannel, setChannelMore, setState } from './store';
 
 class HttpError extends Error {
@@ -100,6 +100,14 @@ export const api = {
   channelPage: (id: string) => call<{ items: Item[]; has_more: boolean }>('GET', `/api/channels/${encodeURIComponent(id)}/items`),
   seenChannel: (id: string) => call<{ ok: true }>('POST', `/api/channels/${encodeURIComponent(id)}/seen`),
   search: (q: string) => call<{ hits: SearchHit[]; terms: string[] }>('GET', `/api/search?q=${encodeURIComponent(q)}`),
+  routines: () => call<{ routines: Routine[] }>('GET', '/api/routines'),
+  /** Create a routine, or update it when `routine_id` (or `id`) is passed. */
+  saveRoutine: (input: { routine_id?: string; id?: string; title: string; prompt: string; schedule: RoutineSchedule; channel_id?: string; enabled?: boolean }) =>
+    call<{ routine: Routine }>('POST', '/api/routines', input),
+  runRoutine: (id: string) => call<{ routine: Routine }>('POST', `/api/routines/${encodeURIComponent(id)}/run`),
+  pauseRoutine: (id: string) => call<{ routine: Routine }>('POST', `/api/routines/${encodeURIComponent(id)}/pause`),
+  resumeRoutine: (id: string) => call<{ routine: Routine }>('POST', `/api/routines/${encodeURIComponent(id)}/resume`),
+  removeRoutine: (id: string) => call<{ ok: true }>('DELETE', `/api/routines/${encodeURIComponent(id)}`),
 };
 
 /**

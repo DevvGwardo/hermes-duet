@@ -308,6 +308,8 @@ export interface Task {
   retried_at?: number;
   /** A standing page's scheduled refresh: the file it delivers becomes the page's current version. */
   page_id?: string;
+  /** The user-defined routine that started this task, so its result can flow back to the routine. */
+  routine_id?: string;
   /** Which channel to hand the result back in; absent means general. */
   channel_id?: string;
   /** Page refresh only: the agent's one line on what changed since the previous version. */
