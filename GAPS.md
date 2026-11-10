@@ -513,3 +513,29 @@ No reversions this pass. Test count unchanged 445 → 445 (dep bumps only, no be
 internal API and round-trips a real multipart upload against the running launchd service
 (dev.hermes-duet.server restarted on `e26bf4c`): upload `0mw5slp5i000i2p` (image/png, 33 bytes), readback
 bit-identical. Run it any time with `bun scripts/prod-upload-smoke.ts`.
+
+---
+
+## Claude Duet parity pass - 2026-11-09
+
+Driven by `docs/CLAUDE-DUET-PARITY.md`. Five workstreams ran in isolated worktrees and were merged into
+`feat/duet-parity`. `bun run typecheck` and `bun run build` are clean.
+
+**Gate:** `bun test` - **514 pass / 8 fail**, 522 tests across 54 files. The 8 failures are the pre-existing
+Windows-only cases (`rotate-logs`, symlink resolution, POSIX mode bits, `/tmp` paths); the same 8 fail on `8f3ab81`.
+
+| Gap | What landed | Commit |
+|---|---|---|
+| Payment merchant binding | `request_payment` requires an absolute http(s) `merchant_url`; the host is derived and stored. `browser.fillCard(card, expectedHost)` re-reads `currentHost()` and refuses unless `sameLoginSite` matches before typing. Legacy cards without a host refuse to fill. The card shows the merchant site. | `71f25c7` |
+| Structured approvals | `request_approval` gains `action`, `destination`, `recipients`, `content`, `url`; sends require recipients and destination. The card renders To/On/Action and the resume prompt pins them. | `d346b2a` |
+| Outbound secret scan | `server/safety.ts` detects Luhn-checked card numbers, SSNs, IBANs, PEM keys, AWS/GitHub/API keys. `never_share` refuses the card (and notify title/body) with only a redacted hint; IBAN is `needs_consent` and warns on the card. | `d346b2a` |
+| Hard-block policy | Five always-refused categories (bank/wire, securities/crypto, another person's account, password/2FA change, account creation), surfaced at `GET /api/policy` and in Settings > Always refused. | `d346b2a` |
+| Task detail, steering, completion | `Task.agent_done_at` vs user `confirmed_at`; `/confirm` and `/reopen`; `steerTask` via `hermes.steer` with pending-steer replay; `/api/tasks/:id/message`; task sheet with steps, result, sources, files and a live composer. | `0b148bc` |
+| Channel depth | `channels.instructions` (2000 chars) injected before the topic with a safety-override clause; `channels.group`; grouped strip/sheet; unread dot from `last_at > seen_at`, cleared on open. | `502f270` |
+| Source citations | `server/sources.ts` validates real item/task/file/page ids and http(s) URLs; sources ride on brief entries, watching, cards, handover cards and task results; chips open files/pages and link URLs; prompts require provenance. | `5a072f6` |
+| Test isolation | The local `.env` key leaked into the shared test process, so a failed launch marked Hermes `down` and later files no-oped. The preload now blanks `DUET_HERMES_KEY`/`API_SERVER_KEY`; tests that need a key stub Hermes. | `6f440e3` |
+| Integration pass | Persona teaches structured approval fields and citations; notify scans its title too; reopen bumps `updated_at`. | `7fe8e8b` |
+
+**Still open from the parity document:** user-defined routines (§4.5), per-category notification preferences
+(§4.6), editable deliverables (§4.7), complete FTS over card subfields and a memory reset (§4.8), always-on/multi-agent
+deployment (§4.9), connector discovery and channel repo binding (§4.10), and native/mobile polish (§4.11).
