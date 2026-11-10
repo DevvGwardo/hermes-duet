@@ -14,6 +14,7 @@ import { channels, files, items, kv, newId, pages, runs, settings, tasks, tx } f
 import { UserError } from './errors';
 import { GENERAL_CHANNEL } from './schema';
 import { followUps, handoverCard, useFollowUp } from './handover';
+import { parseSources, type SourceKind } from './sources';
 import { HermesError, hermes, type RunEvent } from './hermes';
 import { MAX_PAGES, afterInterruption, briefWait, pageBriefLine, pageInput, refreshTime, refreshToCancel } from './pages';
 import { briefPrompt, checkinPrompt, decisionPrompt, pageRefreshInstructions, persona, taskPrompt } from './prompts';
@@ -1809,6 +1810,27 @@ function ambiguousOrigin(tool: string, runs: ActiveRun[]): Error {
   );
 }
 
+/**
+ * Whether a source's local id names something real. Anything else is the
+ * agent inventing provenance, so it fails the tool call instead of posting a
+ * chip that opens nothing. url/connector/other have no registry; their label
+ * is the citation and parseSources already requires it.
+ */
+function sourceExists(kind: SourceKind, id: string): boolean {
+  switch (kind) {
+    case 'item':
+      return items.get(id) !== null;
+    case 'task':
+      return tasks.get(id) !== null;
+    case 'file':
+      return files.get(id) !== null;
+    case 'page':
+      return pages.get(id) !== null;
+    default:
+      return true;
+  }
+}
+
 const str = (v: unknown, max = 4000) => (typeof v === 'string' ? v.slice(0, max) : v === undefined || v === null ? '' : String(v).slice(0, max));
 const req = (v: unknown, name: string, max?: number) => {
   const s = str(v, max).trim();
@@ -1943,7 +1965,7 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
     }
     case 'post_brief': {
       const morning = o.run?.spec.kind === 'brief';
-      const { entries, watching, demoted, unlinked } = briefCard(args, { morning, pageFile: (id) => pages.get(id)?.file_id ?? null });
+      const { entries, watching, demoted, unlinked } = briefCard(args, { morning, pageFile: (id) => pages.get(id)?.file_id ?? null, lookup: sourceExists });
       const s = settings.get();
       const item = postCard(
         {
@@ -1979,6 +2001,7 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
     case 'post_card': {
       const type = str(args.type) as CardData['type'];
       if (!['checklist', 'metrics', 'note'].includes(type)) throw new Error('type must be checklist, metrics or note');
+      const sources = parseSources(args.sources, sourceExists);
       const patch: Partial<CardData> = { type, title: req(args.title, 'title', 140) };
       if (args.body !== undefined) patch.body = str(args.body, 8000);
       if (Array.isArray(args.checklist)) patch.checklist = args.checklist.slice(0, 200).map((c: any) => ({ text: str(c?.text, 300), done: !!c?.done }));
@@ -1991,11 +2014,11 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
         }));
       const existing = typeof args.card_id === 'string' ? items.get(args.card_id) : null;
       if (existing?.kind === 'card' && existing.card && ['checklist', 'metrics', 'note'].includes(existing.card.type)) {
-        existing.card = { ...existing.card, ...patch, updated_label: undefined };
+        existing.card = { ...existing.card, ...patch, ...(sources !== undefined ? { sources } : {}), updated_label: undefined };
         put(existing);
         return `Updated card ${existing.id}.`;
       }
-      const item = postCard({ ...(patch as CardData), status: 'info' }, o);
+      const item = postCard({ ...(patch as CardData), ...(sources !== undefined ? { sources } : {}), status: 'info' }, o);
       return `Card ${item.id} posted. Pass card_id="${item.id}" to update it in place.`;
     }
     case 'deliver_file': {
@@ -2025,6 +2048,10 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
       if (args.progress !== undefined) next.progress = str(args.progress, 300);
       if (Array.isArray(args.steps)) next.steps = args.steps.slice(0, 60).map((s: any): TaskStep => ({ text: str(s?.text ?? s, 200), done: !!s?.done }));
       if (args.result !== undefined) next.result = str(args.result, 2000);
+      // Provenance for the result: an unknown local id fails the call rather
+      // than handing over a citation that opens nothing.
+      const taskSources = parseSources(args.sources, sourceExists);
+      if (taskSources !== undefined) next.sources = taskSources;
       if (args.changed !== undefined) next.changed = str(args.changed, 300);
       if (args.follow_ups !== undefined) next.follow_ups = followUps(args.follow_ups);
       if (typeof args.status === 'string' && ['running', 'waiting', 'done', 'failed'].includes(args.status)) next.status = args.status as Task['status'];

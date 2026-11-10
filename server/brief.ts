@@ -1,5 +1,6 @@
 // Pure rules for briefs and check-ins, kept out of runner.ts so they can be tested without a database or Hermes.
 import type { BriefEntry, Item, WatchEntry } from '../shared/types';
+import { parseSources, type SourceLookup } from './sources';
 
 const text = (v: unknown, max: number) => (typeof v === 'string' ? v.slice(0, max).trim() : '');
 
@@ -18,11 +19,16 @@ const RANK = { high: 0, medium: 1, low: 2 } as const;
  * A line about a standing page may name it with `page_id`; `pageFile` resolves that to the page's current version,
  * stored as the line's `file_id` so tapping it opens what the brief was written about (and still opens after the
  * page is stopped, since its files stay). Unknown ids are left unlinked and listed in `unlinked` for the tool result.
+ *
+ * A line may also carry `sources`: structured citations for the numbers or claims in it. They are validated here
+ * (with `lookup`, which the server wires to its collections) and travel with the entry, including into Watching
+ * when it is demoted, so provenance is never separated from the claim.
  */
 export function briefCard(
   raw: { entries?: unknown; watching?: unknown },
-  opts: { morning?: boolean; pageFile?: (pageId: string) => string | null } = {},
+  opts: { morning?: boolean; pageFile?: (pageId: string) => string | null; lookup?: SourceLookup } = {},
 ): { entries: BriefEntry[]; watching: WatchEntry[]; demoted: string[]; unlinked: string[] } {
+  const lookup = opts.lookup ?? (() => true);
   const unlinked: string[] = [];
   const fileOf = (v: unknown): string | undefined => {
     const id = text(v, 64);
@@ -36,6 +42,7 @@ export function briefCard(
     .map((e: any): BriefEntry & { priority: keyof typeof RANK } => {
       const title = text(e?.title, 160);
       if (!title) throw new Error('missing entry title');
+      const sources = parseSources(e?.sources, lookup);
       return {
         title,
         detail: text(e?.detail, 600) || undefined,
@@ -44,12 +51,15 @@ export function briefCard(
         action_message: text(e?.action_message, 600) || undefined,
         draft: text(e?.draft, 6000) || undefined,
         file_id: fileOf(e?.page_id),
+        ...(sources ? { sources } : {}),
       };
     })
     .sort((a, b) => RANK[a.priority] - RANK[b.priority]);
   const watching = (Array.isArray(raw.watching) ? raw.watching : []).slice(0, 10).flatMap((w: any): WatchEntry[] => {
     const title = text(w?.title, 160);
-    return title ? [{ title, detail: text(w?.detail, 400) || undefined, file_id: fileOf(w?.page_id) }] : [];
+    if (!title) return [];
+    const sources = parseSources(w?.sources, lookup);
+    return [{ title, detail: text(w?.detail, 400) || undefined, file_id: fileOf(w?.page_id), ...(sources ? { sources } : {}) }];
   });
   if (!ranked.length && !opts.morning) throw new Error('post_brief needs at least one entry. If nothing needs the user, do not call post_brief.');
   if (!ranked.length && !watching.length)
@@ -57,7 +67,7 @@ export function briefCard(
   const overflow = ranked.slice(MAX_DECISIONS);
   return {
     entries: ranked.slice(0, MAX_DECISIONS),
-    watching: [...overflow.map((e) => ({ title: e.title, detail: e.detail, file_id: e.file_id })), ...watching].slice(0, 12),
+    watching: [...overflow.map((e) => ({ title: e.title, detail: e.detail, file_id: e.file_id, ...(e.sources ? { sources: e.sources } : {}) })), ...watching].slice(0, 12),
     demoted: overflow.map((e) => e.title),
     unlinked: [...new Set(unlinked)],
   };

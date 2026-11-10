@@ -33,6 +33,9 @@ export function handoverCard(task: Task, files: FileEntry[], prev?: CardData): C
     title: task.title,
     body: task.result?.trim().slice(0, 600) || (failed ? 'Stopped before it finished.' : 'Finished.'),
     file_ids: own.length ? own.map((f) => f.id) : undefined,
+    // Provenance for the result travels onto the card, so the handover shows
+    // its chips where the claim is read instead of only in the Tasks tab.
+    ...(task.sources?.length ? { sources: task.sources } : {}),
     follow_ups:
       !failed && task.follow_ups?.length
         ? task.follow_ups.slice(0, 3).map((f) => ({ label: f.label, message: f.message, ...(tapped.has(`${f.label}\n${f.message}`) && { used: true }) }))
