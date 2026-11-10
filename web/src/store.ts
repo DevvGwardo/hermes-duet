@@ -140,7 +140,17 @@ export function mergeItems(page: Item[]) {
 export function applyEvent(ev: ServerEvent) {
   switch (ev.type) {
     case 'item':
-      setState((s) => ({ items: upsert(s.items, ev.item, byCreated), pending: trackPending(s.pending, ev.item) }));
+      setState((s) => {
+        // A new message also moves the channel's unread marker: without this the strip's dot only ever
+        // refreshed on reconnect, because the server sends items, not channel rows, on every turn.
+        const at = ev.item.created_at;
+        const inId = ev.item.channel_id ?? s.channels[0]?.id;
+        return {
+          items: upsert(s.items, ev.item, byCreated),
+          pending: trackPending(s.pending, ev.item),
+          channels: inId ? s.channels.map((c) => (c.id === inId ? { ...c, last_at: Math.max(c.last_at ?? 0, at) } : c)) : s.channels,
+        };
+      });
       break;
     case 'delta':
       setState((s) => ({

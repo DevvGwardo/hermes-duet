@@ -2,7 +2,7 @@ import { Database } from 'bun:sqlite';
 import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { type Attachment, type Channel, type FileEntry, type Item, type Page, type Settings, type Task, attachmentKind } from '../shared/types';
-import { type ChannelInput, slugFor } from './channels';
+import { type ChannelInput, type ChannelPatch, slugFor } from './channels';
 import { config } from './config';
 import { lockDownDataDir } from './permissions';
 import { GENERAL_CHANNEL, SCHEMA_VERSION, applySchema } from './schema';
@@ -102,19 +102,22 @@ function createMainSession(): string {
 }
 
 const channelGet = db.query<ChannelRow, [string]>(
-  'SELECT id, name, slug, topic, session_id, seen_at, archived_at, created_at, updated_at FROM channels WHERE id = ?',
+  'SELECT id, name, slug, topic, instructions, "group", session_id, seen_at, archived_at, created_at, updated_at FROM channels WHERE id = ?',
 );
 const channelAll = db.query<ChannelRow, [string]>(
-  `SELECT c.id, c.name, c.slug, c.topic, c.session_id, c.seen_at, c.archived_at, c.created_at, c.updated_at,
+  `SELECT c.id, c.name, c.slug, c.topic, c.instructions, c."group", c.session_id, c.seen_at, c.archived_at, c.created_at, c.updated_at,
           (SELECT MAX(i.created_at) FROM items i WHERE i.channel_id = c.id) AS last_at
    FROM channels c WHERE c.archived_at IS NULL
    ORDER BY CASE WHEN c.id = ? THEN 0 ELSE 1 END, coalesce(last_at, c.created_at) DESC`,
 );
 const channelBySlug = db.query<ChannelRow, [string]>('SELECT * FROM channels WHERE slug = ?');
 const channelInsert = db.query(
-  'INSERT INTO channels(id, name, slug, topic, session_id, seen_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+  'INSERT INTO channels(id, name, slug, topic, instructions, "group", session_id, seen_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
 );
-const channelTouch = db.query('UPDATE channels SET name = ?, topic = ?, archived_at = NULL, updated_at = ? WHERE id = ?');
+// Full-row touch for an un-archived channel: provided fields replace, absent ones keep what the row had.
+const channelTouch = db.query(
+  'UPDATE channels SET name = ?, topic = ?, instructions = ?, "group" = ?, archived_at = NULL, updated_at = ? WHERE id = ?',
+);
 const channelArchive = db.query('UPDATE channels SET archived_at = ?, updated_at = ? WHERE id = ?');
 const channelSeen = db.query('UPDATE channels SET seen_at = ? WHERE id = ?');
 
@@ -128,7 +131,7 @@ export const channels = {
     if (row) return row;
     const session = kv.get<string>('main_session', '') || createMainSession();
     const now = Date.now();
-    channelInsert.run(GENERAL_CHANNEL, 'general', 'general', 'Everything that is not a project of its own', session, null, now, now);
+    channelInsert.run(GENERAL_CHANNEL, 'general', 'general', 'Everything that is not a project of its own', null, null, session, null, now, now);
     return channelGet.get(GENERAL_CHANNEL)!;
   },
   all(): ChannelRow[] {
@@ -151,24 +154,62 @@ export const channels = {
     const reuse = () => {
       const existing = channels.bySlug(slug);
       if (!existing) return null;
-      // A channel that is still open is not being "reused", it is the same channel: return it untouched. Touching it
-      // here would let `POST /api/channels {"name":"Work"}` silently erase the topic of the live #work.
-      if (existing.archived_at == null) return existing;
-      // Archived: bring it back, keeping its topic when the caller did not name a new one.
-      channelTouch.run(input.name, input.topic ?? existing.topic ?? null, now, existing.id);
+      // A live channel of the same name is the same channel: only fill in fields the caller actually sent, so
+      // `POST /api/channels {"name":"Work"}` still cannot erase the topic of the live #work.
+      if (existing.archived_at == null) {
+        const patch: ChannelPatch = {};
+        if (input.topic !== undefined) patch.topic = input.topic;
+        if (input.instructions !== undefined) patch.instructions = input.instructions;
+        if (input.group !== undefined) patch.group = input.group;
+        if (Object.keys(patch).length) return channels.update(existing.id, patch);
+        return existing;
+      }
+      // Archived: bring it back, keeping each field when the caller did not name a new one.
+      channelTouch.run(
+        input.name,
+        input.topic ?? existing.topic ?? null,
+        input.instructions ?? existing.instructions ?? null,
+        input.group ?? existing.group ?? null,
+        now,
+        existing.id,
+      );
       return channelGet.get(existing.id)!;
     };
     const found = reuse();
     if (found) return found;
     const id = `chan-${slug}-${newId().slice(-4)}`;
     try {
-      tx(() => channelInsert.run(id, input.name, slug, input.topic ?? null, `duet-channel-${slug}`, null, now, now));
+      tx(() =>
+        channelInsert.run(id, input.name, slug, input.topic ?? null, input.instructions ?? null, input.group ?? null, `duet-channel-${slug}`, null, now, now),
+      );
     } catch (e: any) {
       // Another create won the slug between the read and the insert: that is the same "already archived" answer.
       const again = reuse();
       if (again) return again;
       throw e;
     }
+    return channelGet.get(id)!;
+  },
+  /**
+   * Update a channel's editable fields. Only keys present in the patch are written (`null` clears the column),
+   * so the sheet can send topic/instructions/group together and the general channel can gain standing rules too.
+   */
+  update(id: string, patch: ChannelPatch): ChannelRow | null {
+    const existing = channelGet.get(id);
+    if (!existing) return null;
+    const sets: string[] = [];
+    const args: unknown[] = [];
+    // `group` is a reserved word: quoted here, bare in the returned row like every other column.
+    for (const [col, value] of [['topic', patch.topic], ['instructions', patch.instructions], ['"group"', patch.group]] as const) {
+      if (value !== undefined) {
+        sets.push(`${col} = ?`);
+        args.push(value);
+      }
+    }
+    if (!sets.length) return existing;
+    sets.push('updated_at = ?');
+    args.push(Date.now(), id);
+    db.query(`UPDATE channels SET ${sets.join(', ')} WHERE id = ?`).run(...(args as (string | number | null)[]));
     return channelGet.get(id)!;
   },
   archive(id: string): boolean {

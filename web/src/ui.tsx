@@ -219,6 +219,7 @@ export const Icon = {
       <path d="M3 4.5h18V8H3zM10 12h4" />
     </>,
   ),
+  pencil: svg(<path d="m14.5 5.5 4 4L8 20l-5 1 1-5z" />),
 };
 
 export function fileIcon(mime: string, name: string) {
