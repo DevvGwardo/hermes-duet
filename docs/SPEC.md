@@ -145,8 +145,6 @@ CREATE VIRTUAL TABLE IF NOT EXISTS fts_items USING fts5(
   channel_id UNINDEXED,
   kind UNINDEXED,
   text,
-  card_title,
-  card_body,
   tokenize = 'porter unicode61'
 );
 ```
@@ -337,34 +335,12 @@ CREATE VIRTUAL TABLE IF NOT EXISTS fts_items USING fts5(
   channel_id UNINDEXED,
   kind UNINDEXED,
   text,
-  card_title,
-  card_body,
   tokenize = 'porter unicode61'
 );
 
--- Triggers to keep FTS index synchronized with items table
-CREATE TRIGGER IF NOT EXISTS items_fts_insert AFTER INSERT ON items BEGIN
-  INSERT INTO fts_items(item_id, channel_id, kind, text, card_title, card_body)
-  VALUES (
-    new.id,
-    new.channel_id,
-    new.kind,
-    json_extract(new.json, '$.text'),
-    json_extract(new.json, '$.card.title'),
-    json_extract(new.json, '$.card.body')
-  );
-END;
-
-CREATE TRIGGER IF NOT EXISTS items_fts_update AFTER UPDATE ON items BEGIN
-  UPDATE fts_items SET
-    channel_id = new.channel_id,
-    kind = new.kind,
-    text = json_extract(new.json, '$.text'),
-    card_title = json_extract(new.json, '$.card.title'),
-    card_body = json_extract(new.json, '$.card.body')
-  WHERE item_id = old.id;
-END;
-
+-- The index row is written by db.items.save() from searchText(item), which flattens every card
+-- subfield (entries, drafts, watching, follow-ups, checklist, metrics, line items, sources) into one
+-- text column. Only the delete trigger remains, so a deleted item cannot leave a stale hit.
 CREATE TRIGGER IF NOT EXISTS items_fts_delete AFTER DELETE ON items BEGIN
   DELETE FROM fts_items WHERE item_id = old.id;
 END;

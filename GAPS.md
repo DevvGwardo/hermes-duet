@@ -536,6 +536,30 @@ Windows-only cases (`rotate-logs`, symlink resolution, POSIX mode bits, `/tmp` p
 | Test isolation | The local `.env` key leaked into the shared test process, so a failed launch marked Hermes `down` and later files no-oped. The preload now blanks `DUET_HERMES_KEY`/`API_SERVER_KEY`; tests that need a key stub Hermes. | `6f440e3` |
 | Integration pass | Persona teaches structured approval fields and citations; notify scans its title too; reopen bumps `updated_at`. | `7fe8e8b` |
 
-**Still open from the parity document:** user-defined routines (§4.5), per-category notification preferences
-(§4.6), editable deliverables (§4.7), complete FTS over card subfields and a memory reset (§4.8), always-on/multi-agent
-deployment (§4.9), connector discovery and channel repo binding (§4.10), and native/mobile polish (§4.11).
+**Still open from the parity document after pass 1:** routines (§4.5), notification preferences (§4.6), editable
+deliverables (§4.7), complete FTS and memory reset (§4.8), always-on/multi-agent deployment (§4.9), connector
+discovery and channel repo binding (§4.10), and native/mobile polish (§4.11). Pass 2 closed all but §4.11.
+
+---
+
+## Claude Duet parity pass 2 - 2026-11-09
+
+Six LongCat 2.5 Free workstreams in isolated worktrees, merged into `feat/duet-parity`. Contracts landed first as
+`5975c79` (Routine, notification preferences, Channel.repo, FileEntry.version_of, routine events).
+`bun run typecheck` and `bun run build` are clean.
+
+**Gate:** `bun test` - **627 pass / 8 fail**, 635 tests across 59 files. The 8 are the same Windows-only cases
+(`rotate-logs`, symlink resolution, POSIX mode bits, `/tmp` paths) that fail on the baseline.
+
+| Gap | What landed | Commit |
+|---|---|---|
+| Always-on deployment (§4.9) | `docs/DEPLOY.md` now covers a Linux mini-PC/NAS/VPS host, systemd, Tailscale, data location, hot and cold backup/restore, upgrades, Docker with Chromium/CDP isolated in the container, and honest limits. New `docker-compose.example.yml`. README says the host must be awake and that native apps are deferred. | `0774238` |
+| Notification preferences (§4.6) | `server/notify-prefs.ts` filters per category and channel. Task pushes all/failures/off, agent-notify toggle, per-channel mute, soft daily cap. Approvals, questions and payments always push and are cap/mute-exempt; suppressed pushes never post late or count. Settings UI added. | `d68aefd` |
+| Editable deliverables (§4.7) | `POST /api/files/:id/versions` saves edited text as a new `version_of` entry with its own storage, leaving the original intact. Viewer edits Markdown/text/CSV/JSON and HTML source while the preview stays sandboxed; Make shows only the newest version with an "edited" chip. | `1415823` |
+| Connectors + channel repo (§4.10) | `Channel.repo` validated to `owner/name` or a GitHub URL and normalized; the channel prompt tells the agent to read it and never push without approval. Read-only `GET /api/suggestions` and Connectors sheet show what is connected and up to three honest next steps. No install/OAuth flow. | `d01374c` |
+| Routines (§4.5) | `routines` table and pure scheduler math (daily, weekly, 15-10080 minute intervals, wall-clock with DST handling). Scheduler advances `next_run` before launch, runs each due routine as a normal background task, and flows the task result back. `save_routine`/`remove_routine`, run-now/pause/resume API and Routines sheet. | `986ad86` |
+| Search + memory (§4.8) | FTS schema v3: one `searchText(item)` flattener indexes card entries, drafts, watching, follow-ups, checklist, metrics, line items, approval recipients/content and source quotes; migration drops/recreates and backfills. Memory API (`GET/PUT/DELETE /api/memory`) edits/clears only `config.contextFile` with a 32 KB cap; Memory sheet in Settings. | `6606434` |
+
+**Still open:** native/mobile shell (§4.11, deliberately deferred until the web surface is stable); multi-gateway /
+multi-agent support (documented as structural, not implemented); connector OAuth/install marketplace and per-channel
+tool scopes (the app stays read-only by design).
