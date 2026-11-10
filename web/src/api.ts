@@ -1,5 +1,5 @@
 import { settledNotifications } from '../../shared/links';
-import type { Attachment, Capabilities, Channel, Connector, Item, SearchHit, ServerEvent, Settings, Snapshot, Task } from '../../shared/types';
+import type { Attachment, Capabilities, Channel, Connector, ConnectorSuggestion, Item, SearchHit, ServerEvent, Settings, Snapshot, Task } from '../../shared/types';
 import { applyEvent, applySnapshot, channelItems, getState, hasMoreFor, mergeItems, prependItems, setChannel, setChannelMore, setState } from './store';
 
 class HttpError extends Error {
@@ -77,6 +77,12 @@ export const api = {
   policy: () => call<{ blocks: { id: string; title: string; detail: string }[] }>('GET', '/api/policy'),
   connectors: () => call<{ connectors: Connector[] }>('GET', '/api/connectors'),
   testConnector: (id: string) => call<{ connector: Connector }>('POST', `/api/connectors/${encodeURIComponent(id)}/test`),
+  /** Read-only discovery: the connected summary plus at most three suggestions, with no install action. */
+  suggestions: () =>
+    call<{
+      suggestions: ConnectorSuggestion[];
+      connected: { toolsets: string[] | null; apps: string[]; connectors: Connector[] };
+    }>('GET', '/api/suggestions'),
   /** A button inside a delivered dashboard: becomes a turn in the general channel. */
   deliverableAction: (fileId: string, action: string, payload?: unknown) =>
     call<{ item: Item }>('POST', `/api/deliverables/${encodeURIComponent(fileId)}/action`, { action, payload }),
@@ -92,9 +98,9 @@ export const api = {
   autofill: (provider?: string) => call<{ host: string; vault: string; filled: { user: boolean; pass: boolean } }>('POST', '/api/browser/autofill', { provider }),
   viewport: (mode: 'mobile' | 'desktop') => call<{ mode: string }>('POST', '/api/browser/viewport', { mode }),
   channels: () => call<{ channels: Channel[] }>('GET', '/api/channels'),
-  createChannel: (name: string, topic?: string, extra?: { instructions?: string; group?: string }) =>
+  createChannel: (name: string, topic?: string, extra?: { instructions?: string; group?: string; repo?: string }) =>
     call<{ channel: Channel }>('POST', '/api/channels', { name, topic, ...extra }),
-  updateChannel: (id: string, patch: { topic?: string; instructions?: string; group?: string }) =>
+  updateChannel: (id: string, patch: { topic?: string; instructions?: string; group?: string; repo?: string }) =>
     call<{ channel: Channel }>('POST', '/api/channels', { id, ...patch }),
   archiveChannel: (id: string) => call<{ ok: true }>('DELETE', `/api/channels/${encodeURIComponent(id)}`),
   channelPage: (id: string) => call<{ items: Item[]; has_more: boolean }>('GET', `/api/channels/${encodeURIComponent(id)}/items`),

@@ -103,21 +103,21 @@ function createMainSession(): string {
 }
 
 const channelGet = db.query<ChannelRow, [string]>(
-  'SELECT id, name, slug, topic, instructions, "group", session_id, seen_at, archived_at, created_at, updated_at FROM channels WHERE id = ?',
+  'SELECT id, name, slug, topic, instructions, "group", repo, session_id, seen_at, archived_at, created_at, updated_at FROM channels WHERE id = ?',
 );
 const channelAll = db.query<ChannelRow, [string]>(
-  `SELECT c.id, c.name, c.slug, c.topic, c.instructions, c."group", c.session_id, c.seen_at, c.archived_at, c.created_at, c.updated_at,
+  `SELECT c.id, c.name, c.slug, c.topic, c.instructions, c."group", c.repo, c.session_id, c.seen_at, c.archived_at, c.created_at, c.updated_at,
           (SELECT MAX(i.created_at) FROM items i WHERE i.channel_id = c.id) AS last_at
    FROM channels c WHERE c.archived_at IS NULL
    ORDER BY CASE WHEN c.id = ? THEN 0 ELSE 1 END, coalesce(last_at, c.created_at) DESC`,
 );
 const channelBySlug = db.query<ChannelRow, [string]>('SELECT * FROM channels WHERE slug = ?');
 const channelInsert = db.query(
-  'INSERT INTO channels(id, name, slug, topic, instructions, "group", session_id, seen_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  'INSERT INTO channels(id, name, slug, topic, instructions, "group", repo, session_id, seen_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
 );
 // Full-row touch for an un-archived channel: provided fields replace, absent ones keep what the row had.
 const channelTouch = db.query(
-  'UPDATE channels SET name = ?, topic = ?, instructions = ?, "group" = ?, archived_at = NULL, updated_at = ? WHERE id = ?',
+  'UPDATE channels SET name = ?, topic = ?, instructions = ?, "group" = ?, repo = ?, archived_at = NULL, updated_at = ? WHERE id = ?',
 );
 const channelArchive = db.query('UPDATE channels SET archived_at = ?, updated_at = ? WHERE id = ?');
 const channelSeen = db.query('UPDATE channels SET seen_at = ? WHERE id = ?');
@@ -132,7 +132,7 @@ export const channels = {
     if (row) return row;
     const session = kv.get<string>('main_session', '') || createMainSession();
     const now = Date.now();
-    channelInsert.run(GENERAL_CHANNEL, 'general', 'general', 'Everything that is not a project of its own', null, null, session, null, now, now);
+    channelInsert.run(GENERAL_CHANNEL, 'general', 'general', 'Everything that is not a project of its own', null, null, null, session, null, now, now);
     return channelGet.get(GENERAL_CHANNEL)!;
   },
   all(): ChannelRow[] {
@@ -162,6 +162,7 @@ export const channels = {
         if (input.topic !== undefined) patch.topic = input.topic;
         if (input.instructions !== undefined) patch.instructions = input.instructions;
         if (input.group !== undefined) patch.group = input.group;
+        if (input.repo !== undefined) patch.repo = input.repo;
         if (Object.keys(patch).length) return channels.update(existing.id, patch);
         return existing;
       }
@@ -171,6 +172,7 @@ export const channels = {
         input.topic ?? existing.topic ?? null,
         input.instructions ?? existing.instructions ?? null,
         input.group ?? existing.group ?? null,
+        input.repo ?? existing.repo ?? null,
         now,
         existing.id,
       );
@@ -181,7 +183,7 @@ export const channels = {
     const id = `chan-${slug}-${newId().slice(-4)}`;
     try {
       tx(() =>
-        channelInsert.run(id, input.name, slug, input.topic ?? null, input.instructions ?? null, input.group ?? null, `duet-channel-${slug}`, null, now, now),
+        channelInsert.run(id, input.name, slug, input.topic ?? null, input.instructions ?? null, input.group ?? null, input.repo ?? null, `duet-channel-${slug}`, null, now, now),
       );
     } catch (e: any) {
       // Another create won the slug between the read and the insert: that is the same "already archived" answer.
@@ -201,7 +203,7 @@ export const channels = {
     const sets: string[] = [];
     const args: unknown[] = [];
     // `group` is a reserved word: quoted here, bare in the returned row like every other column.
-    for (const [col, value] of [['topic', patch.topic], ['instructions', patch.instructions], ['"group"', patch.group]] as const) {
+    for (const [col, value] of [['topic', patch.topic], ['instructions', patch.instructions], ['"group"', patch.group], ['repo', patch.repo]] as const) {
       if (value !== undefined) {
         sets.push(`${col} = ?`);
         args.push(value);

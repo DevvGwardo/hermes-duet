@@ -3181,6 +3181,27 @@ li.done .tick {
   display: flex;
   gap: 8px;
 }
+/* The repo a channel works in, shown as a small linked chip on the row. */
+.channel-repo {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 170px;
+  font: 400 11px var(--mono);
+  color: var(--gold);
+  text-decoration: none;
+}
+.channel-repo > svg {
+  flex: none;
+}
+.channel-repo-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.channel-repo:hover {
+  text-decoration: underline;
+}
 
 /* ---------------------------------------------------------------- search */
 .search-sheet {
@@ -3534,6 +3555,38 @@ li.done .tick {
   align-items: stretch;
   gap: 6px;
   padding: 6px 0;
+}
+/* Read-only connector discovery. The suggestion cards carry no action: the hint is guidance, not a button. */
+.connectors-sheet {
+  height: auto;
+  max-height: calc(100dvh - 60px);
+}
+.suggest-list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+}
+.suggest-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 0;
+  border-bottom: 1.5px dashed var(--line);
+}
+.suggest-card:last-child {
+  border-bottom: 0;
+}
+.suggest-title {
+  font-weight: 650;
+  color: var(--paper);
+}
+.suggest-detail {
+  font-size: 13px;
+  color: var(--dim);
+}
+.suggest-hint {
+  font-size: 12px;
+  color: var(--faint);
 }
 .hook-row {
   display: flex;

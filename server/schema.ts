@@ -77,6 +77,8 @@ CREATE INDEX IF NOT EXISTS channels_session ON channels(session_id);
   // on boot, existing rows read back as NULL, and nothing stored is touched.
   addColumn(db, 'channels', 'instructions', 'TEXT');
   addColumn(db, 'channels', 'group', 'TEXT');
+  // The GitHub repo a channel works in, normalized to an https://github.com/owner/name URL (see channels.ts).
+  addColumn(db, 'channels', 'repo', 'TEXT');
   // Pending cards are read on every snapshot build, every badge count and every steer. An expression index on the
   // JSON path (partial to kind='card') turns that from a scan of the whole thread into a range read.
   db.exec(`CREATE INDEX IF NOT EXISTS items_card_status ON items(json_extract(json, '$.card.status'), created_at) WHERE kind = 'card'`);
