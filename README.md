@@ -110,8 +110,22 @@ echo "DUET_PUBLIC_URL=https://<your-mac>.<your-tailnet>.ts.net:8443" >> .env && 
 
 1. On the phone, with Tailscale connected, open that URL.
 2. Share → **Add to Home Screen**, then open it from the Home Screen.
-3. Run `hermes-duet pair` on your Mac and enter the code.
+3. Run `hermes-duet pair` on the host and enter the code.
 4. Tap the gear → Notifications → **Turn on**.
+
+### Always-on
+
+Briefs, check-ins, the watched folder, meeting prep, webhook delivery and background tasks all run on the host, so
+the host has to be awake: a sleeping or lid-closed laptop waits rather than runs, even though the app still opens on
+your phone. A Linux mini-PC, NAS or VPS is the intended always-on host — see
+[docs/DEPLOY.md#always-on-host](docs/DEPLOY.md#always-on-host) for systemd, Tailscale, backups, Docker and the
+honest limits (wake-on-LAN is not always-on, and there is one Hermes gateway per install today).
+
+### Native apps
+
+The installable PWA is deliberate: one web surface that runs anywhere, updates with the server, and works with the
+phone's push and camera. A native iOS/Android shell is deferred until the web surface is stable (see
+[parity §4.11](docs/CLAUDE-DUET-PARITY.md#411-nativemobile-polish)) — there are no native apps today.
 
 ### Tell it where your life lives
 
