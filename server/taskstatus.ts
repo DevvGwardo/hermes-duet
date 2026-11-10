@@ -46,8 +46,8 @@ export function withConfirmed(task: Task, now = Date.now()): Task {
 }
 
 /** Clear the user's completion; the agent's `agent_done_at` stays as history. */
-export function withReopened(task: Task): Task {
+export function withReopened(task: Task, now = Date.now()): Task {
   if (task.confirmed_at === undefined) return task;
   const { confirmed_at: _drop, ...rest } = task;
-  return { ...rest };
+  return { ...rest, updated_at: now };
 }

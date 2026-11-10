@@ -42,9 +42,10 @@ test('confirm and reopen are inverses, and reopen keeps the agent stamp', () => 
   expect(confirmed.updated_at).toBe(8);
   // Confirming twice keeps the first tap.
   expect(withConfirmed(confirmed, 9).confirmed_at).toBe(8);
-  const reopened = withReopened(confirmed);
+  const reopened = withReopened(confirmed, 9);
   expect(reopened.confirmed_at).toBeUndefined();
   expect(reopened.agent_done_at).toBe(7);
+  expect(reopened.updated_at).toBe(9);
   // Reopening an unconfirmed task changes nothing.
   expect(withReopened(done)).toEqual(done);
 });

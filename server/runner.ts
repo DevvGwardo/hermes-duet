@@ -1881,7 +1881,7 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
       const draft = str(args.draft, DRAFT_MAX).trim() || undefined;
       const refused = approvalPolicyRefusal({ action: fields.action, title, summary, destination: fields.destination, content: fields.content ?? draft });
       if (refused) throw new Error(refused);
-      const findings = scanOutbound([draft ?? '', fields.content ?? '', summary].join('\n'));
+      const findings = scanOutbound([title, draft ?? '', fields.content ?? '', summary].join('\n'));
       const blocked = findings.filter((f) => f.tier === 'never_share');
       if (blocked.length) {
         const kinds = [...new Set(blocked.map((f) => f.label))].join(', ');
@@ -2063,9 +2063,11 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
     case 'notify': {
       const refused = notifyRefusal(o.run?.spec.kind);
       if (refused) return refused;
+      const noteTitle = req(args.title, 'title', 80);
       const noteBody = str(args.body, 300);
-      // A notification is outward-facing text too: secrets never leave through it either.
-      const secret = scanOutbound(noteBody).find((f) => f.tier === 'never_share');
+      // A notification is outward-facing text too: secrets never leave through it either. Scan the title as well;
+      // it is short, but it is rendered on the lock screen just like the body.
+      const secret = scanOutbound(`${noteTitle}\n${noteBody}`).find((f) => f.tier === 'never_share');
       if (secret) {
         throw new Error(
           `Notification blocked: the text looks like it contains ${secret.label} (${secret.redacted}). Remove the secret and post again without it — never paste the full value.`,
@@ -2073,7 +2075,7 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
       }
       // The push names a card, so tapping it lands on something, a dismissed banner isn't the only record, and
       // quiet hours hold it for "While you were away" instead of dropping it.
-      const item = postCard({ type: 'note', title: req(args.title, 'title', 80), body: noteBody || undefined, status: 'info', alert: true }, o);
+      const item = postCard({ type: 'note', title: noteTitle, body: noteBody || undefined, status: 'info', alert: true }, o);
       const sent = await notify({ title: item.card!.title, body: item.card!.body ?? '', card_id: item.id, tag: item.id, url: `/?card=${item.id}` });
       if (sent) return `Notification sent. It is also card ${item.id} in the thread.`;
       return inQuietHours(settings.get())
