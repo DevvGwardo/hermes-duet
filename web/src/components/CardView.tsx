@@ -89,6 +89,7 @@ export function CardView({ item, onOpenFile }: { item: Item; onOpenFile: (id: st
         </>
       )}
 
+      {card.type === 'approval' && <ApprovalMeta card={card} />}
       {card.type === 'approval' && card.draft && (pending && !card.hermes ? (
         <DraftEditor original={card.draft} value={draft} onChange={setDraft} disabled={!!busy} />
       ) : (
@@ -272,6 +273,66 @@ function Decision({ card }: { card: CardData }) {
         {card.decided_at ? ` · ${timeLabel(card.decided_at)}` : ''}
       </span>
     </div>
+  );
+}
+
+/** The structured scope of an approval: what kind of action, who gets it, where it happens. Read-only. */
+function ApprovalMeta({ card }: { card: CardData }) {
+  const actionLabel: Record<string, string> = {
+    send_email: 'Send email',
+    send_message: 'Send message',
+    post: 'Post',
+    delete: 'Delete',
+    sign: 'Sign',
+    pay: 'Pay',
+    other: 'Other',
+  };
+  const show = card.action || card.destination || (card.recipients?.length ?? 0) > 0 || card.url;
+  if (!show && !card.scan_warning) return null;
+  return (
+    <>
+      {show ? (
+        <dl className="approval-meta">
+          {card.action && (
+            <div className="approval-meta-row">
+              <dt>Action</dt>
+              <dd>{actionLabel[card.action] ?? card.action}</dd>
+            </div>
+          )}
+          {!!card.recipients?.length && (
+            <div className="approval-meta-row">
+              <dt>To</dt>
+              <dd>
+                {card.recipients.map((r) => (
+                  <span key={r} className="recipient-chip">
+                    {r}
+                  </span>
+                ))}
+              </dd>
+            </div>
+          )}
+          {(card.destination || card.url) && (
+            <div className="approval-meta-row">
+              <dt>On</dt>
+              <dd>
+                {card.url ? (
+                  <a href={card.url} target="_blank" rel="noopener">
+                    {card.destination ?? card.url}
+                  </a>
+                ) : (
+                  card.destination
+                )}
+              </dd>
+            </div>
+          )}
+        </dl>
+      ) : null}
+      {card.scan_warning && (
+        <p className="card-error" role="alert">
+          {card.scan_warning}
+        </p>
+      )}
+    </>
   );
 }
 

@@ -14,6 +14,7 @@ import { type AttachmentRow, attachments, channels, db, devices, files, items, k
 import { UserError } from './errors';
 import { hermes } from './hermes';
 import { idempotencyKey, idempotentItem, limits, rememberIdempotent, type SlidingWindow } from './limits';
+import { HARD_BLOCKS } from './safety';
 import { presence } from './presence';
 import { hasSubscriptions, notify, publicKey, saveSubscription } from './push';
 import { abortActiveRuns, actOnCard, agentState, cancelTask, deliverableAction, deliverableApproval, executeTool, recoverOrphans, runBrief, runCheckin, startConnectorWatch, startHermesWatch, startUserTask, stopMain, stopPage, submitSystem, submitUser } from './runner';
@@ -146,6 +147,7 @@ const API_METHODS: [RegExp, string[]][] = [
   [/^\/api\/triggers$/, ['GET']],
   [/^\/api\/events$/, ['GET']],
   [/^\/api\/capabilities$/, ['GET']],
+  [/^\/api\/policy$/, ['GET']],
   [/^\/api\/browser\/(status|tabs|vaults)$/, ['GET']],
   [/^\/api\/browser\/(open|input|viewport|autofill)$/, ['POST']],
   [/^\/api\/messages$/, ['POST']],
@@ -360,6 +362,8 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
     }
     if (path === '/api/events' && req.method === 'GET') return sseResponse(req);
     if (path === '/api/capabilities' && req.method === 'GET') return json(await capabilities());
+    // The deterministic trust floor around approvals: what is always refused, even with an approval card.
+    if (path === '/api/policy' && req.method === 'GET') return json({ blocks: HARD_BLOCKS });
 
     // ---- live browser pane (see server/browser.ts) ----
     if (path === '/api/browser/ws' && req.method === 'GET') {

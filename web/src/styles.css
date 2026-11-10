@@ -1283,6 +1283,42 @@ code {
   overflow-wrap: anywhere;
 }
 
+/* Structured approval scope: what kind of action, who gets it, where it happens. */
+.approval-meta {
+  margin: 12px 0 0;
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+}
+.approval-meta-row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+.approval-meta dt {
+  flex: none;
+  width: 52px;
+  font: 600 11px var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--bronze);
+}
+.approval-meta dd {
+  margin: 0;
+  color: var(--paper);
+  overflow-wrap: anywhere;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.recipient-chip {
+  padding: 2px 8px;
+  border: 1.5px solid var(--line-2);
+  border-radius: 20px;
+  font-size: 12.5px;
+  background: rgba(0, 0, 0, 0.25);
+}
+
 .brief {
   list-style: none;
   margin: 12px 0 0;

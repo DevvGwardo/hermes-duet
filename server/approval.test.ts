@@ -172,3 +172,43 @@ test('the resume prompt carries the age warning when the card is old', () => {
   expect(fresh).not.toContain('still holds');
   expect(approvalPrompt(item(card({ draft: 'Hi' })), true, 'yesterday')).toContain('still holds');
 });
+
+test('the resume prompt pins the structured destination and recipients', () => {
+  const c = card({
+    title: 'Send the reply to Dana',
+    action: 'send_email',
+    destination: 'mail.google.com',
+    recipients: ['dana@example.com', 'sam@example.com'],
+    url: 'https://mail.google.com/x',
+    draft: 'Hi Dana',
+  });
+  const p = approvalPrompt(item(c), true);
+  expect(p).toContain('Destination: mail.google.com');
+  expect(p).toContain('To: dana@example.com, sam@example.com');
+  expect(p).toContain('Link: https://mail.google.com/x');
+  // No redraft: the agent sends the draft exactly as it was on the card.
+  expect(p).toContain('sending the draft exactly as it was on the card');
+});
+
+test('an edited draft keeps the scope before the verbatim text', () => {
+  const c = card({
+    title: 'Send the reply to Dana',
+    action: 'send_email',
+    destination: 'mail.google.com',
+    recipients: ['dana@example.com'],
+    draft: 'Hi Dana, 4pm works.',
+    edited: true,
+  });
+  const p = approvalPrompt(item(c), true);
+  expect(p).toContain('Destination: mail.google.com');
+  expect(p).toContain('To: dana@example.com');
+  expect(p).toContain('Send exactly the text below');
+  expect(p).toEndWith('\n\nHi Dana, 4pm works.');
+});
+
+test('a card without scope reads as it always did', () => {
+  const p = approvalPrompt(item(card({ title: 'Post the update', draft: 'Hi' })), true);
+  expect(p).not.toContain('Destination:');
+  expect(p).not.toContain('To:');
+  expect(approvalPrompt(item(card({ title: 'Nope' })), false)).not.toContain('Destination:');
+});
