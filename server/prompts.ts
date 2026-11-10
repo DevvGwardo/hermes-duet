@@ -81,6 +81,7 @@ export function briefPrompt(s: Settings, ctx: { pending: Item[]; tasks: Task[]; 
 1. Gather: the context sources listed in your standing instructions; email, calendar and messages if you have tools for them; the Hermes Duet state below.
 2. Pick the decisions that actually need the user today: at most 5, ranked by priority. Be specific (names, amounts, deadlines). Where a next step is obvious, prepare it and put it in the entry's draft (the full reply, the plan), but don't send anything.
 3. Everything else worth knowing that needs no decision yet goes in watching, one line each. It's shown muted and never notifies, so don't pad the decisions with it.${pageStep}
+  Every number or summary in an entry needs its provenance in that entry's sources: real item, task, file or page ids from the state below, or an absolute http(s) URL. Never invent an id.
 4. Call post_brief once. Title it like "Good morning. N things need you today.", counting decisions only. Give entries one-tap actions where useful (action_message is what tapping sends you). An entry with a draft gets a button that hands the draft back to you as is; when that arrives, use it as drafted, through request_approval if it goes out. If nothing needs a decision today, still call it, with no entries and your watching list ("Good morning. Nothing needs you today."); it posts without notifying. Only if there is nothing to decide and nothing worth watching, skip post_brief.
 5. Then reply with one short line, nothing more. Without a post_brief card that line is all the user sees, in the thread and without a notification, so make it say there was nothing today.
 
@@ -103,7 +104,7 @@ export function checkinPrompt(s: Settings, ctx: { since: string; pending: Item[]
 
 Your text reply is never shown to the user. The only way to reach them is post_brief.
 If nothing needs them, reply with exactly NOOP and nothing else. Don't call any Hermes Duet tools.
-If something does, call post_brief with just those decisions (at least one; title like "Heads up: 2 things"; put any draft you prepared in the entry's draft), then reply with one short line. Something that only needs watching is not a reason to check in.
+If something does, call post_brief with just those decisions (at least one; title like "Heads up: 2 things"; put any draft you prepared in the entry's draft), then reply with one short line. Every number or summary needs its provenance in sources (a real id from below or an absolute http(s) URL; never invent one). Something that only needs watching is not a reason to check in.
 
 Already waiting on the user (don't repeat these):
 ${pendingLines(ctx.pending)}${raised}${watched}
@@ -126,7 +127,7 @@ ${retry}
 Work through this end to end in the background, in this one run. Do all research and subagent work inline — never call delegate_task: top-level delegations always run in the background, their results only arrive after your turn has ended, and that ends the task early with the work half done.
 Keep the user's Tasks tab current with update_task (task_id="${task.id}"): set a progress line as you go, and mark steps done. Deliver files with deliver_file. If you hit something that needs approval or a decision, use request_approval / ask with task_id="${task.id}" and end your turn; you'll be resumed with the answer.
 Your text replies are not shown to the user. When you finish, they get one handover card built from update_task: the result, the files you delivered, and your follow-ups.
-So when finished, call update_task with status "done" (or "failed"), a one or two line result, and, where there are obvious next steps, up to three follow_ups (e.g. label "Draft the email", message "Draft an email to the board sharing the Q3 deck"). Then end your turn with one short line.`;
+So when finished, call update_task with status "done" (or "failed"), a one or two line result, and, where there are obvious next steps, up to three follow_ups (e.g. label "Draft the email", message "Draft an email to the board sharing the Q3 deck"). Every number or summary in the result needs its provenance in sources: real item, task, file or page ids, or an absolute http(s) URL. Never invent an id. Then end your turn with one short line.`;
 }
 
 /** The instructions a standing page's daily refresh task starts with (kept on the task, so "Try again" reuses them). */

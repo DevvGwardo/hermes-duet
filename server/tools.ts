@@ -2,6 +2,20 @@
 
 const taskId = { type: 'string', description: 'The Hermes Duet task id this belongs to, if you are working on a task (it appears in your instructions as "Hermes Duet task <id>"). If a call is refused because several turns are running at once, pass "main" when you are the main conversation.' };
 const PAGE_ID_DESC = 'Optional. When this line is about a standing page (the brief prompt lists them as "page <id>"), its id; tapping the line then opens the page.';
+const SOURCES_DESC =
+  'Cite where every number or claim came from: one entry per source, at most 6. Use real ids from items, tasks, pages or files (never invent one), or an absolute http(s) URL.';
+const sourceSchema = {
+  type: 'object',
+  properties: {
+    kind: { type: 'string', enum: ['item', 'task', 'file', 'page', 'url', 'connector', 'other'] },
+    id: { type: 'string', description: 'The item, task, file or page id this came from. Required for item/task/file/page; never invent one.' },
+    url: { type: 'string', description: 'Absolute http(s) URL. Required for url sources.' },
+    label: { type: 'string', description: 'What to show on the chip, e.g. "Dana\'s email, 9:12 AM".' },
+    quote: { type: 'string', description: 'Short verbatim excerpt backing the claim (at most 300 characters).' },
+  },
+  required: ['kind', 'label'],
+};
+const sourcesField = { type: 'array', description: SOURCES_DESC, items: sourceSchema, maxItems: 6 };
 
 export const TOOLS = [
   {
@@ -128,6 +142,7 @@ export const TOOLS = [
                   'The entry then gets a button (action_label, default "Send as drafted") that hands this exact draft back to you to go ahead with; for anything outward-facing you then call request_approval with it.',
               },
               page_id: { type: 'string', description: PAGE_ID_DESC },
+              sources: sourcesField,
             },
             required: ['title'],
           },
@@ -137,7 +152,7 @@ export const TOOLS = [
           description: 'Optional. Things you are tracking that need no decision yet, e.g. "Package arrives Thursday". Muted, never notifies.',
           items: {
             type: 'object',
-            properties: { title: { type: 'string' }, detail: { type: 'string' }, page_id: { type: 'string', description: PAGE_ID_DESC } },
+            properties: { title: { type: 'string' }, detail: { type: 'string' }, page_id: { type: 'string', description: PAGE_ID_DESC }, sources: sourcesField },
             required: ['title'],
           },
         },
@@ -149,6 +164,7 @@ export const TOOLS = [
     name: 'post_card',
     description:
       'Show structured progress or results as a card in the thread. type "checklist" for multi-step plans (pass all items with done flags), "metrics" for a small dashboard of numbers, "note" for anything else. ' +
+      'Cite where every number or claim came from in sources. ' +
       'Pass card_id from a previous call to update that card in place instead of posting a new one (do this as checklist items get done).',
     inputSchema: {
       type: 'object',
@@ -171,6 +187,7 @@ export const TOOLS = [
           },
         },
         card_id: { type: 'string', description: 'Update this existing card instead of creating one.' },
+        sources: sourcesField,
         task_id: taskId,
       },
       required: ['type', 'title'],
@@ -233,7 +250,8 @@ export const TOOLS = [
   },
   {
     name: 'update_task',
-    description: 'Update a Hermes Duet task\'s progress line, steps or status so the user can see where it stands.',
+    description:
+      'Update a Hermes Duet task\'s progress line, steps or status so the user can see where it stands. When the result states numbers or claims, cite where each came from in sources (real ids or an http(s) URL).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -242,6 +260,7 @@ export const TOOLS = [
         steps: { type: 'array', items: { type: 'object', properties: { text: { type: 'string' }, done: { type: 'boolean' } }, required: ['text'] } },
         status: { type: 'string', enum: ['running', 'waiting', 'done', 'failed'] },
         result: { type: 'string', description: 'Final outcome, when done or failed (for failed, the reason). One or two lines; it is the body of the handover card.' },
+        sources: sourcesField,
         changed: {
           type: 'string',
           description: 'Standing page refreshes only: one line on the single most important thing that changed since the previous version ("No change since yesterday" if nothing did).',

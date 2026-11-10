@@ -1405,6 +1405,41 @@ code {
   margin: 0 0 0 8px;
 }
 
+/* Provenance chips: muted metadata, not calls to action. file/page/url chips
+   open or link out; item/task/connector labels just sit there. */
+.sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.sources .chip {
+  margin-top: 0;
+}
+.chip.source {
+  background: transparent;
+  border-color: var(--line-2);
+  border-style: dashed;
+  color: var(--dim);
+  box-shadow: none;
+  text-decoration: none;
+  font-weight: 500;
+}
+a.chip.source {
+  display: inline-block;
+}
+.chip.source:not(.is-label):hover {
+  border-color: var(--gold);
+  color: var(--gold);
+  background: rgba(255, 215, 0, 0.06);
+}
+.chip.source.is-label {
+  cursor: default;
+}
+.watching .sources {
+  margin-top: 4px;
+}
+
 .checklist ul,
 .task-steps {
   list-style: none;

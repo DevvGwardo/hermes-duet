@@ -250,6 +250,47 @@ describe('check-ins see what today\'s briefs already raised', () => {
   });
 });
 
+describe('a brief entry keeps its sources through posting', () => {
+  const lookup = () => true;
+
+  test('entries and watching lines carry their citations', () => {
+    const out = briefCard(
+      {
+        entries: [
+          { title: 'Reply to Dana', sources: [{ kind: 'url', url: 'https://example.com/lease', label: "Dana's email" }] },
+        ],
+        watching: [{ title: 'Package Thursday', sources: [{ kind: 'other', label: 'Carrier text' }] }],
+      },
+      { lookup },
+    );
+    expect(out.entries[0].sources).toEqual([{ kind: 'url', url: 'https://example.com/lease', label: "Dana's email" }]);
+    expect(out.watching[0].sources).toEqual([{ kind: 'other', label: 'Carrier text' }]);
+  });
+
+  test('a demoted entry takes its citations into Watching instead of dropping them', () => {
+    const out = briefCard(
+      {
+        entries: [
+          ...Array.from({ length: 5 }, (_, i) => ({ title: `h${i}`, priority: 'high' })),
+          { title: 'low', priority: 'low', sources: [{ kind: 'other', label: 'A call' }] },
+        ],
+      },
+      { lookup },
+    );
+    expect(out.entries).toHaveLength(5);
+    expect(out.watching[0]).toEqual({ title: 'low', detail: undefined, file_id: undefined, sources: [{ kind: 'other', label: 'A call' }] });
+  });
+
+  test('an unknown local id fails the brief instead of posting a dead chip', () => {
+    expect(() =>
+      briefCard({ entries: [{ title: 'Reply to Dana', sources: [{ kind: 'file', id: 'gone', label: 'Deck' }] }] }, { lookup: () => false }),
+    ).toThrow(/sources\[0\].*no file with id "gone"/);
+    expect(() =>
+      briefCard({ watching: [{ title: 'Rent', sources: [{ kind: 'nota-kind', label: 'x' }] }] }, { lookup }),
+    ).toThrow(/unknown kind/);
+  });
+});
+
 describe('a skipped brief decision stays skipped', () => {
   const card: { entries: BriefEntry[] } = {
     entries: [

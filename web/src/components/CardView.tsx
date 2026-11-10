@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { askAge } from '../../../shared/age';
-import type { CardData, FollowUp, Item, PaymentItem, WatchEntry } from '../../../shared/types';
+import type { CardData, FollowUp, Item, PaymentItem, Source, WatchEntry } from '../../../shared/types';
 import { api } from '../api';
+import { isSafeSourceUrl } from '../sources';
 import { useStore } from '../store';
 import { Icon, Markdown, bytesLabel, fileIcon, timeLabel } from '../ui';
 
@@ -57,6 +58,7 @@ export function CardView({ item, onOpenFile }: { item: Item; onOpenFile: (id: st
       <h3 className="card-title">{card.title}</h3>
       {card.type === 'brief' && <ListenButton item={item} />}
       {card.body && <Markdown text={card.body} className="card-body" />}
+      {card.sources?.length ? <SourceChips sources={card.sources} onOpenFile={onOpenFile} /> : null}
 
       {card.type === 'brief' && card.entries?.length ? <BriefList id={item.id} card={card} onOpenFile={onOpenFile} /> : null}
       {card.type === 'brief' && card.watching?.length ? <Watching list={card.watching} onOpenFile={onOpenFile} /> : null}
@@ -361,6 +363,7 @@ function BriefList({ id, card, onOpenFile }: { id: string; card: CardData; onOpe
                 <div className="brief-title">{e.title}</div>
                 {e.detail && <div className="brief-detail">{e.detail}</div>}
                 {e.file_id && <PageLink fileId={e.file_id} onOpen={onOpenFile} />}
+                {e.sources?.length ? <SourceChips sources={e.sources} onOpenFile={onOpenFile} /> : null}
                 {e.skipped_at ? (
                   <div className="brief-skipped">
                     Skipped · won’t come back unless it changes
@@ -414,6 +417,7 @@ function Watching({ list, onOpenFile }: { list: WatchEntry[]; onOpenFile: (id: s
             <span className="watching-title">{w.title}</span>
             {w.detail && <span className="watching-detail"> · {w.detail}</span>}
             {w.file_id && <PageLink fileId={w.file_id} onOpen={onOpenFile} />}
+            {w.sources?.length ? <SourceChips sources={w.sources} onOpenFile={onOpenFile} /> : null}
           </li>
         ))}
       </ul>
@@ -429,6 +433,58 @@ function PageLink({ fileId, onOpen }: { fileId: string; onOpen: (id: string) => 
     <button className="link page-link" onClick={() => onOpen(file.id)} aria-label={`Open ${file.title}`}>
       Open page
     </button>
+  );
+}
+
+/**
+ * Provenance chips for an entry, a watching line or a whole card. file/page
+ * chips open through the existing file viewer (a page resolves to the version
+ * the brief was written about); url chips are plain external links; anything
+ * else is a readable label with the excerpt, if any, on hover.
+ */
+function SourceChips({ sources, onOpenFile }: { sources: Source[]; onOpenFile: (id: string) => void }) {
+  const pages = useStore((s) => s.pages);
+  if (!sources.length) return null;
+  return (
+    <div className="sources" aria-label="Sources">
+      {sources.map((s, i) => {
+        const hint = s.quote ?? s.label;
+        if (s.kind === 'file' && s.id) {
+          return (
+            <button key={i} className="chip source" title={hint} onClick={() => onOpenFile(s.id!)} aria-label={`Open source ${s.label}`}>
+              {s.label}
+            </button>
+          );
+        }
+        if (s.kind === 'page' && s.id) {
+          const fileId = pages.find((p) => p.id === s.id)?.file_id;
+          if (!fileId) {
+            return (
+              <span key={i} className="chip source is-label" title={hint}>
+                {s.label}
+              </span>
+            );
+          }
+          return (
+            <button key={i} className="chip source" title={hint} onClick={() => onOpenFile(fileId)} aria-label={`Open source ${s.label}`}>
+              {s.label}
+            </button>
+          );
+        }
+        if (s.kind === 'url' && isSafeSourceUrl(s.url)) {
+          return (
+            <a key={i} className="chip source" href={s.url} target="_blank" rel="noreferrer noopener" title={hint}>
+              {s.label}
+            </a>
+          );
+        }
+        return (
+          <span key={i} className="chip source is-label" title={hint}>
+            {s.label}
+          </span>
+        );
+      })}
+    </div>
   );
 }
 

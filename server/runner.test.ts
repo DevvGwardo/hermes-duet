@@ -506,3 +506,59 @@ test("scheduled briefs are never deduped by the manual window", () => {
   // runBrief with scheduled source must not consult the manual dedupe clock.
   __resetBriefDedupe();
 });
+
+// Structured citations: valid sources ride on the entry or the task, and an
+// unknown local id fails the tool call instead of posting a chip that opens nothing.
+test('brief entries keep their sources through posting', async () => {
+  const src = items.save({
+    id: newId(),
+    kind: 'user',
+    text: 'Dana wrote about the lease',
+    channel_id: GENERAL_CHANNEL,
+    created_at: Date.now(),
+    updated_at: Date.now(),
+  });
+  await executeTool('post_brief', {
+    title: 'Heads up: 1 thing',
+    entries: [{ title: 'Cite the lease reply', sources: [{ kind: 'item', id: src.id, label: "Dana's email" }] }],
+  });
+  const card = items.latest(50).items.find((i) => i.card?.type === 'brief' && i.card.entries?.some((e) => e.title === 'Cite the lease reply'));
+  expect(card?.card?.entries?.[0]?.sources).toEqual([{ kind: 'item', id: src.id, label: "Dana's email" }]);
+});
+
+test('a brief entry naming an unknown id fails the tool call and posts nothing', async () => {
+  const err = await executeTool('post_brief', {
+    title: 'Heads up: 1 thing',
+    entries: [{ title: 'Cite nothing at all', sources: [{ kind: 'file', id: 'no-such-file', label: 'Deck' }] }],
+  }).catch((e) => e);
+  expect(err).toBeInstanceOf(Error);
+  expect(err.message).toContain('no file with id');
+  expect(items.latest(50).items.some((i) => i.card?.entries?.some((e) => e.title === 'Cite nothing at all'))).toBe(false);
+});
+
+test('a task result keeps its sources, and an unknown id fails the call', async () => {
+  const t: Task = {
+    id: newId(),
+    title: 'Cite work',
+    status: 'running',
+    steps: [],
+    created_at: Date.now(),
+    updated_at: Date.now(),
+    background: true,
+  };
+  tasks.save(t, 'sess-cite-test');
+  await executeTool('update_task', {
+    task_id: t.id,
+    result: 'Rent moved to Friday',
+    sources: [{ kind: 'url', url: 'https://example.com/rent', label: 'Ledger' }],
+  });
+  expect(tasks.get(t.id)!.sources).toEqual([{ kind: 'url', url: 'https://example.com/rent', label: 'Ledger' }]);
+  const err = await executeTool('update_task', {
+    task_id: t.id,
+    sources: [{ kind: 'page', id: 'no-such-page', label: 'Dashboard' }],
+  }).catch((e) => e);
+  expect(err).toBeInstanceOf(Error);
+  expect(err.message).toContain('no page with id');
+  // The failed call leaves the earlier citations alone.
+  expect(tasks.get(t.id)!.sources).toEqual([{ kind: 'url', url: 'https://example.com/rent', label: 'Ledger' }]);
+});
