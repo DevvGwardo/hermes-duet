@@ -52,6 +52,34 @@ test('reusing an archived channel without a topic keeps the one it had', () => {
   expect(channels.create({ name: 'hc-arch2' }).topic).toBe('kept');
 });
 
+test('instructions and group round-trip through create, read and update', () => {
+  const created = channels.create({ name: 'hc-rules', topic: 't', instructions: 'Be terse.', group: 'Work' });
+  expect(created.instructions).toBe('Be terse.');
+  expect(created.group).toBe('Work');
+  expect(channels.get(created.id)).toMatchObject({ instructions: 'Be terse.', group: 'Work' });
+  // The list query carries them too, so the strip can group without a second fetch.
+  expect(channels.all().find((c) => c.id === created.id)).toMatchObject({ instructions: 'Be terse.', group: 'Work' });
+
+  const updated = channels.update(created.id, { instructions: 'Be verbose.', group: null });
+  expect(updated).toMatchObject({ instructions: 'Be verbose.', group: null, topic: 't' });
+
+  // Absent keys leave the row alone; a null clears it back to nothing.
+  expect(channels.update(created.id, {})?.instructions).toBe('Be verbose.');
+  expect(channels.update(created.id, { instructions: null })?.instructions).toBeNull();
+});
+
+test('a channel created before instructions and groups still reads back fine', () => {
+  const created = channels.create({ name: 'hc-plain', topic: 'old style' });
+  const row = channels.get(created.id)!;
+  expect(row.topic).toBe('old style');
+  expect(row.instructions ?? null).toBe(null);
+  expect(row.group ?? null).toBe(null);
+});
+
+test('updating an unknown channel is a miss, not a throw', () => {
+  expect(channels.update('chan-no-such', { topic: 'x' })).toBe(null);
+});
+
 // The search index is a second copy of a file's title, so every write has to move both. A rename that reached the
 // row but not the index keeps the old title findable; an update for a file that isn't there puts a hit in search
 // that opens a 404 in Make. Both are one unit of work, not two.

@@ -16,7 +16,8 @@ function columns(db: Database, table: string): Set<string> {
  */
 function addColumn(db: Database, table: string, name: string, decl: string) {
   if (columns(db, table).has(name)) return;
-  db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${decl}`);
+  // The name is always quoted: `group` is a reserved word, and quoting a plain name like channel_id is harmless.
+  db.exec(`ALTER TABLE ${table} ADD COLUMN "${name}" ${decl}`);
 }
 
 /**
@@ -72,6 +73,10 @@ CREATE INDEX IF NOT EXISTS channels_session ON channels(session_id);
 `);
   addColumn(db, 'items', 'channel_id', `TEXT DEFAULT '${GENERAL_CHANNEL}'`);
   db.exec(`CREATE INDEX IF NOT EXISTS items_channel ON items(channel_id, created_at)`);
+  // Standing instructions and the strip group, added after seen_at the same way: old checkouts gain the columns
+  // on boot, existing rows read back as NULL, and nothing stored is touched.
+  addColumn(db, 'channels', 'instructions', 'TEXT');
+  addColumn(db, 'channels', 'group', 'TEXT');
   // Pending cards are read on every snapshot build, every badge count and every steer. An expression index on the
   // JSON path (partial to kind='card') turns that from a scan of the whole thread into a range read.
   db.exec(`CREATE INDEX IF NOT EXISTS items_card_status ON items(json_extract(json, '$.card.status'), created_at) WHERE kind = 'card'`);

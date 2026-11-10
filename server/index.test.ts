@@ -2,7 +2,7 @@
 // needed beyond a paired cookie.
 import { describe, expect, test } from 'bun:test';
 import { createPairCode, deviceCookie, internalToken, redeemPairCode } from './auth';
-import { attachments, items, kv, newId, tasks } from './db';
+import { attachments, channels, items, kv, newId, pages, tasks } from './db';
 import { UserError } from './errors';
 import { hermes } from './hermes';
 import { GENERAL_CHANNEL } from './schema';
@@ -67,6 +67,35 @@ describe('paired routes', () => {
     expect(res.status).toBe(400);
     const body = (await res.json()) as any;
     expect(body.error).toContain('letter or number');
+  });
+
+  test('creating a channel persists instructions and group', async () => {
+    const res = await authed('/api/channels', jsonPost({ name: `rules-${newId().slice(-6)}`, topic: 't', instructions: 'Be terse.', group: 'Work' }));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any;
+    expect(body.channel.instructions).toBe('Be terse.');
+    expect(body.channel.group).toBe('Work');
+  });
+
+  test('posting an id updates the channel, and empty clears a field', async () => {
+    const created = (await (await authed('/api/channels', jsonPost({ name: `edit-${newId().slice(-6)}`, instructions: 'Old.', group: 'Home' }))).json()) as any;
+    const res = await authed('/api/channels', jsonPost({ id: created.channel.id, instructions: 'New.', group: '' }));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any;
+    expect(body.channel.instructions).toBe('New.');
+    expect(body.channel.group).toBe(null);
+  });
+
+  test('updating a channel that is not there is a 404', async () => {
+    const res = await authed('/api/channels', jsonPost({ id: 'chan-no-such', topic: 'x' }));
+    expect(res.status).toBe(404);
+  });
+
+  test('marking a channel seen records it, and a missing one is a 404', async () => {
+    const created = (await (await authed('/api/channels', jsonPost({ name: `seen-${newId().slice(-6)}` }))).json()) as any;
+    expect((await authed(`/api/channels/${created.channel.id}/seen`, { method: 'POST' })).status).toBe(200);
+    expect(channels.get(created.channel.id)?.seen_at).toBeGreaterThan(0);
+    expect((await authed('/api/channels/chan-no-such/seen', { method: 'POST' })).status).toBe(404);
   });
 
   test('a background task carries its attachment into the thread and the prompt', async () => {

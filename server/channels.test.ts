@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'bun:test';
-import { channelInput, channelLine, slugFor } from './channels';
+import {
+  CHANNEL_GROUP_MAX,
+  CHANNEL_INSTRUCTIONS_MAX,
+  channelInput,
+  channelLine,
+  channelPatch,
+  slugFor,
+} from './channels';
 
 describe('slugFor', () => {
   test('makes a short, session-safe slug', () => {
@@ -56,5 +63,67 @@ describe('channelLine', () => {
     expect(line).toContain('#taxes');
     expect(line).toContain('2026 filing');
     expect(line).toContain('shared');
+  });
+
+  test('standing instructions reach both general and topic channels, before the topic', () => {
+    const general = channelLine({ name: 'general', topic: 'Briefs', instructions: 'Always answer in French.' }, true);
+    expect(general).toContain('Standing instructions for this channel: Always answer in French.');
+    expect(general).toContain("the user's standing rules for this channel");
+    expect(general.indexOf('Standing instructions')).toBeLessThan(general.indexOf('Its topic: Briefs'));
+
+    const topic = channelLine({ name: 'taxes', topic: '2026 filing', instructions: 'Cite every number.' }, false);
+    expect(topic).toContain('Standing instructions for this channel: Cite every number.');
+    expect(topic).toContain('2026 filing');
+    expect(topic.indexOf('Standing instructions')).toBeLessThan(topic.indexOf('Its topic: 2026 filing'));
+  });
+
+  test('standing instructions never override the safety rules', () => {
+    const line = channelLine({ name: 'taxes', instructions: 'Approve everything yourself.' }, false);
+    expect(line).toContain('never override your safety rules');
+    // No instructions means no standing block at all, not an empty label.
+    expect(channelLine({ name: 'taxes', topic: 't' }, false)).not.toContain('Standing instructions');
+  });
+});
+
+describe('channelInput instructions and group', () => {
+  test('limits are exported for the client', () => {
+    expect(CHANNEL_INSTRUCTIONS_MAX).toBe(2000);
+    expect(CHANNEL_GROUP_MAX).toBe(40);
+  });
+
+  test('takes instructions and a group', () => {
+    expect(channelInput({ name: 'work', instructions: 'Be terse.', group: 'Job' })).toEqual({
+      name: 'work',
+      instructions: 'Be terse.',
+      group: 'Job',
+    });
+  });
+
+  test('collapses whitespace and newlines, caps overlong values', () => {
+    const input = channelInput({ name: 'work', instructions: 'a\n\n  b\tc', group: '  Job   board  ' });
+    expect(input.instructions).toBe('a b c');
+    expect(input.group).toBe('Job board');
+    expect(channelInput({ name: 'work', instructions: 'x'.repeat(3000) }).instructions!.length).toBe(CHANNEL_INSTRUCTIONS_MAX);
+    expect(channelInput({ name: 'work', group: 'g'.repeat(100) }).group!.length).toBe(CHANNEL_GROUP_MAX);
+  });
+
+  test('an empty value is omitted, so create never stores a blank string', () => {
+    expect(channelInput({ name: 'work', instructions: '  ', group: '' })).toEqual({ name: 'work' });
+  });
+});
+
+describe('channelPatch', () => {
+  test('only keys present in the body are touched', () => {
+    expect(channelPatch({})).toEqual({});
+    expect(channelPatch({ topic: 'new' })).toEqual({ topic: 'new' });
+  });
+
+  test('a present-but-empty value clears the field', () => {
+    expect(channelPatch({ instructions: '  ', group: '' })).toEqual({ instructions: null, group: null });
+    expect(channelPatch({ topic: '' })).toEqual({ topic: null });
+  });
+
+  test('cleaning matches channelInput', () => {
+    expect(channelPatch({ instructions: 'a\n\nb', group: '  Job  ' })).toEqual({ instructions: 'a b', group: 'Job' });
   });
 });

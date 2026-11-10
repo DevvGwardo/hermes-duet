@@ -4,7 +4,7 @@ import { brotliCompressSync, gzipSync } from 'node:zlib';
 import type { Snapshot } from '../shared/types';
 import { briefSpeech, speak, transcribeFile } from './audio';
 import { capabilities } from './capabilities';
-import { channelInput } from './channels';
+import { channelInput, channelPatch } from './channels';
 import { encodedPath, encodingHeaders, preferredEncoding } from './compress';
 import { createPairCode, deviceCookie, deviceFor, internalToken, isHttps, pairBlocked, redeemPairCode, sameOrigin } from './auth';
 import { listConnectors, testConnector } from './connectors';
@@ -311,7 +311,16 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
     // ---- topic channels (see server/channels.ts) ----
     if (path === '/api/channels' && req.method === 'GET') return json({ channels: channels.all() });
     if (path === '/api/channels' && req.method === 'POST') {
-      const channel = channels.create(channelInput(await body(req)));
+      const rawBody = await body(req);
+      // An `id` of a channel that is still open edits it (the sheet's save path); anything else creates.
+      if (typeof (rawBody as any)?.id === 'string' && (rawBody as any).id) {
+        const existing = channels.get((rawBody as any).id);
+        if (!existing) return err(404, 'no such channel');
+        const channel = channels.update(existing.id, channelPatch(rawBody));
+        broadcast({ type: 'channel', channel: channel! });
+        return json({ channel });
+      }
+      const channel = channels.create(channelInput(rawBody));
       broadcast({ type: 'channel', channel });
       return json({ channel });
     }

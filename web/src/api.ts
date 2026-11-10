@@ -85,7 +85,10 @@ export const api = {
   autofill: (provider?: string) => call<{ host: string; vault: string; filled: { user: boolean; pass: boolean } }>('POST', '/api/browser/autofill', { provider }),
   viewport: (mode: 'mobile' | 'desktop') => call<{ mode: string }>('POST', '/api/browser/viewport', { mode }),
   channels: () => call<{ channels: Channel[] }>('GET', '/api/channels'),
-  createChannel: (name: string, topic?: string) => call<{ channel: Channel }>('POST', '/api/channels', { name, topic }),
+  createChannel: (name: string, topic?: string, extra?: { instructions?: string; group?: string }) =>
+    call<{ channel: Channel }>('POST', '/api/channels', { name, topic, ...extra }),
+  updateChannel: (id: string, patch: { topic?: string; instructions?: string; group?: string }) =>
+    call<{ channel: Channel }>('POST', '/api/channels', { id, ...patch }),
   archiveChannel: (id: string) => call<{ ok: true }>('DELETE', `/api/channels/${encodeURIComponent(id)}`),
   channelPage: (id: string) => call<{ items: Item[]; has_more: boolean }>('GET', `/api/channels/${encodeURIComponent(id)}/items`),
   seenChannel: (id: string) => call<{ ok: true }>('POST', `/api/channels/${encodeURIComponent(id)}/seen`),
@@ -98,6 +101,8 @@ export const api = {
  */
 export async function openChannel(id: string) {
   setChannel(id);
+  // The dot clears the moment the channel opens; the server call persists seen_at for the next snapshot.
+  setState((s) => ({ channels: s.channels.map((c) => (c.id === id ? { ...c, seen_at: Date.now() } : c)) }));
   api.seenChannel(id).catch(() => {});
   // Ask the same question the thread answers: does this channel have loaded items? Rows from before topic channels
   // carry no `channel_id`, and `channelItems` already resolves those to general. Falling back to the id being opened

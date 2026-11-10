@@ -2917,6 +2917,69 @@ li.done .tick {
 .channel-form .btn {
   height: 38px;
 }
+/* A gold dot on a strip pill or sheet row: the channel has messages newer than the last open. */
+.unread-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  display: inline-block;
+  border-radius: 50%;
+  background: var(--gold);
+  box-shadow: 0 0 0 2px rgba(255, 215, 0, 0.2);
+}
+.row-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+/* Group headings only render when at least one channel is grouped. */
+.channel-group-head {
+  margin: 12px 0 2px;
+  font: 600 11px var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+/* The sheet row stacks the inline editor under the row itself. */
+.channel-row {
+  display: block;
+}
+.channel-row-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.channel-row-actions {
+  flex: none;
+  display: flex;
+  gap: 2px;
+}
+.channel-form textarea {
+  flex: 1 1 100%;
+  min-height: 64px;
+  background: #0d0d0d;
+  border: 1.5px solid var(--line-2);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 16px; /* >=16px stops iOS zoom-on-focus */
+  color: var(--paper);
+  resize: vertical;
+}
+.channel-form textarea:focus {
+  outline: 0;
+  border-color: var(--gold);
+}
+.channel-edit {
+  margin: 0 0 10px;
+  padding: 10px;
+  border: 1.5px solid var(--line-2);
+  border-radius: 8px;
+  background: #0d0d0d;
+}
+.channel-edit-btns {
+  display: flex;
+  gap: 8px;
+}
 
 /* ---------------------------------------------------------------- search */
 .search-sheet {
