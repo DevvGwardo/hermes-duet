@@ -73,6 +73,8 @@ export const api = {
   subscribe: (sub: PushSubscriptionJSON) => call<{ ok: true }>('POST', '/api/push/subscribe', sub),
   testPush: () => call<{ sent: number }>('POST', '/api/push/test'),
   capabilities: () => call<Capabilities>('GET', '/api/capabilities'),
+  /** The hard-block policy: what approvals can never authorize. Absent on old servers; callers must tolerate that. */
+  policy: () => call<{ blocks: { id: string; title: string; detail: string }[] }>('GET', '/api/policy'),
   connectors: () => call<{ connectors: Connector[] }>('GET', '/api/connectors'),
   testConnector: (id: string) => call<{ connector: Connector }>('POST', `/api/connectors/${encodeURIComponent(id)}/test`),
   /** A button inside a delivered dashboard: becomes a turn in the general channel. */

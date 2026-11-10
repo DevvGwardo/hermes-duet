@@ -157,10 +157,20 @@ export function approvalPrompt(card: Item, approved: boolean, age?: string | nul
   if (!approved) {
     return `[approval ${card.id}] NOT NOW: "${c.title}". The user declined for now. Don't do it. Acknowledge in one short line, and offer an alternative only if there's an obvious one.`;
   }
+  // The structured scope pins the approval down: the agent acts on exactly this destination and these
+  // recipients, not on lookalikes from its context. It rides before the draft so the verbatim text stays last.
+  const scope = [
+    c.destination ? `Destination: ${c.destination}` : '',
+    c.recipients?.length ? `To: ${c.recipients.join(', ')}` : '',
+    c.url ? `Link: ${c.url}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+  const scoped = scope ? `\n${scope}` : '';
   if (c.edited && c.draft) {
     // The note goes before the draft: everything after the blank line is the text to send.
-    return `[approval ${card.id}] APPROVED with edits: "${c.title}". The user edited your draft, then tapped ${tapped}. Send exactly the text below, not your original draft, and otherwise do what the card described. Then confirm in one short line.${oldAskNote(age, 'edited')}\n\n${c.draft}`;
+    return `[approval ${card.id}] APPROVED with edits: "${c.title}". The user edited your draft, then tapped ${tapped}. Send exactly the text below, not your original draft, and otherwise do what the card described. Then confirm in one short line.${oldAskNote(age, 'edited')}${scoped}\n\n${c.draft}`;
   }
   const asDrafted = c.draft ? ', sending the draft exactly as it was on the card' : '';
-  return `[approval ${card.id}] APPROVED: "${c.title}". The user tapped ${tapped}. Go ahead and do exactly what the card described${asDrafted}, then confirm in one short line.${oldAskNote(age, 'approval')}`;
+  return `[approval ${card.id}] APPROVED: "${c.title}". The user tapped ${tapped}. Go ahead and do exactly what the card described${asDrafted}, then confirm in one short line.${oldAskNote(age, 'approval')}${scoped}`;
 }

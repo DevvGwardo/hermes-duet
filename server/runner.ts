@@ -22,6 +22,7 @@ import { MOVED_ON, RESUME_OPTIONS, RETRY_OPTIONS, TIMED_OUT, failedTurnBody, mov
 import * as browser from './browser';
 import { cardExpired, issueCard, money, paymentCard, paymentDecision, paymentInput, paymentPrompt, providerFromEnv } from './payments';
 import { type Steer, undeliveredSteers } from './steer';
+import { approvalPolicyRefusal, scanOutbound, validateApprovalFields } from './safety';
 import { withAgentDone, withConfirmed, withReopened } from './taskstatus';
 import { userTaskInstructions, userTaskTitle } from './usertask';
 
@@ -1850,13 +1851,42 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
   switch (name) {
     case 'request_approval': {
       const swap = replacing(args.replaces, 'approval', o);
+      // Structured fields first: a malformed card never posts. Then the hard-block policy, then the
+      // outbound secret scan — both throw before anything is stored, so a blocked card never exists to be tapped.
+      const fields = validateApprovalFields(args);
+      const title = req(args.title, 'title', 140);
+      const summary = str(args.summary, 8000);
+      const draft = str(args.draft, DRAFT_MAX).trim() || undefined;
+      const refused = approvalPolicyRefusal({ action: fields.action, title, summary, destination: fields.destination, content: fields.content ?? draft });
+      if (refused) throw new Error(refused);
+      const findings = scanOutbound([draft ?? '', fields.content ?? '', summary].join('\n'));
+      const blocked = findings.filter((f) => f.tier === 'never_share');
+      if (blocked.length) {
+        const kinds = [...new Set(blocked.map((f) => f.label))].join(', ');
+        const hints = blocked.map((f) => `${f.label} (${f.redacted})`).join(', ');
+        throw new Error(
+          `Approval blocked: the text looks like it contains ${kinds}: ${hints}. Remove the secret and post again without it — never paste the full value.`,
+        );
+      }
+      const consent = findings.filter((f) => f.tier === 'needs_consent');
+      const scan_warning = consent.length
+        ? `Contains ${[...new Set(consent.map((f) => f.label))].join(', ')} — check it before sending.`
+        : undefined;
       const item = postCard(
         {
           type: 'approval',
-          title: req(args.title, 'title', 140),
-          body: str(args.summary, 8000),
-          draft: str(args.draft, DRAFT_MAX).trim() || undefined,
+          title,
+          body: summary,
+          draft,
           action_label: str(args.action_label, 30) || undefined,
+          // The auditable shape of what was approved: who gets what, where. When content is absent the
+          // draft is the outbound text, so it stands in rather than leaving the card ambiguous.
+          action: fields.action,
+          destination: fields.destination,
+          recipients: fields.recipients.length ? fields.recipients : undefined,
+          content: fields.content ?? draft,
+          url: fields.url,
+          scan_warning,
           status: 'pending',
         },
         o,
@@ -2006,9 +2036,17 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
     case 'notify': {
       const refused = notifyRefusal(o.run?.spec.kind);
       if (refused) return refused;
+      const noteBody = str(args.body, 300);
+      // A notification is outward-facing text too: secrets never leave through it either.
+      const secret = scanOutbound(noteBody).find((f) => f.tier === 'never_share');
+      if (secret) {
+        throw new Error(
+          `Notification blocked: the text looks like it contains ${secret.label} (${secret.redacted}). Remove the secret and post again without it — never paste the full value.`,
+        );
+      }
       // The push names a card, so tapping it lands on something, a dismissed banner isn't the only record, and
       // quiet hours hold it for "While you were away" instead of dropping it.
-      const item = postCard({ type: 'note', title: req(args.title, 'title', 80), body: str(args.body, 300) || undefined, status: 'info', alert: true }, o);
+      const item = postCard({ type: 'note', title: req(args.title, 'title', 80), body: noteBody || undefined, status: 'info', alert: true }, o);
       const sent = await notify({ title: item.card!.title, body: item.card!.body ?? '', card_id: item.id, tag: item.id, url: `/?card=${item.id}` });
       if (sent) return `Notification sent. It is also card ${item.id} in the thread.`;
       return inQuietHours(settings.get())

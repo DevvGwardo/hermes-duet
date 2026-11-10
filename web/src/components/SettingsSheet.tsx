@@ -17,6 +17,8 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
   const [connErr, setConnErr] = useState<string | null>(null);
   const [trig, setTrig] = useState<{ webhook_url: string; watch_dir: string | null; meeting_lead_minutes: number; triggers: { id: string; kind: string; last_triggered_at: number | null }[] } | null>(null);
   const [copied, setCopied] = useState(false);
+  // The hard-block policy is informational only; older servers don't serve it, so a failure just hides the section.
+  const [policy, setPolicy] = useState<{ id: string; title: string; detail: string }[] | null>(null);
   const dialog = useRef<HTMLDivElement | null>(null);
   useDialogTrap(dialog);
 
@@ -33,6 +35,7 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
       .then((r) => setConnectors(r.connectors))
       .catch((e) => setConnErr(e?.message ?? 'Could not check connectors.'));
     api.triggers().then(setTrig).catch(() => {});
+    api.policy().then((r) => setPolicy(r.blocks)).catch(() => {});
   }, []);
 
   if (!settings) return null;
@@ -207,6 +210,23 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
               <span className="muted">{settings.timezone}</span>
             </div>
           </section>
+
+          {policy && policy.length > 0 && (
+            <section>
+              <h3>Always refused</h3>
+              <p className="muted small">No approval card can authorize these. The agent is told to refuse them outright.</p>
+              <ul className="connector-list">
+                {policy.map((b) => (
+                  <li key={b.id} className="connector">
+                    <span className="connector-main">
+                      <span className="connector-name">{b.title}</span>
+                      <span className="connector-detail">{b.detail}</span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
 
           <section>
             <h3>What I can see</h3>

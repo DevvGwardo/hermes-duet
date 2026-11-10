@@ -212,6 +212,18 @@ describe('paired routes', () => {
     expect(body.code).toBe('not_found');
     expect(body.request_id).toBeTruthy();
   });
+
+  test('the hard-block policy lists every always-refused category', async () => {
+    const res = await authed('/api/policy');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any;
+    expect(Array.isArray(body.blocks)).toBe(true);
+    expect(body.blocks.map((b: any) => b.id)).toEqual(['bank-wire', 'securities-crypto', 'account-access', 'credential-change', 'account-creation']);
+    for (const b of body.blocks) {
+      expect(typeof b.title).toBe('string');
+      expect(typeof b.detail).toBe('string');
+    }
+  });
 });
 
 describe('error shaping', () => {

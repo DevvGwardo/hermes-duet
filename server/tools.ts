@@ -21,6 +21,27 @@ export const TOOLS = [
             'For messages, emails and posts: the exact text you will send, as plain text without headers. The user can edit it on the card; if they do, the APPROVED message contains their version and you must send that text exactly.',
         },
         action_label: { type: 'string', description: 'Primary button verb, e.g. "Send", "Pay $640", "Delete". Default "Approve".' },
+        action: {
+          type: 'string',
+          enum: ['send_email', 'send_message', 'post', 'delete', 'sign', 'pay', 'other'],
+          description:
+            'What kind of action this is. Send actions need destination plus at least one recipient. Default "other".',
+        },
+        destination: {
+          type: 'string',
+          description: 'Where it happens: a host ("mail.google.com"), an app, or a channel ("#general"). Required for send, post, delete and sign.',
+        },
+        recipients: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Exactly who receives it (names, addresses or handles). Required for send_email/send_message; shown as chips on the card.',
+        },
+        content: {
+          type: 'string',
+          description:
+            'The outbound text when it differs from draft (e.g. a rendered body alongside the plain-text draft). Draft stays the editable version; when content is absent, draft is used.',
+        },
+        url: { type: 'string', description: 'The page the action happens on, when there is one. Must be an http(s) URL.' },
         replaces: {
           type: 'string',
           description:
