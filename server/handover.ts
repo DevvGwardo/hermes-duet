@@ -39,6 +39,8 @@ export function handoverCard(task: Task, files: FileEntry[], prev?: CardData): C
         : undefined,
     failed: failed || undefined,
     retry: (failed && !!task.instructions) || undefined,
+    // The user's own completion, so the card can show the confirmed state without a second card.
+    confirmed_at: task.confirmed_at,
     status: 'info',
     task_id: task.id,
   };

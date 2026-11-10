@@ -61,6 +61,11 @@ export const api = {
     call<{ item: Item }>('POST', `/api/cards/${encodeURIComponent(cardId)}/act`, { action, value }),
   stop: () => call<{ ok: true }>('POST', '/api/runs/stop'),
   cancelTask: (id: string) => call<{ ok: true }>('POST', `/api/tasks/${encodeURIComponent(id)}/cancel`),
+  /** The user's own completion: the real one. The agent's done only ever "looks done". */
+  confirmTask: (id: string) => call<{ task: Task }>('POST', `/api/tasks/${encodeURIComponent(id)}/confirm`),
+  reopenTask: (id: string) => call<{ task: Task }>('POST', `/api/tasks/${encodeURIComponent(id)}/reopen`),
+  /** Steer a running task mid-flight. `delivered` is false when the text was queued behind the live run instead. */
+  messageTask: (id: string, text: string) => call<{ task: Task; delivered: boolean }>('POST', `/api/tasks/${encodeURIComponent(id)}/message`, { text }),
   stopPage: (id: string) => call<{ ok: true }>('DELETE', `/api/pages/${encodeURIComponent(id)}`),
   saveSettings: (s: Partial<Settings>) => call<{ settings: Settings }>('PUT', '/api/settings', s),
   runBrief: () => call<{ ok: true }>('POST', '/api/brief/run'),
