@@ -16,7 +16,7 @@ import { hermes } from './hermes';
 import { idempotencyKey, idempotentItem, limits, rememberIdempotent, type SlidingWindow } from './limits';
 import { presence } from './presence';
 import { hasSubscriptions, notify, publicKey, saveSubscription } from './push';
-import { abortActiveRuns, actOnCard, agentState, cancelTask, deliverableAction, deliverableApproval, executeTool, recoverOrphans, runBrief, runCheckin, startConnectorWatch, startHermesWatch, startUserTask, stopMain, stopPage, submitSystem, submitUser } from './runner';
+import { abortActiveRuns, actOnCard, agentState, cancelTask, confirmTask, deliverableAction, deliverableApproval, executeTool, recoverOrphans, reopenTask, runBrief, runCheckin, startConnectorWatch, startHermesWatch, startUserTask, steerTask, stopMain, stopPage, submitSystem, submitUser } from './runner';
 import { ftsQuery, search } from './search';
 import { startScheduler } from './scheduler';
 import { downloadsPrompt, inboundIp, meetingPrompt, webhookMatches, webhookPrompt, type WatchedFile } from './triggers';
@@ -151,6 +151,9 @@ const API_METHODS: [RegExp, string[]][] = [
   [/^\/api\/messages$/, ['POST']],
   [/^\/api\/tasks$/, ['POST']],
   [/^\/api\/tasks\/[\w-]+\/cancel$/, ['POST']],
+  [/^\/api\/tasks\/[\w-]+\/confirm$/, ['POST']],
+  [/^\/api\/tasks\/[\w-]+\/reopen$/, ['POST']],
+  [/^\/api\/tasks\/[\w-]+\/message$/, ['POST']],
   [/^\/api\/uploads$/, ['POST']],
   [/^\/api\/uploads\/[\w-]+$/, ['GET']],
   [/^\/api\/audio\/transcribe$/, ['POST']],
@@ -534,6 +537,25 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
     if (taskMatch && req.method === 'POST') {
       await cancelTask(taskMatch[1]);
       return json({ ok: true });
+    }
+    // The user's own completion is the real one; the agent's done only ever "looks done".
+    const taskConfirm = path.match(/^\/api\/tasks\/([\w-]+)\/(confirm|reopen)$/);
+    if (taskConfirm && req.method === 'POST') {
+      const task = taskConfirm[2] === 'confirm' ? confirmTask(taskConfirm[1]) : reopenTask(taskConfirm[1]);
+      return json({ task });
+    }
+    // Steering a running task mid-flight: the same budget as a chat message, the same cap, and a 409 — not a
+    // silent queue — when the task has no live run to steer.
+    const taskMessage = path.match(/^\/api\/tasks\/([\w-]+)\/message$/);
+    if (taskMessage && req.method === 'POST') {
+      const limited = tooMany(limits.messages, device, 'messages');
+      if (limited) return limited;
+      const { text } = await body<{ text?: string }>(req);
+      const t = String(text ?? '');
+      if (!t.trim()) return err(400, 'empty message');
+      if (t.length > MAX_MESSAGE) return err(400, 'message too long');
+      const { delivered } = await steerTask(taskMessage[1], t);
+      return json({ task: tasks.get(taskMessage[1]), delivered });
     }
     const pageMatch = path.match(/^\/api\/pages\/([\w-]+)$/);
     if (pageMatch && req.method === 'DELETE') {

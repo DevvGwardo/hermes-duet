@@ -86,6 +86,19 @@ export function CardView({ item, onOpenFile }: { item: Item; onOpenFile: (id: st
             </div>
           )}
           {card.failed && card.decision && <Decision card={card} />}
+          {!card.failed &&
+            (card.confirmed_at ? (
+              <div className="decision decision-answered">
+                <Icon.check size={16} />
+                <span>Confirmed by you · {timeLabel(card.confirmed_at)}</span>
+              </div>
+            ) : (
+              <div className="follow-ups">
+                <button className="chip" disabled={!!busy} onClick={() => act('complete')}>
+                  {busy === 'complete' ? 'Marking…' : 'Mark done'}
+                </button>
+              </div>
+            ))}
         </>
       )}
 

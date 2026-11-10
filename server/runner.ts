@@ -11,6 +11,7 @@ import { inQuietHours, localParts } from './clock';
 import { config } from './config';
 import { connectorBrief, listConnectors } from './connectors';
 import { channels, files, items, kv, newId, pages, runs, settings, tasks, tx } from './db';
+import { UserError } from './errors';
 import { GENERAL_CHANNEL } from './schema';
 import { followUps, handoverCard, useFollowUp } from './handover';
 import { HermesError, hermes, type RunEvent } from './hermes';
@@ -21,6 +22,7 @@ import { MOVED_ON, RESUME_OPTIONS, RETRY_OPTIONS, TIMED_OUT, failedTurnBody, mov
 import * as browser from './browser';
 import { cardExpired, issueCard, money, paymentCard, paymentDecision, paymentInput, paymentPrompt, providerFromEnv } from './payments';
 import { type Steer, undeliveredSteers } from './steer';
+import { withAgentDone, withConfirmed, withReopened } from './taskstatus';
 import { userTaskInstructions, userTaskTitle } from './usertask';
 
 // ---------------------------------------------------------------------------
@@ -791,7 +793,7 @@ function finishBody(l: Lane, run: ActiveRun, status: 'done' | 'error' | 'stopped
     if (t && t.status === 'running') {
       const outcome: Task['status'] = status === 'done' ? 'done' : status === 'stopped' ? 'cancelled' : 'failed';
       const waiting = run.cards > 0 && items.pendingCards().some((c) => c.run_id === run.id);
-      putTask({ ...t, status: outcome, progress: '', result: waiting ? 'Waiting on your answer in Chat.' : status === 'done' ? firstLine(run.lastText || run.text, 300) || 'Done.' : error ?? 'Stopped.' });
+      putTask(withAgentDone({ ...t, status: outcome, progress: '', result: waiting ? 'Waiting on your answer in Chat.' : status === 'done' ? firstLine(run.lastText || run.text, 300) || 'Done.' : error ?? 'Stopped.' }));
     }
   }
 
@@ -912,7 +914,7 @@ function onTaskRunEnd(taskId: string, run: ActiveRun, status: 'done' | 'error' |
   } else {
     const result = t.result || firstLine(stripMedia(run.lastText || run.text), 300) || 'Finished.';
     if (t.status === 'running' || t.status === 'queued' || t.status === 'waiting') {
-      putTask({ ...t, status: 'done', result, progress: t.progress?.startsWith('· ') ? '' : t.progress, steps: t.steps.map((s) => ({ ...s, done: true })) });
+      putTask(withAgentDone({ ...t, status: 'done', result, progress: t.progress?.startsWith('· ') ? '' : t.progress, steps: t.steps.map((s) => ({ ...s, done: true })) }));
     }
   }
   announceEnd(tasks.get(taskId)!);
@@ -1278,6 +1280,7 @@ export async function actOnCard(id: string, action: string, value?: string): Pro
   if (!item || item.kind !== 'card' || !item.card) throw new Error('card not found');
   const c = item.card;
   if (c.type === 'handover' && action === 'retry') return retryTask(item);
+  if (c.type === 'handover' && action === 'complete') return completeHandover(item);
   if (c.type === 'brief' && action === 'use_draft') {
     const d = useDraft(c, item.id, value);
     const updated = put({ ...item, card: { ...c, entries: d.entries } });
@@ -1461,6 +1464,18 @@ function retryTask(item: Item): Item {
 }
 
 /**
+ * "Mark done" on a handover card: the user's own completion, which is the real one. The card refreshes in place to
+ * show it, and the task keeps the stamp so the Tasks tab agrees.
+ */
+function completeHandover(item: Item): Item {
+  const c = item.card!;
+  const t = c.task_id ? tasks.get(c.task_id) : null;
+  if (!t) throw new Error('this card takes no action');
+  confirmTask(t.id);
+  return items.get(item.id) ?? item;
+}
+
+/**
  * Queue a task again from its stored instructions in a fresh Hermes session. `retried_at` keeps files from earlier
  * attempts off the new handover card, and a page refresh only counts a version delivered after it.
  * `auto`: Duet restarted it after Hermes restarted mid-run (marked on the spec, so it happens once).
@@ -1564,6 +1579,84 @@ export async function cancelTask(id: string) {
       put(c);
     }
   }
+}
+
+/** The same text cap as a chat message, wherever the words arrive from. */
+export const TASK_MESSAGE_MAX = 20_000;
+
+/**
+ * Steer a running task mid-flight: the text goes to its live Hermes run through the same `hermes.steer` path chat
+ * uses, with the same pending_steer replay semantics (a steer Hermes never delivers is matched and replayed when the
+ * run ends, never sent twice). Returns whether Hermes took it; a refused steer is queued as its own turn in the
+ * task's session instead, so it still runs against the same conversation.
+ *
+ * A task with no live run refuses outright: queueing the text anywhere else would answer from a different turn while
+ * looking like steering, so the client hears a 409 it can say plainly.
+ */
+export async function steerTask(taskId: string, text: string): Promise<{ delivered: boolean }> {
+  const t = tasks.get(taskId);
+  if (!t) throw new UserError('no such task', 404);
+  const msg = text.trim();
+  if (!msg) throw new UserError('empty message');
+  if (msg.length > TASK_MESSAGE_MAX) throw new UserError('message too long');
+  // Only a live run can be steered. A queued task has no run yet, and a finished one has nothing left to steer.
+  if (t.status !== 'running' && t.status !== 'waiting') throw new UserError(`that task is ${t.status}, so there is nothing to steer right now`, 409);
+  const sid = tasks.sessionOf(taskId);
+  const run = (sid ? lanes.get(sid)?.active : undefined) ?? null;
+  if (!run || run.finished || !run.id || run.spec.taskId !== taskId) {
+    throw new UserError('that task is not running right now', 409);
+  }
+  const channelId = channelOfSpec(run.spec);
+  // `turnNote` is empty for task runs (only chat turns carry the waiting-cards note), but going through it keeps the
+  // steer shaped exactly like chat's, including the pending_steer replay in finish().
+  const steer: Steer = { sent: turnNote(items.pendingCards(channelId), run.spec) + msg, raw: msg };
+  run.steers.push(steer);
+  // On disk before it is sent: a restart between these two lines would otherwise lose the message entirely.
+  saveRunMeta(run);
+  try {
+    const r = await hermes.steer(run.id, steer.sent);
+    if (!r?.accepted) throw new Error('not accepted');
+    return { delivered: true };
+  } catch {
+    // Mirrors submitUser: whichever path claimed it — this one, or finish() replaying what Hermes reported as
+    // undelivered — wins, so the text goes out once. The fallback turn keeps the task's session (and channel) so the
+    // words still land on the same conversation, but carries no task id, so its ending can't complete or fail the task.
+    if (steer.queued || run.finished) return { delivered: false };
+    steer.queued = true;
+    saveRunMeta(run);
+    enqueue({ kind: 'chat', sessionId: run.spec.sessionId, channelId, input: msg });
+    return { delivered: false };
+  }
+}
+
+/**
+ * The user's own completion: the real one, never set by the agent. Refreshes the handover card in place so the
+ * thread shows the confirmed state without a second card.
+ */
+export function confirmTask(id: string): Task {
+  const t = tasks.get(id);
+  if (!t) throw new UserError('no such task', 404);
+  if (!t.confirmed_at) {
+    putTask(withConfirmed(t));
+    const h = t.handover_id ? items.get(t.handover_id) : null;
+    if (h?.card && !h.card.confirmed_at) put({ ...h, card: { ...h.card, confirmed_at: tasks.get(id)?.confirmed_at ?? Date.now() } });
+  }
+  return tasks.get(id)!;
+}
+
+/** Undo the user's completion; the agent's `agent_done_at` stays as history. */
+export function reopenTask(id: string): Task {
+  const t = tasks.get(id);
+  if (!t) throw new UserError('no such task', 404);
+  if (t.confirmed_at !== undefined) {
+    putTask(withReopened(t));
+    const h = t.handover_id ? items.get(t.handover_id) : null;
+    if (h?.card?.confirmed_at !== undefined) {
+      const { confirmed_at: _drop, ...card } = h.card;
+      put({ ...h, card });
+    }
+  }
+  return tasks.get(id)!;
 }
 
 /** A brief that did post (or failed again, with a new card) makes an older "Run it now?" card moot. */
@@ -1898,7 +1991,9 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
       if (args.changed !== undefined) next.changed = str(args.changed, 300);
       if (args.follow_ups !== undefined) next.follow_ups = followUps(args.follow_ups);
       if (typeof args.status === 'string' && ['running', 'waiting', 'done', 'failed'].includes(args.status)) next.status = args.status as Task['status'];
-      putTask(next);
+      // The agent saying done only ever "looks done": the user's own confirm is the real completion, and the first
+      // finish is the one that counts, so a later update can't move the stamp.
+      putTask(withAgentDone(next));
       return `Task ${id} updated.`;
     }
     case 'notify': {

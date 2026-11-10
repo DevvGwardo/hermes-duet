@@ -122,6 +122,8 @@ export interface CardData {
   follow_ups?: FollowUp[]; // handover
   /** handover: the task failed or stopped; `body` is the reason. */
   failed?: boolean;
+  /** handover: set when the user tapped "Mark done" on this card; the task's own `confirmed_at` is the record. */
+  confirmed_at?: number;
   /** failed handover: the task's instructions were kept, so "Try again" can restart it. */
   retry?: boolean;
   decision?: string; // what the user picked

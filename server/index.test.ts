@@ -301,3 +301,64 @@ describe('thread paging', () => {
     expect(older.items.every((i: any) => i.created_at <= oldest.created_at)).toBe(true);
   });
 });
+
+describe('user-confirmed task completion', () => {
+  const doneTask = () => {
+    const now = Date.now();
+    const t = { id: newId(), title: 'hc route done', status: 'done' as const, steps: [], created_at: now, updated_at: now, background: true };
+    tasks.save(t);
+    return t;
+  };
+
+  test('confirm stamps the user completion and reopen clears it', async () => {
+    const t = doneTask();
+    const confirmed = await authed(`/api/tasks/${t.id}/confirm`, { method: 'POST' });
+    expect(confirmed.status).toBe(200);
+    const cbody = (await confirmed.json()) as any;
+    expect(cbody.task.confirmed_at).toBeTruthy();
+    expect(cbody.task.status).toBe('done');
+    expect(tasks.get(t.id)!.confirmed_at).toBe(cbody.task.confirmed_at);
+
+    const reopened = await authed(`/api/tasks/${t.id}/reopen`, { method: 'POST' });
+    expect(reopened.status).toBe(200);
+    expect(((await reopened.json()) as any).task.confirmed_at).toBeUndefined();
+    expect(tasks.get(t.id)!.confirmed_at).toBeUndefined();
+  });
+
+  test('confirming a task nobody started is a 404, not a 500', async () => {
+    const res = await authed('/api/tasks/no-such-task/confirm', { method: 'POST' });
+    expect(res.status).toBe(404);
+    expect(((await res.json()) as any).error).toBe('no such task');
+  });
+
+  test('a wrong method on the new routes answers 405 with Allow', async () => {
+    const t = doneTask();
+    for (const route of [`/api/tasks/${t.id}/confirm`, `/api/tasks/${t.id}/reopen`, `/api/tasks/${t.id}/message`]) {
+      const res = await authed(route, { method: 'GET' });
+      expect(res.status).toBe(405);
+      expect(res.headers.get('allow')).toBe('POST');
+    }
+  });
+
+  test('steering validates like a chat message: auth, non-empty, capped', async () => {
+    const t = doneTask();
+    // No cookie means not paired, even for a well-formed steer.
+    const anon = await app(`/api/tasks/${t.id}/message`, jsonPost({ text: 'go faster' }));
+    expect(anon.status).toBe(401);
+
+    const empty = await authed(`/api/tasks/${t.id}/message`, jsonPost({ text: '   ' }));
+    expect(empty.status).toBe(400);
+    expect(((await empty.json()) as any).error).toBe('empty message');
+
+    const long = await authed(`/api/tasks/${t.id}/message`, jsonPost({ text: 'x'.repeat(20_001) }));
+    expect(long.status).toBe(400);
+    expect(((await long.json()) as any).error).toBe('message too long');
+  });
+
+  test('steering a task with no live run is a 409, not a silent queue', async () => {
+    const t = doneTask();
+    const res = await authed(`/api/tasks/${t.id}/message`, jsonPost({ text: 'one more thing' }));
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as any).error).toContain('nothing to steer');
+  });
+});
