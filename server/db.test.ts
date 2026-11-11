@@ -422,3 +422,17 @@ test('settings.get and settings.update sanitize corrupt or invalid timezones', (
     kv.set('settings', before ?? {});
   }
 });
+
+test('channels.forTask keeps live channels and falls back to general for archived or missing channels', () => {
+  const generalId = channels.general().id;
+  const ch = channels.create({ name: `hc-fortask-${newId().slice(-6)}` });
+  const baseTask = { id: `t-${newId()}`, title: 'Check', status: 'running' as const, steps: [], created_at: 1, updated_at: 1, background: true };
+
+  expect(channels.forTask(undefined)).toBe(generalId);
+  expect(channels.forTask({ ...baseTask, channel_id: 'chan-missing' })).toBe(generalId);
+  expect(channels.forTask({ ...baseTask, channel_id: ch.id })).toBe(ch.id);
+
+  channels.archive(ch.id);
+  expect(channels.get(ch.id)?.archived_at).not.toBeNull();
+  expect(channels.forTask({ ...baseTask, channel_id: ch.id })).toBe(generalId);
+});

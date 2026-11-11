@@ -233,9 +233,10 @@ export const channels = {
   bySession(sessionId: string): ChannelRow | null {
     return db.query<ChannelRow, [string]>('SELECT * FROM channels WHERE session_id = ?').get(sessionId) ?? null;
   },
-  /** The channel a task's cards and handover belong to (tasks inherit the channel they were started from). */
+  /** The channel a task's cards and handover belong to (archived channels fall back to general). */
   forTask(task: Task | null | undefined): string {
-    return task?.channel_id && channels.get(task.channel_id) ? task.channel_id : GENERAL_CHANNEL;
+    const ch = task?.channel_id ? channels.get(task.channel_id) : null;
+    return ch && ch.archived_at == null ? ch.id : channels.general().id;
   },
 };
 
