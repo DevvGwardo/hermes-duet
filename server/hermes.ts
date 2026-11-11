@@ -147,29 +147,42 @@ export const hermes = {
     const reader = res.body.getReader();
     const dec = new TextDecoder();
     let buf = '';
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
+    const emit = (frame: string) => {
+      const parsed = parseSseFrame(frame);
+      if (!parsed) return;
+      const { data, id, name } = parsed;
+      let ev: RunEvent;
+      try {
+        ev = JSON.parse(data) as RunEvent;
+      } catch {
+        return; // a malformed frame is not a reason to drop the rest of the stream
+      }
+      if (!ev.event && name) ev.event = name;
+      if (ev.seq === undefined && id !== undefined && !Number.isNaN(id)) ev.seq = id;
+      // Deliberately outside the parse try: a throwing handler used to be swallowed while `lastSeq` had already
+      // advanced, so the event was lost with no trace. It still surfaces to `consume`, which reconnects.
+      onEvent(ev);
+    };
+    const drainFrames = () => {
       let sep: number;
       while ((sep = buf.search(/\r?\n\r?\n/)) !== -1) {
         const frame = buf.slice(0, sep);
         buf = buf.slice(sep).replace(/^\r?\n\r?\n/, '');
-        const parsed = parseSseFrame(frame);
-        if (!parsed) continue;
-        const { data, id, name } = parsed;
-        let ev: RunEvent;
-        try {
-          ev = JSON.parse(data) as RunEvent;
-        } catch {
-          continue; // a malformed frame is not a reason to drop the rest of the stream
-        }
-        if (!ev.event && name) ev.event = name;
-        if (ev.seq === undefined && id !== undefined && !Number.isNaN(id)) ev.seq = id;
-        // Deliberately outside the parse try: a throwing handler used to be swallowed while `lastSeq` had already
-        // advanced, so the event was lost with no trace. It still surfaces to `consume`, which reconnects.
-        onEvent(ev);
+        emit(frame);
       }
+    };
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) {
+        if (!signal.aborted) {
+          buf += dec.decode();
+          drainFrames();
+          if (buf.trim()) emit(buf);
+        }
+        break;
+      }
+      buf += dec.decode(value, { stream: true });
+      drainFrames();
     }
   },
 };

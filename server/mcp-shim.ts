@@ -39,6 +39,7 @@ async function handle(msg: any) {
   const { id, method, params } = msg;
   const reply = (result: unknown) => id !== undefined && send({ jsonrpc: '2.0', id, result });
   const fail = (code: number, message: string) => id !== undefined && send({ jsonrpc: '2.0', id, error: { code, message } });
+  if (typeof method !== 'string' || !method) return fail(-32600, 'Invalid Request');
   switch (method) {
     case 'initialize':
       return reply({
@@ -55,41 +56,61 @@ async function handle(msg: any) {
     case 'tools/call':
       return reply(await callTool(params?.name, params?.arguments));
     default:
-      if (method?.startsWith('notifications/')) return;
+      if (method.startsWith('notifications/')) return;
       return fail(-32601, `Method not found: ${method}`);
   }
 }
 
 let buf = '';
+let inflight = 0;
+let ended = false;
+
+function dispatchLine(rawLine: string) {
+  const line = rawLine.trim();
+  if (!line) return;
+  let msg: any;
+  try {
+    msg = JSON.parse(line);
+  } catch {
+    send({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } });
+    return;
+  }
+  const items = Array.isArray(msg) ? msg : [msg];
+  if (Array.isArray(msg) && items.length === 0) {
+    send({ jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Invalid Request' } });
+    return;
+  }
+  for (const m of items) {
+    if (!m || typeof m !== 'object' || Array.isArray(m)) {
+      send({ jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Invalid Request' } });
+      continue;
+    }
+    inflight++;
+    handle(m)
+      .catch((e) => m?.id !== undefined && send({ jsonrpc: '2.0', id: m.id, error: { code: -32603, message: String(e) } }))
+      .finally(() => {
+        inflight--;
+        if (ended && inflight === 0) process.exit(0);
+      });
+  }
+}
+
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk: string) => {
   buf += chunk;
   let nl: number;
   while ((nl = buf.indexOf('\n')) !== -1) {
-    const line = buf.slice(0, nl).trim();
+    const line = buf.slice(0, nl);
     buf = buf.slice(nl + 1);
-    if (!line) continue;
-    let msg: any;
-    try {
-      msg = JSON.parse(line);
-    } catch {
-      send({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } });
-      continue;
-    }
-    for (const m of Array.isArray(msg) ? msg : [msg]) {
-      inflight++;
-      handle(m)
-        .catch((e) => m.id !== undefined && send({ jsonrpc: '2.0', id: m.id, error: { code: -32603, message: String(e) } }))
-        .finally(() => {
-          inflight--;
-          if (ended && inflight === 0) process.exit(0);
-        });
-    }
+    dispatchLine(line);
   }
 });
-let inflight = 0;
-let ended = false;
 process.stdin.on('end', () => {
+  if (buf.trim()) {
+    const tail = buf;
+    buf = '';
+    dispatchLine(tail);
+  }
   ended = true;
   if (inflight === 0) process.exit(0);
 });

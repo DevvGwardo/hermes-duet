@@ -19,3 +19,26 @@ test('the approval tool tells the model to stop and wait', () => {
   expect(approval.description).toContain('BEFORE');
   expect(approval.description).toMatch(/do not perform the action/i);
 });
+
+test('all session-routed tools accept task_id for unambiguous attribution', () => {
+  const routed = [
+    'request_approval',
+    'request_payment',
+    'ask',
+    'withdraw_card',
+    'post_brief',
+    'post_card',
+    'deliver_file',
+    'save_page',
+    'save_routine',
+    'remove_routine',
+    'start_task',
+    'update_task',
+    'notify',
+  ];
+  for (const name of routed) {
+    const tool = TOOLS.find((t) => t.name === name)!;
+    expect(tool).toBeTruthy();
+    expect(Object.keys(tool.inputSchema.properties)).toContain('task_id');
+  }
+});

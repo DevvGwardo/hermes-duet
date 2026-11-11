@@ -1,6 +1,10 @@
 // Tool contract between the agent and Hermes Duet. The MCP shim lists these; the server executes them.
 
-const taskId = { type: 'string', description: 'The Hermes Duet task id this belongs to, if you are working on a task (it appears in your instructions as "Hermes Duet task <id>"). If a call is refused because several turns are running at once, pass "main" when you are the main conversation.' };
+const taskId = {
+  type: 'string',
+  description:
+    'The Hermes Duet task id this belongs to, if you are working on a task (it appears in your instructions as "Hermes Duet task <id>"). If a call is refused because several turns are running at once, pass "main" for the general conversation or the channel token shown in the error (e.g. "channel:<id>") for a channel conversation.',
+};
 const PAGE_ID_DESC = 'Optional. When this line is about a standing page (the brief prompt lists them as "page <id>"), its id; tapping the line then opens the page.';
 const SOURCES_DESC =
   'Cite where every number or claim came from: one entry per source, at most 6. Use real ids from items, tasks, pages or files (never invent one), or an absolute http(s) URL.';
@@ -178,6 +182,7 @@ export const TOOLS = [
             required: ['title'],
           },
         },
+        task_id: taskId,
       },
       required: ['title'],
     },
@@ -284,6 +289,7 @@ export const TOOLS = [
         channel_id: { type: 'string', description: 'Optional channel the task and its handover belong to; absent means the general thread.' },
         enabled: { type: 'boolean', description: 'Default true. false saves it paused.' },
         routine_id: { type: 'string', description: 'An existing routine to update.' },
+        task_id: taskId,
       },
       required: ['title', 'prompt', 'schedule'],
     },
@@ -294,7 +300,10 @@ export const TOOLS = [
       'Remove a user-defined routine so it stops running. Its past tasks and handover cards stay in the thread; only the schedule is deleted.',
     inputSchema: {
       type: 'object',
-      properties: { routine_id: { type: 'string', description: 'The routine to remove.' } },
+      properties: {
+        routine_id: { type: 'string', description: 'The routine to remove.' },
+        task_id: taskId,
+      },
       required: ['routine_id'],
     },
   },
@@ -309,6 +318,7 @@ export const TOOLS = [
         title: { type: 'string', description: 'Short task name shown in the Tasks tab.' },
         instructions: { type: 'string', description: 'Everything the background worker needs: goal, context, constraints, what to deliver.' },
         steps: { type: 'array', items: { type: 'string' }, description: 'Optional planned steps.' },
+        task_id: taskId,
       },
       required: ['title', 'instructions'],
     },
@@ -356,7 +366,7 @@ export const TOOLS = [
       'Send a push notification to the user\'s phone. It also posts as a note card in the thread, which the notification opens. Only for things that genuinely need them soon; cards from request_approval / ask already notify, and briefs notify on their own. Not available in check-ins or the morning brief: use post_brief there.',
     inputSchema: {
       type: 'object',
-      properties: { title: { type: 'string' }, body: { type: 'string' } },
+      properties: { title: { type: 'string' }, body: { type: 'string' }, task_id: taskId },
       required: ['title', 'body'],
     },
   },

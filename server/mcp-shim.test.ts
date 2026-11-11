@@ -98,3 +98,27 @@ test('a failed tool call comes back as an error the model can read', async () =>
     server.stop(true);
   }
 });
+
+test('null, primitive, empty-batch, and EOF-unterminated JSON-RPC lines do not crash the shim', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'duet-shim-'));
+  writeFileSync(join(dir, 'internal.token'), 'shim-test-token', { mode: 0o600 });
+  const proc = Bun.spawn(['bun', join(import.meta.dir, 'mcp-shim.ts')], {
+    env: { ...process.env, DUET_DATA_DIR: dir, DUET_INTERNAL_PORT: '1' },
+    stdin: 'pipe',
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  try {
+    // null, primitive, array-in-array, non-string method, then a trailing request with no trailing newline before EOF.
+    proc.stdin.write('null\n42\n"hi"\n[]\n{"jsonrpc":"2.0","id":9,"method":123}\n');
+    proc.stdin.write('{"jsonrpc":"2.0","id":10,"method":"ping"}');
+    proc.stdin.end();
+    const out = await replies(proc.stdout, 6);
+    expect(out.slice(0, 5).map((r) => r.error.code)).toEqual([-32600, -32600, -32600, -32600, -32600]);
+    expect(out[4].id).toBe(9);
+    expect(out[5]).toEqual({ jsonrpc: '2.0', id: 10, result: {} });
+    expect(await proc.exited).toBe(0);
+  } finally {
+    proc.kill();
+  }
+});

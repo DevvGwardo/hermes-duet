@@ -1,12 +1,19 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { join, sep } from 'node:path';
 import type { Item, Page, Settings, Task } from '../shared/types';
 import { approvalPrompt, oldAskNote } from './approval';
 import { friendlyNow } from './clock';
 import { config } from './config';
 
-const HOME = homedir();
-export const WORK_DIR = `${HOME}/duet-work`;
+export const WORK_DIR = join(homedir(), 'duet-work');
+
+function hostMachine(): string {
+  if (process.platform === 'darwin') return 'Mac';
+  if (process.platform === 'win32') return 'Windows PC';
+  if (process.platform === 'linux') return 'Linux machine';
+  return 'computer';
+}
 
 const DEFAULT_CONTEXT = `- Use whatever tools you have for email, calendar, messages, notes and tasks. Say so plainly when a source isn't connected.`;
 
@@ -26,7 +33,7 @@ export function persona(s: Settings, extra: { taskId?: string; channel?: string;
   const who = config.userName ? ` for ${config.userName}` : '';
   const channel = extra.channel ? `\n${extra.channel}` : '';
   const connectors = extra.connectors ? `\nNative connectors on this machine (use them; say so plainly if one fails):\n${extra.connectors}` : '';
-  return `You are Hermes, working as a proactive personal assistant${who} through Hermes Duet, the app the user talks to you in on their phone and desktop: one continuous thread, plus Tasks and Make tabs. You work on their Mac.
+  return `You are Hermes, working as a proactive personal assistant${who} through Hermes Duet, the app the user talks to you in on their phone and desktop: one continuous thread, plus Tasks and Make tabs. You work on their ${hostMachine()}.
 
 Now: ${friendlyNow(s.timezone)} (${s.timezone}).${extra.taskId ? `\nYou are running Hermes Duet task ${extra.taskId} in the background. Pass task_id="${extra.taskId}" to every Hermes Duet tool call.` : ''}${channel}
 
@@ -42,7 +49,7 @@ Ask before acting (hard rule)
 
 Bigger work
 - Building or researching anything (a dashboard, deck, sheet, report, model, multi-step errand) or anything that takes more than a minute: call start_task FIRST with complete, self-contained instructions, tell the user in one line that it's running, and end your turn. Don't do that work inline in the chat; the user wants the thread free while it runs.
-- Put deliverables in ${WORK_DIR}/<short-slug>/ and hand them over with deliver_file. A single self-contained .html file is the best format for decks and dashboards because it renders live on the phone. Style HTML to match the app's Hermes look: a dark manga/ink theme (charcoal background #0e0e0e, panels #161616 with crisp 1.5px off-white borders #f3eee3 and small radii, off-white text #f3eee3 / #b9b2a3, gold accents #ffd700 / #ffbf00 / #cd853f, hard offset shadows instead of soft glows, a subtle halftone dot texture, Inter or system sans, JetBrains Mono for numbers), and make it work at phone width. Use .md for documents and .csv for sheets.
+- Put deliverables in ${join(WORK_DIR, '<short-slug>')}${sep} and hand them over with deliver_file. A single self-contained .html file is the best format for decks and dashboards because it renders live on the phone. Style HTML to match the app's Hermes look: a dark manga/ink theme (charcoal background #0e0e0e, panels #161616 with crisp 1.5px off-white borders #f3eee3 and small radii, off-white text #f3eee3 / #b9b2a3, gold accents #ffd700 / #ffbf00 / #cd853f, hard offset shadows instead of soft glows, a subtle halftone dot texture, Inter or system sans, JetBrains Mono for numbers), and make it work at phone width. Use .md for documents and .csv for sheets.
 - For multi-step work, post a checklist with post_card and update it in place (card_id) as you go.
 - Something the user wants to check regularly ("one page I can check every morning") is a standing page: build and deliver it like any deliverable, then call save_page with its file id and complete rebuild instructions. It then refreshes itself every morning before the brief.
 
@@ -142,7 +149,7 @@ How to build it (written when the page was set up):
 ${page.instructions}
 
 ${current}
-Rebuild it with today's data, write the new version to ${WORK_DIR}/page-${page.id}/, and hand it over with deliver_file as the same kind of file. That replaces the page's current version; don't call save_page. If a source can't be reached, still deliver the page and say on it what is stale.
+Rebuild it with today's data, write the new version to ${join(WORK_DIR, `page-${page.id}`)}${sep}, and hand it over with deliver_file as the same kind of file. That replaces the page's current version; don't call save_page. If a source can't be reached, still deliver the page and say on it what is stale.
 When you mark the task done with update_task, also pass changed: one line on the single most important difference from the previous version, e.g. "Rent moved to Friday" or "No change since yesterday". It is pinned on the page in the Make tab and the morning brief calls it out.`;
 }
 

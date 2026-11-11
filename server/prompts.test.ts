@@ -1,6 +1,8 @@
 import { expect, test } from 'bun:test';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import type { Item, Settings, Task } from '../shared/types';
-import { briefPrompt, checkinPrompt, pageRefreshInstructions, persona, taskPrompt } from './prompts';
+import { WORK_DIR, briefPrompt, checkinPrompt, pageRefreshInstructions, persona, taskPrompt } from './prompts';
 
 const settings = (extra: Partial<Settings> = {}): Settings => ({
   brief_enabled: true,
@@ -85,4 +87,14 @@ test('page refresh instructions keep layout unless told otherwise', () => {
   expect(pageRefreshInstructions(page, '/tmp/rent.html')).toContain('keep its layout');
   expect(pageRefreshInstructions(page, null)).toContain('build it fresh');
   expect(pageRefreshInstructions(page, '/tmp/rent.html')).toContain('Sum the ledger.');
+  expect(pageRefreshInstructions(page, null)).toContain(join(WORK_DIR, 'page-p1'));
+});
+
+test('WORK_DIR and persona reflect the host OS cleanly', () => {
+  expect(WORK_DIR).toBe(join(homedir(), 'duet-work'));
+  const p = persona(settings());
+  expect(p).toContain(WORK_DIR);
+  if (process.platform === 'win32') expect(p).toContain('Windows PC');
+  else if (process.platform === 'darwin') expect(p).toContain('Mac');
+  else if (process.platform === 'linux') expect(p).toContain('Linux machine');
 });

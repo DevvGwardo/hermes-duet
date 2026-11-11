@@ -1,4 +1,4 @@
-import { copyFileSync, mkdirSync, statSync } from 'node:fs';
+import { copyFileSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { basename, extname, join } from 'node:path';
 import { deliverySource } from './delivery';
 import { askAge } from '../shared/age';
@@ -10,7 +10,7 @@ import { channelLine } from './channels';
 import { inQuietHours, localParts } from './clock';
 import { config } from './config';
 import { connectorBrief, listConnectors } from './connectors';
-import { channels, files, items, kv, newId, pages, routines, runs, settings, tasks, tx } from './db';
+import { type ChannelRow, channels, files, items, kv, newId, pages, routines, runs, settings, tasks, tx } from './db';
 import { UserError } from './errors';
 import { GENERAL_CHANNEL } from './schema';
 import { nextRun, routineInput, scheduleLabel } from './routines';
@@ -81,6 +81,8 @@ interface ActiveRun {
   lastSave: number;
   /** When this run's meta was last written, so a long run doesn't rewrite it on every event. */
   metaAt: number;
+  /** True when segment text was flushed before `lastSeq` updated, so `onEvent` syncs run meta right after. */
+  dirtyMeta: boolean;
   /** The watchdog's stop was never acknowledged: the run may still be going on the Hermes side, so a retry could double it. */
   stopUnconfirmed: boolean;
   /** Restart recovery: existing segment items to reuse while the event stream replays. */
@@ -273,6 +275,10 @@ function firstLine(text: string, max = 140) {
   return line.length > max ? `${line.slice(0, max - 1)}…` : line;
 }
 
+function cardUrl(cardId: string, channelId?: string | null): string {
+  return channelId ? `/?card=${cardId}&channel=${encodeURIComponent(channelId)}` : `/?card=${cardId}`;
+}
+
 function pushSafe(p: Parameters<typeof notify>[0], opts?: Parameters<typeof notify>[1]) {
   notify(p, opts).catch((e) => console.warn('[push]', e));
 }
@@ -299,10 +305,30 @@ function addContextNote(note: string) {
   notes.push(note);
   kv.set('context_notes', notes.slice(-20));
 }
-function peekContextNotes(): string {
-  const notes = kv.get<string[]>('context_notes', []);
+function formatContextNotes(notes: string[]): string {
   if (!notes.length) return '';
   return `(Context since your last turn. Don't repeat these back unless asked:\n${notes.map((n) => `- ${n}`).join('\n')})\n\n`;
+}
+function consumeContextNotes(consumed: string[]) {
+  const cur = kv.get<string[]>('context_notes', []);
+  if (!cur.length) return;
+  // Drop only the notes snapshotted before startRun so notes appended concurrently aren't lost.
+  let drop = 0;
+  for (let len = Math.min(consumed.length, cur.length); len >= 1; len--) {
+    const offset = consumed.length - len;
+    let match = true;
+    for (let i = 0; i < len; i++) {
+      if (cur[i] !== consumed[offset + i]) {
+        match = false;
+        break;
+      }
+    }
+    if (match) {
+      drop = len;
+      break;
+    }
+  }
+  kv.set('context_notes', cur.slice(drop));
 }
 
 // ---------------------------------------------------------------------------
@@ -328,6 +354,7 @@ async function launch(l: Lane, spec: RunSpec) {
     abort: new AbortController(),
     lastSave: 0,
     metaAt: 0,
+    dirtyMeta: false,
     stopUnconfirmed: false,
     stopRequested: false,
     reuse: [],
@@ -359,7 +386,8 @@ async function launchRun(l: Lane, run: ActiveRun, spec: RunSpec) {
   else if (spec.kind === 'checkin') spec.input = checkinInput(spec.since);
 
   // Notes are cleared only once Hermes accepts the run, so a failed start doesn't lose them.
-  const notes = l.main && spec.kind === 'chat' ? peekContextNotes() : '';
+  const consumedNotes = l.main && spec.kind === 'chat' ? kv.get<string[]>('context_notes', []) : [];
+  const notes = formatContextNotes(consumedNotes);
   const channelId = channelOfSpec(spec);
   // Read fresh at launch, not at enqueue, so a card decided while this message sat in the queue isn't listed.
   // `turnNote` already picks only cards from the run's own session, so every channel's chat turns get it; gating it on
@@ -386,7 +414,7 @@ async function launchRun(l: Lane, run: ActiveRun, spec: RunSpec) {
       idempotencyKey: (spec.idem ??= `duet-${newId()}`),
     });
     run.id = r.run_id;
-    if (notes) kv.set('context_notes', []);
+    if (consumedNotes.length) consumeContextNotes(consumedNotes);
     // Stop was tapped while this POST was in flight. There was no id to cancel then, so honour it now, before the
     // consume loop starts: `stopRun` finishes the lane itself.
     if (run.stopRequested) {
@@ -425,7 +453,9 @@ async function launchRun(l: Lane, run: ActiveRun, spec: RunSpec) {
     const t = spec.taskId ? tasks.get(spec.taskId) : null;
     if (t?.background && t.status !== 'cancelled' && t.status !== 'done') {
       // A background task that never started hands over like any other failure, with "Try again".
-      announceEnd(putTask({ ...t, status: 'failed', result: msg, progress: '' }));
+      const failed = putTask({ ...t, status: 'failed', result: msg, progress: '' });
+      syncRoutineResult(failed);
+      announceEnd(failed);
     } else {
       if (!spec.quiet) systemNote(msg, spec.taskId, channelId);
       if (spec.taskId) failTask(spec.taskId, msg);
@@ -457,7 +487,16 @@ async function launchRun(l: Lane, run: ActiveRun, spec: RunSpec) {
  * crash or gateway restart replays from the last second rather than from the beginning of the turn.
  */
 function runMeta(run: ActiveRun) {
-  return { spec: run.spec, activityId: run.activity?.id ?? null, fgTaskId: run.fgTaskId, steers: run.steers, lastSeq: run.lastSeq, lastEventAt: run.lastEventAt };
+  return {
+    spec: run.spec,
+    activityId: run.activity?.id ?? null,
+    fgTaskId: run.fgTaskId,
+    steers: run.steers,
+    lastSeq: run.lastSeq,
+    lastEventAt: run.lastEventAt,
+    cards: run.cards,
+    briefs: run.briefs,
+  };
 }
 
 function saveRunMeta(run: ActiveRun) {
@@ -485,6 +524,7 @@ async function consume(l: Lane, run: ActiveRun) {
         );
       } catch (e: any) {
         if (run.abort.signal.aborted) break;
+        console.warn('[runs] event stream error', run.id, e?.message ?? e);
       }
       if (run.finished) break;
       // The stream closed without a terminal event: ask for the run's status directly.
@@ -529,15 +569,29 @@ function stopIfHung(l: Lane, run: ActiveRun) {
 }
 
 /**
+ * Best-effort bounded fetch of `pending_steer` before a forced stop finishes the run, so steers sent right as Stop or
+ * timeout hit are recovered and replayed instead of silently dropped.
+ */
+async function hydratePendingSteer(run: ActiveRun) {
+  if (!run.id || run.finished || !run.steers.length || run.leftoverSteer) return;
+  try {
+    const st = await Promise.race([hermes.getRun(run.id), Bun.sleep(1_500).then(() => null)]);
+    if (st && typeof st.pending_steer === 'string') run.leftoverSteer = st.pending_steer;
+  } catch {}
+}
+
+/**
  * End a run the watchdog called hung. The stop is confirmed, within a bound, before the "Try again" card goes up: if
  * the gateway never acknowledges it the run may still be finishing on its own, and a retry would put a second agent on
  * the same turn. That case is said plainly on the card instead of being hidden.
  */
 async function stopHung(l: Lane, run: ActiveRun) {
+  run.stopRequested = true;
   const how = await requestStop(run.id);
   // Its own terminal event may have arrived while we were asking; that outcome is better than ours.
   if (run.finished) return;
   run.stopUnconfirmed = how === 'unknown';
+  await hydratePendingSteer(run);
   finish(l, run, 'error', undefined, TIMED_OUT);
 }
 
@@ -569,13 +623,6 @@ function onEvent(l: Lane, run: ActiveRun, ev: RunEvent) {
   // carries no seq at all. Applying the same delta twice would double the text in the bubble.
   if (typeof ev.seq === 'number' && ev.seq <= run.lastSeq) return;
   run.lastEventAt = Date.now();
-  if (typeof ev.seq === 'number') run.lastSeq = Math.max(run.lastSeq, ev.seq);
-  // A restart should resume from here, not from the start of the turn (and an orphan that has been silent for hours
-  // should not get a fresh timeout window). Batched: this is a SQLite write.
-  if (run.lastEventAt - run.metaAt > 1_000) {
-    run.metaAt = run.lastEventAt;
-    saveRunMeta(run);
-  }
   // assistant.completed and the terminal run.* event both carry it.
   if (typeof ev.pending_steer === 'string') run.leftoverSteer = ev.pending_steer;
   switch (ev.event) {
@@ -629,6 +676,14 @@ function onEvent(l: Lane, run: ActiveRun, ev: RunEvent) {
     case 'run.interrupted':
       finish(l, run, 'stopped');
       break;
+  }
+  // Advance cursor and flush throttled metadata only after the event handler completes cleanly, so an error during
+  // mutation does not skip the failed event across reconnects.
+  if (typeof ev.seq === 'number') run.lastSeq = Math.max(run.lastSeq, ev.seq);
+  if (!run.finished && (run.dirtyMeta || run.lastEventAt - run.metaAt > 1_000)) {
+    run.dirtyMeta = false;
+    run.metaAt = run.lastEventAt;
+    saveRunMeta(run);
   }
 }
 
@@ -701,17 +756,22 @@ function appendText(run: ActiveRun, delta: string) {
       ? { ...reuse, text: '', streaming: true }
       : newItem('assistant', { run_id: run.id, task_id: run.spec.taskId ?? null, channel_id: channelOfSpec(run.spec), text: '', streaming: true });
     put(run.assistant);
+    run.dirtyMeta = true;
+    saveRunMeta(run);
   }
   run.assistant.text = (run.assistant.text ?? '') + delta;
   broadcast({ type: 'delta', item_id: run.assistant.id, text: delta });
   if (Date.now() - run.lastSave > 1000) {
     run.lastSave = Date.now();
     items.save(run.assistant);
+    run.dirtyMeta = true;
+    saveRunMeta(run);
   }
 }
 
-const MEDIA_RE = /MEDIA:\s*(\/[^\s`'")\]>]+)/g;
+const MEDIA_RE = /MEDIA:\s*((?:\/|[A-Za-z]:[\\/])[^\s`'")\]>]+)/g;
 const stripMedia = (text: string) => text.replace(MEDIA_RE, '').replace(/\n{3,}/g, '\n\n').trim();
+export const mediaPaths = (text: string): string[] => [...text.matchAll(MEDIA_RE)].map((m) => m[1]);
 
 function closeSegment(run: ActiveRun) {
   run.pendingWs = '';
@@ -724,12 +784,14 @@ function closeSegment(run: ActiveRun) {
   a.text = stripMedia(text);
   a.streaming = false;
   put(a);
+  run.dirtyMeta = true;
+  saveRunMeta(run);
   deliverMedia(run, text);
 }
 
-/** Hermes marks files it produced with `MEDIA:/abs/path`; hand each one over like deliver_file. */
+/** Hermes marks files it produced with `MEDIA:/abs/path` (or `MEDIA:C:\...`); hand each one over like deliver_file. */
 function deliverMedia(run: ActiveRun, text: string) {
-  for (const [, p] of text.matchAll(MEDIA_RE)) {
+  for (const p of mediaPaths(text)) {
     try {
       deliverFile({ path: p, title: basename(p) }, { sessionId: run.spec.sessionId, taskId: run.spec.taskId ?? null, channelId: channelOfSpec(run.spec) });
     } catch (e: any) {
@@ -829,6 +891,10 @@ function finishBody(l: Lane, run: ActiveRun, status: 'done' | 'error' | 'stopped
   }
   if (status === 'error' && error === INTERRUPTED && !spec.quiet && (spec.kind === 'chat' || spec.kind === 'task' || spec.kind === 'decision')) {
     const task = spec.taskId ? tasks.get(spec.taskId) : null;
+    if ((spec.kind === 'task' || spec.taskId) && task?.status === 'done') {
+      onTaskRunEnd(task.id, run, 'error', error);
+      return;
+    }
     const what = spec.taskId ? task?.title : runTitle(spec);
     // The "Pick it back up?" card below pushes for this interruption; a second "Task failed" push would be noise.
     if (spec.taskId) failTask(spec.taskId, 'Interrupted: Hermes restarted mid-task.', { push: false });
@@ -849,7 +915,7 @@ function finishBody(l: Lane, run: ActiveRun, status: 'done' | 'error' | 'stopped
         },
       }),
     );
-    pushSafe({ title: 'Work was interrupted', body: card.card!.title, card_id: card.id, tag: card.id, url: `/?card=${card.id}`, category: 'system', channel_id: card.channel_id });
+    pushSafe({ title: 'Work was interrupted', body: card.card!.title, card_id: card.id, tag: card.id, url: cardUrl(card.id, card.channel_id), category: 'system', channel_id: card.channel_id });
     return;
   }
 
@@ -869,7 +935,7 @@ function finishBody(l: Lane, run: ActiveRun, status: 'done' | 'error' | 'stopped
         }),
       );
       // The user expects a brief at this hour, so its failure reaches them the way the brief would have.
-      pushSafe({ title: "Your morning brief didn't finish", body: 'Tap to run it again.', card_id: card.id, tag: 'brief', url: `/?card=${card.id}`, category: 'brief', channel_id: card.channel_id }, { ignoreQuiet: true });
+      pushSafe({ title: "Your morning brief didn't finish", body: 'Tap to run it again.', card_id: card.id, tag: 'brief', url: cardUrl(card.id, card.channel_id), category: 'brief', channel_id: card.channel_id }, { ignoreQuiet: true });
     }
   } else if (status === 'error') {
     // A chat or decision turn: a reply that never came reaches the user like one that did, with one tap to retry
@@ -889,7 +955,7 @@ function finishBody(l: Lane, run: ActiveRun, status: 'done' | 'error' | 'stopped
         },
       }),
     );
-    pushSafe({ title: "Couldn't finish", body: card.card!.title, card_id: card.id, tag: card.id, url: `/?card=${card.id}`, category: 'system', channel_id: card.channel_id });
+    pushSafe({ title: "Couldn't finish", body: card.card!.title, card_id: card.id, tag: card.id, url: cardUrl(card.id, card.channel_id), category: 'system', channel_id: card.channel_id });
   } else if (status === 'done' && l.main) {
     if (spec.kind === 'brief') {
       const { note, stray } = morningOutcome(run);
@@ -902,18 +968,25 @@ function finishBody(l: Lane, run: ActiveRun, status: 'done' | 'error' | 'stopped
   }
 }
 
+/** Mirror a terminal task outcome back onto its originating routine, if any. */
+function syncRoutineResult(final: Task | null | undefined) {
+  if (!final?.routine_id) return;
+  const r = routines.get(final.routine_id);
+  if (!r) return;
+  const result = final.status === 'failed' ? final.result || 'Failed.' : final.status === 'done' ? final.result || 'Finished.' : final.result || 'Stopped.';
+  putRoutine({ ...r, last_result: result });
+}
+
 function onTaskRunEnd(taskId: string, run: ActiveRun, status: 'done' | 'error' | 'stopped', error?: string) {
   const t = tasks.get(taskId);
   if (!t || t.status === 'cancelled') return;
-  // Captured before the task is rewritten below: a routine's own row is what the result flows back to.
-  const routineId = t.routine_id;
   const waiting = items.pendingCards().some((c) => c.card?.task_id === taskId);
   // A run that dies after the agent already marked the task done still hands its result over.
   if ((status === 'error' || status === 'stopped') && t.status !== 'done') {
     // Keep the agent's own reason if it already marked the task failed before the run died.
     const reason = t.status === 'failed' && t.result ? t.result : firstLine(error ?? 'Stopped before it finished.', 300);
     putTask({ ...t, status: 'failed', result: reason, progress: '' });
-  } else if (waiting) {
+  } else if (waiting && t.status !== 'done') {
     putTask({ ...t, status: 'waiting', progress: 'Waiting on you' });
     return;
   } else {
@@ -922,17 +995,11 @@ function onTaskRunEnd(taskId: string, run: ActiveRun, status: 'done' | 'error' |
       putTask(withAgentDone({ ...t, status: 'done', result, progress: t.progress?.startsWith('· ') ? '' : t.progress, steps: t.steps.map((s) => ({ ...s, done: true })) }));
     }
   }
-  announceEnd(tasks.get(taskId)!);
+  const final = tasks.get(taskId)!;
+  announceEnd(final);
   // A routine's task ending is the routine's result. The next run already moved when the task started, so a failure
   // still advances the schedule; this only records how the run went.
-  if (routineId) {
-    const r = routines.get(routineId);
-    const final = tasks.get(taskId);
-    if (r && final) {
-      const result = final.status === 'failed' ? final.result || 'Failed.' : final.status === 'done' ? final.result || 'Finished.' : final.result || 'Stopped.';
-      putRoutine({ ...r, last_result: result });
-    }
-  }
+  syncRoutineResult(final);
 }
 
 /** A task that ended done or failed: its handover card, a note for the main session, and one push. */
@@ -945,10 +1012,10 @@ function announceEnd(final: Task) {
   const filesNote = delivered.length ? ` Files: ${delivered.join('; ')}.` : '';
   if (final.status === 'done') {
     addContextNote(`Background task "${final.title}" (${taskId}) finished: ${final.result ?? ''}${filesNote} The user has its handover card in the thread.`);
-    pushSafe({ title: `Done: ${final.title}`, body: firstLine(final.result ?? 'Finished.'), tag: `task-${taskId}`, url: `/?card=${card.id}`, category: 'task_done', channel_id: card.channel_id });
+    pushSafe({ title: `Done: ${final.title}`, body: firstLine(final.result ?? 'Finished.'), tag: `task-${taskId}`, url: cardUrl(card.id, card.channel_id), category: 'task_done', channel_id: card.channel_id });
   } else {
     addContextNote(`Background task "${final.title}" (${taskId}) failed: ${final.result ?? ''}${filesNote} The user has its card in the thread${card.card!.retry ? ', with a "Try again" button' : ''}.`);
-    pushSafe({ title: `Task failed: ${final.title}`, body: firstLine(final.result ?? ''), tag: `task-${taskId}`, url: `/?card=${card.id}`, category: 'task_failed', channel_id: card.channel_id });
+    pushSafe({ title: `Task failed: ${final.title}`, body: firstLine(final.result ?? ''), tag: `task-${taskId}`, url: cardUrl(card.id, card.channel_id), category: 'task_failed', channel_id: card.channel_id });
   }
 }
 
@@ -1063,7 +1130,8 @@ function handOver(t: Task): Item {
 function failTask(taskId: string, reason: string, { push = true } = {}) {
   const t = tasks.get(taskId);
   if (!t || t.status === 'cancelled' || t.status === 'done') return;
-  putTask({ ...t, status: 'failed', result: reason, progress: '' });
+  const failed = putTask({ ...t, status: 'failed', result: reason, progress: '' });
+  syncRoutineResult(failed);
   addContextNote(`Background task "${t.title}" (${taskId}) failed: ${reason}`);
   if (push) pushSafe({ title: `Task failed: ${t.title}`, body: firstLine(reason), tag: `task-${taskId}`, category: 'task_failed', channel_id: channels.forTask(t) });
 }
@@ -1102,11 +1170,13 @@ function hermesPrompt(run: ActiveRun, ev: RunEvent, kind: 'approval' | 'clarify'
   const channel = channelOfSpec(run.spec);
   const item = put(newItem('card', { card: { ...card, channel_id: channel }, run_id: run.id, task_id: run.spec.taskId ?? null, channel_id: channel }));
   run.cards++;
+  run.dirtyMeta = true;
+  saveRunMeta(run);
   if (run.spec.taskId) markTaskWaiting(run.spec.taskId);
   pushSafe(
     kind === 'approval'
-      ? { ...approvalPush(item), channel_id: channel }
-      : { title: 'Quick question', body: card.title, card_id: item.id, approval: false, tag: item.id, url: `/?card=${item.id}`, category: 'question', channel_id: channel },
+      ? { ...approvalPush(item), url: cardUrl(item.id, channel), channel_id: channel }
+      : { title: 'Quick question', body: card.title, card_id: item.id, approval: false, tag: item.id, url: cardUrl(item.id, channel), category: 'question', channel_id: channel },
     { ignoreQuiet: true },
   );
 }
@@ -1137,6 +1207,19 @@ function markTaskWaiting(taskId: string) {
 // Public actions (HTTP API)
 // ---------------------------------------------------------------------------
 
+/** Resolve a channel that still exists and is not archived. */
+function liveChannel(channelId?: string | null): ChannelRow {
+  const ch = channelId ? channels.get(channelId) : channels.general();
+  if (!ch || ch.archived_at != null) throw new UserError('no such channel', 404);
+  return ch;
+}
+
+function channelForFile(file: FileEntry): string {
+  const cid = file.task_id ? channels.forTask(tasks.get(file.task_id)) : GENERAL_CHANNEL;
+  const ch = channels.get(cid);
+  return ch && ch.archived_at == null ? ch.id : GENERAL_CHANNEL;
+}
+
 /**
  * `input` is what the agent receives when it differs from what the thread shows (a brief entry's draft chip).
  * `channelId` is the topic channel the message belongs to; absent means the general thread.
@@ -1145,8 +1228,7 @@ export function submitUser(text: string, input?: string, channelId?: string, att
   const shown = text.trim();
   if (!shown) throw new Error('empty message');
   const t = input?.trim() || shown;
-  const channel = channelId ? channels.get(channelId) : channels.general();
-  if (!channel) throw new Error('no such channel');
+  const channel = liveChannel(channelId);
   const item = put(
     newItem('user', { text: shown, channel_id: channel.id, ...(attachmentList?.length ? { attachments: attachmentList } : {}) }),
   );
@@ -1155,7 +1237,7 @@ export function submitUser(text: string, input?: string, channelId?: string, att
   for (const c of movedOn(items.pendingCards(channel.id), l.sessionId)) put({ ...c, card: { ...c.card!, status: 'expired', decision: MOVED_ON, decided_at: Date.now() } });
   const active = l.active;
   // Mid-run messages steer the live turn. One that lands too late comes back as `pending_steer`, and finish replays it.
-  if (active && active.id && !active.finished && l.queue.length === 0) {
+  if (active && active.id && !active.finished && !active.stopRequested && l.queue.length === 0) {
     // The note goes only on the steer: a refused or replayed one is queued raw, and launch gives it a fresh note.
     const steer: Steer = { sent: turnNote(items.pendingCards(channel.id), active.spec) + t, raw: t };
     active.steers.push(steer);
@@ -1188,9 +1270,8 @@ export function submitUser(text: string, input?: string, channelId?: string, att
 export function startUserTask(text: string, channelId?: string, attachmentList?: Attachment[], attachmentNote?: string): { item: Item; task: Task } {
   const shown = text.trim();
   if (!shown) throw new Error('empty message');
-  const channel = channelId ? channels.get(channelId) : channels.general();
-  if (!channel) throw new Error('no such channel');
-  const instructions = userTaskInstructions(shown, items.latest(30).items, attachmentNote);
+  const channel = liveChannel(channelId);
+  const instructions = userTaskInstructions(shown, items.latest(30, channel.id).items, attachmentNote);
   const task = startTask(userTaskTitle(shown), instructions, [], undefined, channel.id);
   const item = put(
     newItem('user', {
@@ -1209,8 +1290,7 @@ export function startUserTask(text: string, channelId?: string, attachmentList?:
  * It posts as a muted system line (the user didn't say it) and starts a turn in that channel with the fuller prompt.
  */
 export function submitSystem(shown: string, prompt?: string, channelId?: string): Item {
-  const channel = channelId ? channels.get(channelId) : channels.general();
-  if (!channel) throw new Error('no such channel');
+  const channel = liveChannel(channelId);
   const item = put(newItem('system', { text: shown, channel_id: channel.id }));
   enqueue({ kind: 'chat', sessionId: channel.session_id, channelId: channel.id, input: prompt ?? shown });
   return item;
@@ -1236,7 +1316,7 @@ export function deliverableAction(file: FileEntry, raw: Record<string, unknown>)
   if (!action) throw new Error('missing action');
   const path = files.get(file.id)?.path;
   const prompt = `[deliverable ${file.id}] The user pressed "${action}" in the deliverable "${file.title}" (${file.name})${path ? `, which is at ${path}` : ''}.\n\nPayload: ${safePayload(raw.payload)}\n\nDo what the button asks. If that means changing the deliverable, deliver a new version with deliver_file (and update the standing page with save_page + page_id if it is one). Anything outward-facing still goes through request_approval.`;
-  return submitSystem(`From “${file.title}”: ${action}`, prompt);
+  return submitSystem(`From “${file.title}”: ${action}`, prompt, channelForFile(file));
 }
 
 /**
@@ -1251,12 +1331,12 @@ export function deliverableApproval(file: FileEntry, raw: Record<string, unknown
     .trim()
     .slice(0, 4000) || `“${file.title}” is asking for your approval.`;
   const action_label = String(raw.action_label ?? '').trim().slice(0, 30) || undefined;
-  const channel = channels.general();
+  const channel = liveChannel(channelForFile(file));
   const item = postCard(
     { type: 'approval', title, body: `${summary}\n\n— from “${file.title}”`, action_label, status: 'pending' },
     { sessionId: channel.session_id, taskId: null, channelId: channel.id },
   );
-  pushSafe({ ...approvalPush(item), channel_id: channel.id }, { ignoreQuiet: true });
+  pushSafe({ ...approvalPush(item), url: cardUrl(item.id, channel.id), channel_id: channel.id }, { ignoreQuiet: true });
   return item;
 }
 
@@ -1277,7 +1357,11 @@ export async function settleHermesAsk(item: Item, status: CardStatus, send: () =
   try {
     await send();
   } catch (e: any) {
-    const card = { ...(items.get(item.id)?.card ?? item.card!) };
+    const latest = items.get(item.id);
+    if (latest?.card?.status === 'expired') {
+      throw new Error("that request ended with its run, so there's nothing left to answer");
+    }
+    const card = { ...(latest?.card ?? item.card!) };
     // Nothing was decided, so the card must not carry a decision either.
     delete card.decision;
     delete card.decided_at;
@@ -1286,7 +1370,9 @@ export async function settleHermesAsk(item: Item, status: CardStatus, send: () =
   } finally {
     decidingCards.delete(item.id);
   }
-  const card = items.get(item.id)?.card ?? item.card!;
+  const latest = items.get(item.id);
+  if (latest?.card?.status === 'expired') return latest;
+  const card = latest?.card ?? item.card!;
   return put({ ...item, card: { ...card, status, error: undefined } });
 }
 
@@ -1380,7 +1466,7 @@ export async function actOnCard(id: string, action: string, value?: string): Pro
     // Leaving interrupted work alone needs no agent turn.
     if (c.task_id) {
       const t = tasks.get(c.task_id);
-      if (t && t.status !== 'done') putTask({ ...t, status: 'cancelled', progress: '' });
+      if (t && t.status !== 'done') syncRoutineResult(putTask({ ...t, status: 'cancelled', progress: '' }));
     }
   } else {
     const sessionId = c.session_id ?? (c.task_id ? tasks.sessionOf(c.task_id) : null) ?? mainSessionId();
@@ -1424,7 +1510,8 @@ async function settlePayment(item: Item, approved: boolean): Promise<void> {
     if (provider && !failure) {
       // Cards approved before the merchant binding carry no host to check the tab against, so they can never be
       // filled: issuing one anyway would only create a live card number with nowhere safe to type it.
-      if (!c.merchant_host) {
+      const expectedSite = c.merchant_url ?? c.merchant_host;
+      if (!expectedSite) {
         failure = 'this payment was approved without a bound merchant site, so no card was typed into the browser. Send a new request_payment from the exact checkout page and have the user approve that instead.';
       } else {
         try {
@@ -1432,9 +1519,11 @@ async function settlePayment(item: Item, approved: boolean): Promise<void> {
           if (cardExpired(card)) throw new Error('the issued card was already expired');
           last4 = card.last4;
           try {
-            const fields = await browser.fillCard(card, c.merchant_host);
+            const fields = await browser.fillCard(card, expectedSite);
             cardFilled = fields.number && fields.expiry && fields.cvv;
             if (!cardFilled) failure = 'no checkout fields were found in the live browser';
+          } catch (e: any) {
+            failure = e?.message ?? 'could not fill the card into the browser';
           } finally {
             // Best effort: the number is not kept anywhere after this call.
             card.number = '';
@@ -1446,7 +1535,9 @@ async function settlePayment(item: Item, approved: boolean): Promise<void> {
               ...c,
               status: 'approved',
               decision: 'approve',
-              card_summary: `single-use ${provider.name} card ending ${last4}, good for one transaction and one hour${cardFilled ? ', filled into the browser' : ''}`,
+              card_summary: cardFilled
+                ? `single-use ${provider.name} card ending ${last4}, good for one transaction and one hour, filled into the browser`
+                : `single-use ${provider.name} card ending ${last4} was issued, but not filled into the browser`,
               card_filled: cardFilled,
             },
           });
@@ -1461,13 +1552,18 @@ async function settlePayment(item: Item, approved: boolean): Promise<void> {
     systemNote(`I can't finish that payment: ${failure}. The approval stands for ${money(c.amount_cents ?? 0, c.currency ?? 'USD')}.`, c.task_id, channel);
   }
   const sessionId = c.session_id ?? (c.task_id ? tasks.sessionOf(c.task_id) : null) ?? mainSessionId();
-  const prompt = paymentPrompt(c, item.id, { approved }, { cardFilled, last4 });
+  let prompt = paymentPrompt(c, item.id, { approved }, { cardFilled, last4 });
+  if (approved && !cardFilled && last4 && !prompt.includes(last4)) {
+    const total = money(c.amount_cents ?? 0, c.currency ?? 'USD');
+    const merchant = c.merchant ?? 'the merchant';
+    prompt = `[payment ${item.id}] APPROVED: ${total} at ${merchant}. A single-use card ending ${last4} was issued, but it could not be filled into your live browser; the full card digits are never stored or shared here, so do not submit checkout or guess the numbers. Open the exact checkout form and ask how to proceed.`;
+  }
   enqueue({
     kind: c.task_id ? 'task' : 'decision',
     sessionId,
     channelId: channel,
     taskId: c.task_id ?? null,
-    input: failure ? `${prompt} Note before you continue: ${failure}` : prompt,
+    input: failure && !prompt.includes(failure) ? `${prompt} Note before you continue: ${failure}` : prompt,
   });
 }
 
@@ -1555,21 +1651,23 @@ async function requestStop(id: string): Promise<'stopped' | 'gone' | 'unknown'> 
  */
 async function stopRun(l: Lane, run: ActiveRun): Promise<void> {
   if (run.finished) return;
+  run.stopRequested = true;
   // Hermes has not answered with a run_id yet, so there is nothing to cancel. Remember the request instead of
   // returning silently: `launchRun` honours it the moment the id lands. This is the Stop tapped in the first seconds
   // of a turn — the one window where a cancel used to be dropped and the agent kept working anyway.
-  if (!run.id) {
-    run.stopRequested = true;
-    return;
-  }
+  if (!run.id) return;
   // Unreachable, refused or too slow: there is nothing left to wait for.
   if ((await requestStop(run.id)) !== 'stopped') {
-    finish(l, run, 'stopped');
+    await hydratePendingSteer(run);
+    if (!run.finished) finish(l, run, 'stopped');
     return;
   }
   const deadline = Date.now() + STOP_GRACE_MS;
   while (!run.finished && Date.now() < deadline) await Bun.sleep(50);
-  if (!run.finished) finish(l, run, 'stopped');
+  if (!run.finished) {
+    await hydratePendingSteer(run);
+    if (!run.finished) finish(l, run, 'stopped');
+  }
 }
 
 export async function stopMain() {
@@ -1581,7 +1679,7 @@ export async function cancelTask(id: string) {
   const t = tasks.get(id);
   if (!t) throw new Error('task not found');
   if (['done', 'failed', 'cancelled'].includes(t.status)) return;
-  putTask({ ...t, status: 'cancelled', progress: '' });
+  syncRoutineResult(putTask({ ...t, status: 'cancelled', progress: '' }));
   if (!t.background) {
     // A mirrored main-thread turn: cancelling it means stopping that turn.
     const l = mainLane();
@@ -1625,7 +1723,7 @@ export async function steerTask(taskId: string, text: string): Promise<{ deliver
   if (t.status !== 'running' && t.status !== 'waiting') throw new UserError(`that task is ${t.status}, so there is nothing to steer right now`, 409);
   const sid = tasks.sessionOf(taskId);
   const run = (sid ? lanes.get(sid)?.active : undefined) ?? null;
-  if (!run || run.finished || !run.id || run.spec.taskId !== taskId) {
+  if (!run || run.finished || run.stopRequested || !run.id || run.spec.taskId !== taskId) {
     throw new UserError('that task is not running right now', 409);
   }
   const channelId = channelOfSpec(run.spec);
@@ -1773,12 +1871,23 @@ interface Origin {
 
 /** `task_id` a turn in the main conversation passes when several turns are live and a tool call is refused. */
 const MAIN_ORIGIN = 'main';
+/** `task_id` prefix a non-task topic-channel turn passes (`channel:<id>`) to disambiguate itself. */
+const CHANNEL_ORIGIN_PREFIX = 'channel:';
 
 /** Work out which session a tool call came from. */
 async function originOf(tool: string, taskId: unknown): Promise<Origin> {
   const explicit = typeof taskId === 'string' ? taskId.trim() : '';
   // "main" is how a turn in the main conversation answers the ambiguity error below when background work is running.
   if (explicit === MAIN_ORIGIN) return mainOrigin();
+  if (explicit.startsWith(CHANNEL_ORIGIN_PREFIX)) {
+    const cid = explicit.slice(CHANNEL_ORIGIN_PREFIX.length).trim();
+    const ch = cid ? channels.get(cid) : null;
+    if (!ch || ch.archived_at != null) {
+      throw new Error(`No Hermes Duet channel ${cid || explicit}, so nothing was posted. Check the channel id, or pass "main" for the main conversation.`);
+    }
+    const run = lanes.get(ch.session_id)?.active ?? undefined;
+    return { sessionId: ch.session_id, taskId: null, channelId: ch.id, run };
+  }
   if (explicit) {
     const sid = tasks.sessionOf(explicit);
     if (!sid) throw new Error(`No Hermes Duet task ${explicit}, so nothing was posted. Check the id in your instructions, or pass "main" for the main conversation.`);
@@ -1811,13 +1920,24 @@ function mainOrigin(): Origin {
   return { sessionId: m.sessionId, taskId: null, channelId: channelOfSpec(spec), run: m.active ?? undefined };
 }
 
+function runOriginLabel(r: ActiveRun): { where: string; arg: string } {
+  if (r.spec.taskId) return { where: `task ${r.spec.taskId}`, arg: r.spec.taskId };
+  const chId = channelOfSpec(r.spec);
+  if (chId !== GENERAL_CHANNEL) {
+    const ch = channels.get(chId);
+    return { where: ch ? `channel #${ch.name} (${chId})` : `channel ${chId}`, arg: `"${CHANNEL_ORIGIN_PREFIX}${chId}"` };
+  }
+  return { where: 'the main conversation', arg: '"main"' };
+}
+
 /**
  * More than one live turn could have called this tool, and they are not distinguishable. The call is dropped and the
  * agent is told how to place it, so a file or a card never lands in a conversation it does not belong to.
  */
 function ambiguousOrigin(tool: string, runs: ActiveRun[]): Error {
-  const where = runs.map((r) => (r.spec.taskId ? `task ${r.spec.taskId}` : 'the main conversation'));
-  const remedy = runs.map((r) => (r.spec.taskId ? r.spec.taskId : '"main"')).join(' or ');
+  const labels = runs.map(runOriginLabel);
+  const where = labels.map((l) => l.where);
+  const remedy = [...new Set(labels.map((l) => l.arg))].join(' or ');
   return new Error(
     `Nothing was posted: ${runs.length} turns are running at once (${where.join(', ')}) and more than one is using ${tool}, so I can't tell which one this belongs to. Call ${tool} again with task_id: ${remedy}.`,
   );
@@ -1855,6 +1975,7 @@ function postCard(card: CardData, o: Origin): Item {
   if (o.run) {
     closeSegment(o.run);
     o.run.cards++;
+    saveRunMeta(o.run);
   }
   const withChannel = { ...card, task_id: o.taskId ?? undefined, session_id: o.sessionId, channel_id: o.channelId };
   return put(newItem('card', { card: withChannel, run_id: o.run?.id ?? null, task_id: o.taskId, channel_id: o.channelId }));
@@ -1892,9 +2013,18 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
       const title = req(args.title, 'title', 140);
       const summary = str(args.summary, 8000);
       const draft = str(args.draft, DRAFT_MAX).trim() || undefined;
-      const refused = approvalPolicyRefusal({ action: fields.action, title, summary, destination: fields.destination, content: fields.content ?? draft });
+      const refused = approvalPolicyRefusal({ action: fields.action, title, summary, destination: fields.destination, content: fields.content, draft });
       if (refused) throw new Error(refused);
-      const findings = scanOutbound([title, draft ?? '', fields.content ?? '', summary].join('\n'));
+      const seenFindings = new Set<string>();
+      const findings = [title, draft, fields.content, summary]
+        .filter((s): s is string => typeof s === 'string' && s.length > 0)
+        .flatMap((s) => scanOutbound(s))
+        .filter((f) => {
+          const key = `${f.tier}:${f.label}:${f.redacted}`;
+          if (seenFindings.has(key)) return false;
+          seenFindings.add(key);
+          return true;
+        });
       const blocked = findings.filter((f) => f.tier === 'never_share');
       if (blocked.length) {
         const kinds = [...new Set(blocked.map((f) => f.label))].join(', ');
@@ -1929,7 +2059,7 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
       if (o.taskId) markTaskWaiting(o.taskId);
       const replaced = swap.apply();
       // Same tag as the withdrawn card's push, so the new banner takes the old one's place on the lock screen.
-      pushSafe({ ...approvalPush(item), channel_id: o.channelId, ...(replaced && { tag: replaced }) }, { ignoreQuiet: true });
+      pushSafe({ ...approvalPush(item), url: cardUrl(item.id, o.channelId), channel_id: o.channelId, ...(replaced && { tag: replaced }) }, { ignoreQuiet: true });
       return `Approval card ${item.id} is on the user's phone.${swap.note} They have NOT approved yet. Do not take the action now. Tell them in one short line what you're waiting on, then end your turn. You'll get "[approval ${item.id}] APPROVED" or "NOT NOW" as a new message.`;
     }
     case 'request_payment': {
@@ -1946,7 +2076,7 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
           body: `${total} at ${input.merchant}. ${input.items.map((i) => i.title).slice(0, 3).join(', ')}`,
           card_id: item.id,
           tag: item.id,
-          url: `/?card=${item.id}`,
+          url: cardUrl(item.id, o.channelId),
           // Spending money is consent: it always reaches the phone, like any approval.
           category: 'approval',
           channel_id: o.channelId,
@@ -1966,7 +2096,7 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
       const item = postCard({ type: 'choice', title: req(args.question, 'question', 200), body: str(args.context, 4000) || undefined, options, status: 'pending' }, o);
       if (o.taskId) markTaskWaiting(o.taskId);
       const replaced = swap.apply();
-      pushSafe({ title: 'Quick question', body: item.card!.title, card_id: item.id, tag: replaced ?? item.id, url: `/?card=${item.id}`, category: 'question', channel_id: o.channelId });
+      pushSafe({ title: 'Quick question', body: item.card!.title, card_id: item.id, tag: replaced ?? item.id, url: cardUrl(item.id, o.channelId), category: 'question', channel_id: o.channelId });
       return `Question card ${item.id} posted.${swap.note} End your turn now; the answer arrives as "[answer ${item.id}] …".`;
     }
     case 'withdraw_card': {
@@ -1995,7 +2125,10 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
         },
         o,
       );
-      if (o.run) o.run.briefs++;
+      if (o.run) {
+        o.run.briefs++;
+        saveRunMeta(o.run);
+      }
       if (morning) expireBriefRetries();
       const links = unlinked.length ? ` No standing page has the id ${unlinked.join(', ')}, so those lines don't open a page.` : '';
       // A quiet morning (Watching only) is posted but not pushed: nothing needs the user, so nothing interrupts them.
@@ -2006,7 +2139,7 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
           // Decisions only: Watching never notifies.
           body: [...entries.slice(0, 3).map((e) => `• ${e.title}`), ...(entries.length > 3 ? [`+${entries.length - 3} more`] : [])].join('\n'),
           tag: morning ? 'brief' : 'checkin',
-          url: `/?card=${item.id}`,
+          url: cardUrl(item.id, o.channelId),
           category: morning ? 'brief' : 'checkin',
           channel_id: o.channelId,
         },
@@ -2022,16 +2155,35 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
       const sources = parseSources(args.sources, sourceExists);
       const patch: Partial<CardData> = { type, title: req(args.title, 'title', 140) };
       if (args.body !== undefined) patch.body = str(args.body, 8000);
-      if (Array.isArray(args.checklist)) patch.checklist = args.checklist.slice(0, 200).map((c: any) => ({ text: str(c?.text, 300), done: !!c?.done }));
-      if (Array.isArray(args.metrics))
-        patch.metrics = args.metrics.slice(0, 24).map((m: any) => ({
-          label: str(m?.label, 60),
-          value: str(m?.value, 40),
-          delta: str(m?.delta, 30) || undefined,
-          tone: ['good', 'bad', 'neutral'].includes(m?.tone) ? m.tone : undefined,
-        }));
-      const existing = typeof args.card_id === 'string' ? items.get(args.card_id) : null;
-      if (existing?.kind === 'card' && existing.card && ['checklist', 'metrics', 'note'].includes(existing.card.type)) {
+      if (Array.isArray(args.checklist)) {
+        patch.checklist = args.checklist
+          .slice(0, 200)
+          .map((c: any) => ({ text: str(c?.text, 300).trim(), done: !!c?.done }))
+          .filter((c) => c.text.length > 0);
+      }
+      if (Array.isArray(args.metrics)) {
+        patch.metrics = args.metrics
+          .slice(0, 24)
+          .map((m: any) => ({
+            label: str(m?.label, 60).trim(),
+            value: str(m?.value, 40).trim(),
+            delta: str(m?.delta, 30).trim() || undefined,
+            tone: ['good', 'bad', 'neutral'].includes(m?.tone) ? m.tone : undefined,
+          }))
+          .filter((m) => m.label.length > 0 && m.value.length > 0);
+      }
+      const cardId = str(args.card_id, 64).trim();
+      if (cardId) {
+        const existing = items.get(cardId);
+        if (!existing || existing.kind !== 'card' || !existing.card || !['checklist', 'metrics', 'note'].includes(existing.card.type)) {
+          throw new Error(`Card ${cardId} cannot be updated: it is not a checklist, metrics or note card.`);
+        }
+        if (existing.card.session_id !== o.sessionId) {
+          throw new Error(`Card ${cardId} cannot be updated: it belongs to another conversation.`);
+        }
+        if (existing.card.type !== type) {
+          throw new Error(`Card ${cardId} is a ${existing.card.type} card, so it cannot be updated as ${type}.`);
+        }
         existing.card = { ...existing.card, ...patch, ...(sources !== undefined ? { sources } : {}), updated_label: undefined };
         put(existing);
         return `Updated card ${existing.id}.`;
@@ -2052,7 +2204,14 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
         : `Delivered "${entry.title}" (file ${entry.id}). The user sees it in the thread and the Make tab.`;
     }
     case 'start_task': {
-      const t = startTask(req(args.title, 'title', 120), req(args.instructions, 'instructions', 20_000), Array.isArray(args.steps) ? args.steps.map((s) => str(s, 200)) : []);
+      liveChannel(o.channelId);
+      const t = startTask(
+        req(args.title, 'title', 120),
+        req(args.instructions, 'instructions', 20_000),
+        Array.isArray(args.steps) ? args.steps.map((s) => str(s, 200)) : [],
+        undefined,
+        o.channelId,
+      );
       return `Started background task ${t.id} ("${t.title}"). It's in the user's Tasks tab. Tell them in one line, then end your turn. When it finishes, the user gets a handover card in the thread, and a note with its result reaches you with their next message.`;
     }
     case 'save_page':
@@ -2096,7 +2255,7 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
       const noteBody = str(args.body, 300);
       // A notification is outward-facing text too: secrets never leave through it either. Scan the title as well;
       // it is short, but it is rendered on the lock screen just like the body.
-      const secret = scanOutbound(`${noteTitle}\n${noteBody}`).find((f) => f.tier === 'never_share');
+      const secret = [noteTitle, noteBody].flatMap((s) => scanOutbound(s)).find((f) => f.tier === 'never_share');
       if (secret) {
         throw new Error(
           `Notification blocked: the text looks like it contains ${secret.label} (${secret.redacted}). Remove the secret and post again without it — never paste the full value.`,
@@ -2105,7 +2264,7 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
       // The push names a card, so tapping it lands on something, a dismissed banner isn't the only record, and
       // quiet hours hold it for "While you were away" instead of dropping it.
       const item = postCard({ type: 'note', title: noteTitle, body: noteBody || undefined, status: 'info', alert: true }, o);
-      const sent = await notify({ title: item.card!.title, body: item.card!.body ?? '', card_id: item.id, tag: item.id, url: `/?card=${item.id}`, category: 'agent', channel_id: o.channelId });
+      const sent = await notify({ title: item.card!.title, body: item.card!.body ?? '', card_id: item.id, tag: item.id, url: cardUrl(item.id, o.channelId), category: 'agent', channel_id: o.channelId });
       if (sent) return `Notification sent. It is also card ${item.id} in the thread.`;
       return inQuietHours(settings.get())
         ? `Card ${item.id} is in the thread. Quiet hours are on, so the push is held until they end.`
@@ -2149,7 +2308,6 @@ function deliverFile(a: { path: string; title: string; summary?: string }, o: Or
   const dir = join(config.dataDir, 'files', id);
   mkdirSync(dir, { recursive: true });
   const dest = join(dir, name);
-  copyFileSync(src, dest);
   const mime = MIME[extname(name).toLowerCase()] ?? 'application/octet-stream';
   // A page refresh's file replaces the page's current version, but only if it's the same kind of file, so a
   // stray screenshot or CSV from the same run can't take the dashboard's place.
@@ -2166,12 +2324,18 @@ function deliverFile(a: { path: string; title: string; summary?: string }, o: Or
     ...(version && { page_id: version.id }),
     created_at: Date.now(),
   };
-  // The new file and the standing page's pointer to it are one unit: a crash between them leaves the page serving a
-  // version the file table has already replaced.
-  tx(() => {
-    files.add(entry, dest);
-    if (version) putPage({ ...version, file_id: id, refreshed_at: entry.created_at });
-  });
+  try {
+    copyFileSync(src, dest);
+    // The new file and the standing page's pointer to it are one unit: a crash between them leaves the page serving a
+    // version the file table has already replaced.
+    tx(() => {
+      files.add(entry, dest);
+      if (version) putPage({ ...version, file_id: id, refreshed_at: entry.created_at });
+    });
+  } catch (e) {
+    rmSync(dir, { recursive: true, force: true });
+    throw e;
+  }
   broadcast({ type: 'file', file: entry });
   // A background task's files arrive together on its handover card instead of one card each mid-run.
   if (!backgroundTask(o.taskId)) postCard({ type: 'file', title: a.title, body: a.summary || undefined, file_id: id, status: 'info' }, o);
@@ -2232,14 +2396,16 @@ export function saveRoutine(raw: Record<string, unknown>): Routine {
   const id = String(raw.routine_id ?? raw.id ?? '').trim();
   const existing = id ? routines.get(id) : null;
   if (id && !existing) throw new UserError(`no routine ${id}`, 404);
-  if (input.channel_id && !channels.get(input.channel_id)) throw new UserError('no such channel', 404);
   const now = Date.now();
   // An update that does not mention `enabled` keeps the state it had: the edit form changes the schedule, not whether
   // the routine is paused, so saving it must not silently resume one the user paused.
   const enabled = raw.enabled === undefined ? (existing ? existing.enabled : true) : raw.enabled !== false;
+  const clearChannel = 'channel_id' in raw && (raw.channel_id === null || (typeof raw.channel_id === 'string' && !raw.channel_id.trim()));
   const routine: Routine = existing
     ? { ...existing, ...input, enabled, updated_at: now }
     : { id: newId(), ...input, enabled, created_at: now, updated_at: now };
+  if (clearChannel) delete routine.channel_id;
+  if (routine.channel_id) liveChannel(routine.channel_id);
   routine.next_run = nextRun(routine.schedule, now, settings.get().timezone);
   return putRoutine(routine);
 }
@@ -2248,17 +2414,20 @@ export function saveRoutine(raw: Record<string, unknown>): Routine {
  * Start a routine's task now. The scheduler advances `next_run` before calling this; this stamps the run on the
  * routine (last_run, last_task_id, "Started") and broadcasts it, so a slow run can't be picked up twice.
  */
-export function startRoutine(routine: Routine): Routine {
-  const channel = routine.channel_id ? channels.get(routine.channel_id) : channels.general();
-  if (!channel) throw new UserError('no such channel', 404);
+export function startRoutine(routine: Routine, opts?: { recomputeNext?: boolean }): Routine {
+  const channel = liveChannel(routine.channel_id);
   const task = startTask(routine.title, routine.prompt, [], undefined, channel.id, routine.id);
   const now = Date.now();
+  const next_run =
+    !opts?.recomputeNext && routine.next_run != null && routine.next_run > now
+      ? routine.next_run
+      : nextRun(routine.schedule, now, settings.get().timezone);
   return putRoutine({
     ...routine,
     last_run: now,
     last_task_id: task.id,
     last_result: 'Started',
-    next_run: nextRun(routine.schedule, now, settings.get().timezone),
+    next_run,
     updated_at: now,
   });
 }
@@ -2267,7 +2436,7 @@ export function startRoutine(routine: Routine): Routine {
 export function runRoutineNow(id: string): Routine {
   const routine = routines.get(id);
   if (!routine) throw new UserError('no such routine', 404);
-  return startRoutine(routine);
+  return startRoutine(routine, { recomputeNext: true });
 }
 
 /** Pause or resume. Resuming recomputes the next run from now, so a routine doesn't fire one it missed while paused. */
@@ -2330,26 +2499,28 @@ export function recoverOrphans() {
     const last = resumed ? segments[segments.length - 1] : undefined;
     // Only a segment that was still streaming when the run stopped is continued; a closed one stays closed.
     const open = last?.streaming ? last : undefined;
+    const lastNonEmpty = resumed ? [...segments].reverse().find((s) => !s.streaming && (s.text ?? '').trim()) : undefined;
     const run: ActiveRun = {
       id: row.id,
       spec,
       startedAt: row.started_at,
       activity,
       assistant: open ? { ...open, streaming: true } : null,
-      text: last?.text ?? '',
+      text: resumed ? segments.map((s) => s.text ?? '').join('') : '',
       segText: open?.text ?? '',
-      lastText: last && !last.streaming ? (last.text ?? '') : '',
+      lastText: lastNonEmpty?.text ?? '',
       pendingWs: '',
       // Seeded from the saved activity so a run Hermes no longer knows still shows (and reports) its steps;
       // a replay that does arrive matches them by tool_call_id instead of adding duplicates.
       steps: (activity?.activity?.steps ?? []).map((s) => ({ ...s })),
       lastSeq: resumed ? meta.lastSeq : 0,
-      cards: 0,
-      briefs: 0,
+      cards: typeof meta.cards === 'number' ? meta.cards : 0,
+      briefs: typeof meta.briefs === 'number' ? meta.briefs : 0,
       finished: false,
       abort: new AbortController(),
       lastSave: 0,
       metaAt: 0,
+      dirtyMeta: false,
       stopUnconfirmed: false,
       stopRequested: false,
       reuse: resumed ? [] : segments,
