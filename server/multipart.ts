@@ -7,9 +7,9 @@ import { join } from 'node:path';
 import { UserError } from './errors';
 
 const te = new TextEncoder();
-const dec = new TextDecoder();
 const HEADER_CAP = 16 * 1024;
 const FIELD_CAP = 8 * 1024;
+const MAX_PARTS = 64;
 
 export interface MultipartStaged {
   path: string;
@@ -56,9 +56,12 @@ const concat = (a: Uint8Array, b: Uint8Array): Uint8Array => {
 
 /** `name=`-style content-disposition attributes (with quoted or bare values). */
 function headerAttr(headers: string, attr: string): string | null {
-  const m = headers.match(new RegExp(`${attr}=(?:"((?:[^"\\\\]|\\\\.)*)"|([^;\\r\\n]+))`, 'i'));
+  const disp = headerValue(headers, 'content-disposition');
+  if (!disp) return null;
+  const m = disp.match(new RegExp(`(?:^|[;\\s])${attr}=(?:"((?:[^"\\\\]|\\\\.)*)"|([^;\\r\\n]*))`, 'i'));
   if (!m) return null;
-  return (m[1] ?? m[2])?.trim() ?? null;
+  const raw = m[1] !== undefined ? m[1].replace(/\\(.)/g, '$1') : (m[2] ?? '');
+  return raw.trim();
 }
 
 /** `Header: value`-style part headers, e.g. `content-type: image/png`. */
@@ -68,13 +71,13 @@ function headerValue(headers: string, name: string): string | null {
 }
 
 type Part =
-  | { mode: 'text'; name: string; text: string[] }
+  | { mode: 'text'; name: string; dec: TextDecoder; chunks: string[]; bytes: number }
   | { mode: 'file'; name: string; fd: number; size: number; path: string; filename: string; mime: string };
 
 /**
  * Stream one multipart body. The first part named in `fileFields` (that carries a filename) is
  * staged to `tmpDir` at 0600 under the byte cap; every other part is collected as a text field.
- * `UserError` 413 is thrown the moment the staged file would exceed `cap`, cancelling the stream.
+ * `UserError` 413 is thrown the moment the staged file or cumulative payload would exceed `cap`, cancelling the stream.
  * The caller owns — and must unlink — the staged file named in the result.
  */
 export async function parseMultipartCapped(
@@ -93,14 +96,20 @@ export async function parseMultipartCapped(
 
   if (!stream) bad('send the upload as multipart form data');
   const reader = stream.getReader();
+  const headerDec = new TextDecoder();
   let buf: Uint8Array = new Uint8Array(0);
   let state: 'opener' | 'headers' | 'data' | 'after-delim' = 'opener';
   let done = false;
   let part: Part | null = null;
+  let partCount = 0;
+  let totalPayloadBytes = 0;
+  let streamBytes = 0;
+  const maxStreamBytes = cap + Math.min(64 * 1024, Math.max(4096, cap * 4));
+  const capError = () => new UserError(`files are limited to ${Math.max(1, Math.round(cap / 1024 / 1024))} MB`, 413);
 
   mkdirSync(tmpDir, { recursive: true, mode: 0o700 });
 
-  /** Failure-path teardown: close the staged file and delete it. */
+  /** Failure-path teardown: close any open file descriptor and unlink staged files. */
   const cleanupFail = () => {
     if (part?.mode === 'file') {
       try {
@@ -109,6 +118,10 @@ export async function parseMultipartCapped(
       rmSync(part.path, { force: true });
     }
     part = null;
+    if (file) {
+      rmSync(file.path, { force: true });
+      file = null;
+    }
   };
 
   /** Normal close-out: text parts commit to `fields`; the file part keeps its staged file. */
@@ -116,7 +129,7 @@ export async function parseMultipartCapped(
     const p = part;
     part = null;
     if (!p) return;
-    if (p.mode === 'text') fields[p.name] = p.text.join('');
+    if (p.mode === 'text') fields[p.name] = p.chunks.join('') + p.dec.decode();
     else {
       closeSync(p.fd);
       file = { path: p.path, size: p.size, filename: p.filename, mime: p.mime };
@@ -125,16 +138,23 @@ export async function parseMultipartCapped(
 
   const deliver = (chunk: Uint8Array) => {
     if (!part || chunk.length === 0) return;
+    totalPayloadBytes += chunk.length;
+    if (totalPayloadBytes > cap) {
+      reader.cancel().catch(() => {});
+      cleanupFail();
+      throw capError();
+    }
     if (part.mode === 'text') {
-      if (part.text.join('').length + chunk.length > FIELD_CAP) bad('form fields are too long');
-      part.text.push(dec.decode(chunk));
+      if (part.bytes + chunk.length > FIELD_CAP) bad('form fields are too long');
+      part.bytes += chunk.length;
+      part.chunks.push(part.dec.decode(chunk, { stream: true }));
       return;
     }
     part.size += chunk.length;
     if (part.size > cap) {
       reader.cancel().catch(() => {});
       cleanupFail();
-      throw new UserError(`files are limited to ${Math.max(1, Math.round(cap / 1024 / 1024))} MB`, 413);
+      throw capError();
     }
     writeSync(part.fd, chunk);
   };
@@ -162,16 +182,19 @@ export async function parseMultipartCapped(
             if (buf.length > HEADER_CAP) bad('upload headers are too long');
             break;
           }
-          const headers = dec.decode(buf.subarray(0, i)).toLowerCase();
+          if (++partCount > MAX_PARTS) bad('too many form parts');
+          const headers = headerDec.decode(buf.subarray(0, i));
           buf = buf.subarray(i + 4);
           const name = String(headerAttr(headers, 'name') ?? '');
           if (!name) bad('upload ended early');
           const filename = headerAttr(headers, 'filename');
           if (fileFields.includes(name) && filename !== null) {
+            if (file !== null) bad('send only one file at a time');
             const path = join(tmpDir, `incoming-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`);
-            part = { mode: 'file', name, fd: openSync(path, 'w', 0o600), size: 0, path, filename, mime: headerValue(headers, 'content-type') ?? '' };
+            const mime = (headerValue(headers, 'content-type') ?? '').toLowerCase();
+            part = { mode: 'file', name, fd: openSync(path, 'w', 0o600), size: 0, path, filename, mime };
           } else {
-            part = { mode: 'text', name, text: [] };
+            part = { mode: 'text', name, dec: new TextDecoder(), chunks: [], bytes: 0 };
           }
           state = 'data';
           progressed = true;
@@ -228,20 +251,25 @@ export async function parseMultipartCapped(
         if (!done) bad('upload ended early');
         break;
       }
-      if (value && value.length) buf = concat(buf, value);
+      if (value && value.length) {
+        streamBytes += value.length;
+        if (streamBytes > maxStreamBytes) {
+          reader.cancel().catch(() => {});
+          cleanupFail();
+          throw capError();
+        }
+        buf = concat(buf, value);
+      }
       // No delimiter anywhere in a buffer this large: junk, refuse instead of buffering forever.
       if (buf.length > cap + HEADER_CAP + 4096) {
         reader.cancel().catch(() => {});
+        cleanupFail();
         bad('upload ended early');
       }
     }
   } catch (e) {
-    if (!(e instanceof UserError)) {
-      reader.cancel().catch(() => {});
-      cleanupFail();
-    } else if (part) {
-      cleanupFail();
-    }
+    reader.cancel().catch(() => {});
+    cleanupFail();
     throw e;
   }
   return { fields, file };

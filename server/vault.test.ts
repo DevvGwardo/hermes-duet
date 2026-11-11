@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { __setVaultHas, __setVaultRunner, commandFor, parseLogin, readLogin, safeDomain, vaultPlan } from './vault';
+import { __setVaultHas, __setVaultRunner, commandFor, parseLogin, readLogin, safeDomain, vaultPlan, vaults } from './vault';
 
 const has = (present: string[]) => (cmd: string) => present.includes(cmd);
 
@@ -102,8 +102,10 @@ describe('commandFor', () => {
 describe("readLogin with a fake executor", () => {
   const saved = { op: process.env.DUET_OP_CMD, bw: process.env.DUET_BW_CMD };
   afterEach(() => {
-    process.env.DUET_OP_CMD = saved.op;
-    process.env.DUET_BW_CMD = saved.bw;
+    if (saved.op === undefined) delete process.env.DUET_OP_CMD;
+    else process.env.DUET_OP_CMD = saved.op;
+    if (saved.bw === undefined) delete process.env.DUET_BW_CMD;
+    else process.env.DUET_BW_CMD = saved.bw;
   });
 
   test("passes the domain as exactly one argv word", async () => {
@@ -133,6 +135,50 @@ describe("readLogin with a fake executor", () => {
       const err = await readLogin("example.com", "1password").catch((e: Error) => e);
       expect(err).toBeInstanceOf(Error);
       expect(String(err).toLowerCase()).not.toContain("hunter2");
+    } finally {
+      __setVaultRunner(prevRunner);
+      __setVaultHas(prevHas);
+    }
+  });
+});
+
+describe('Windows quoted paths and custom vault binaries', () => {
+  const saved = { op: process.env.DUET_OP_CMD, bw: process.env.DUET_BW_CMD };
+  afterEach(() => {
+    if (saved.op === undefined) delete process.env.DUET_OP_CMD;
+    else process.env.DUET_OP_CMD = saved.op;
+    if (saved.bw === undefined) delete process.env.DUET_BW_CMD;
+    else process.env.DUET_BW_CMD = saved.bw;
+  });
+
+  test('vaultPlan and commandFor preserve spaces inside quoted Windows paths', () => {
+    const template = '"C:\\Program Files\\1Password CLI\\op.exe" item get {domain} --format json';
+    const plan = vaultPlan({ DUET_OP_CMD: template }, has(['C:\\Program Files\\1Password CLI\\op.exe']));
+    expect(plan[0].cmd).toBe('C:\\Program Files\\1Password CLI\\op.exe');
+    expect(plan[0].installed).toBe(true);
+    expect(commandFor(template, 'example.com')).toEqual({
+      cmd: 'C:\\Program Files\\1Password CLI\\op.exe',
+      args: ['item', 'get', 'example.com', '--format', 'json'],
+    });
+  });
+
+  test('vaults() invokes the configured p.cmd instead of hardcoded op/bw', async () => {
+    const called: Array<{ cmd: string; args: string[] }> = [];
+    const prevRunner = __setVaultRunner(async (cmd, args) => {
+      called.push({ cmd, args });
+      if (args[0] === 'whoami') return { out: 'alice@example.com', err: '', code: 0 };
+      return { out: JSON.stringify({ status: 'unlocked' }), err: '', code: 0 };
+    });
+    const prevHas = __setVaultHas(() => true);
+    process.env.DUET_OP_CMD = '"C:\\Tools\\1Password\\op.exe" item get {domain}';
+    process.env.DUET_BW_CMD = '"C:\\Tools\\Bitwarden\\bw.exe" get item {domain}';
+    try {
+      const list = await vaults();
+      expect(called).toEqual([
+        { cmd: 'C:\\Tools\\1Password\\op.exe', args: ['whoami'] },
+        { cmd: 'C:\\Tools\\Bitwarden\\bw.exe', args: ['status'] },
+      ]);
+      expect(list.every((v) => v.ready)).toBe(true);
     } finally {
       __setVaultRunner(prevRunner);
       __setVaultHas(prevHas);

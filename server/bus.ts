@@ -13,40 +13,57 @@ export function broadcast(ev: ServerEvent) {
 export function sseResponse(req: Request): Response {
   let sink: Sink;
   let ping: ReturnType<typeof setInterval> | null = null;
+  let onAbort: (() => void) | null = null;
+  const cleanup = (ctrl?: ReadableStreamDefaultController<Uint8Array>) => {
+    if (ping) {
+      clearInterval(ping);
+      ping = null;
+    }
+    if (sink) sinks.delete(sink);
+    if (onAbort) {
+      req.signal.removeEventListener('abort', onAbort);
+      onAbort = null;
+    }
+    if (ctrl) {
+      try {
+        ctrl.close();
+      } catch {}
+    }
+  };
   const stream = new ReadableStream({
     start(ctrl) {
+      if (req.signal.aborted) {
+        try {
+          ctrl.close();
+        } catch {}
+        return;
+      }
       sink = (chunk) => {
         // A stalled client must not grow the stream buffer without bound. At 64 queued chunks, drop the sink and let
         // EventSource reconnect: the client takes a fresh snapshot, exactly like the live-browser frame path.
         if (typeof ctrl.desiredSize === 'number' && ctrl.desiredSize < -64) {
-          sinks.delete(sink);
-          if (ping) clearInterval(ping);
-          try {
-            ctrl.close();
-          } catch {}
+          cleanup(ctrl);
           return;
         }
         try {
           ctrl.enqueue(enc.encode(chunk));
         } catch {
-          sinks.delete(sink);
+          cleanup(ctrl);
         }
       };
       sinks.add(sink);
       sink(`retry: 3000\n\ndata: ${JSON.stringify({ type: 'hello', at: Date.now() })}\n\n`);
+      if (req.signal.aborted || !sinks.has(sink)) {
+        cleanup(ctrl);
+        return;
+      }
       // Comment pings keep proxies (Cloudflare closes idle streams at ~100s) from dropping us.
       ping = setInterval(() => sink(': ping\n\n'), 25_000);
-      req.signal.addEventListener('abort', () => {
-        if (ping) clearInterval(ping);
-        sinks.delete(sink);
-        try {
-          ctrl.close();
-        } catch {}
-      });
+      onAbort = () => cleanup(ctrl);
+      req.signal.addEventListener('abort', onAbort, { once: true });
     },
     cancel() {
-      if (ping) clearInterval(ping);
-      sinks.delete(sink);
+      cleanup();
     },
   });
   return new Response(stream, {

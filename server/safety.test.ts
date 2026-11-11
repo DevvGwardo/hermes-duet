@@ -113,5 +113,34 @@ test('field validation requires recipients, destinations and good urls', () => {
   expect(() => validateApprovalFields({ action: 'post', destination: '#general', recipients: Array.from({ length: 21 }, (_, i) => `u${i}@x.com`) })).toThrow('at most 20');
   expect(() => validateApprovalFields({ action: 'send_email', destination: 'm', recipients: ['a'.repeat(201)] })).toThrow('200 characters');
   expect(() => validateApprovalFields({ action: 'send_email', destination: 'm', recipients: ['a\u0007@x.com'] })).toThrow('control characters');
+  expect(() => validateApprovalFields({ action: 'post', destination: '#general', url: 'https://example.com/\tfoo' })).toThrow('control characters');
+  expect(validateApprovalFields({ action: 'post', destination: '#general', url: 'HTTPS://Example.COM/path' }).url).toBe('https://example.com/path');
   expect(() => validateApprovalFields({ action: 'post', destination: '#general', content: 'x'.repeat(8001) })).toThrow('too long');
+});
+
+test('prefix digits never hide a card number and additional key formats are caught', () => {
+  for (const s of [
+    'ZIP 90210 4111-1111-1111-1111',
+    'ref 12 4111-1111-1111-1111',
+    'item 1 4111 1111 1111 1111 ok',
+    'Date 2026-11-10 4111-1111-1111-1111',
+  ]) {
+    const cards = scanOutbound(s).filter((f) => f.label === 'card number');
+    expect(cards.length).toBe(1);
+    expect(cards[0]!.redacted).toBe('4111…1111');
+  }
+  expect(scanOutbound('id 12345678901234567890').filter((f) => f.label === 'card number')).toEqual([]);
+
+  expect(scanOutbound(`temp creds ${'ASIA'}${'IOSFODNN7EXAMPLE'}`).some((f) => f.label === 'AWS access key')).toBe(true);
+  expect(scanOutbound(`stripe ${['sk', 'live', '51N9xAbCdEfGhIjKlMnOpQrSt'].join('_')}`).some((f) => f.label === 'API key')).toBe(true);
+  expect(scanOutbound(`slack ${['xoxb', '123456789012', 'abcdefghij'].join('-')}`).some((f) => f.label === 'API key')).toBe(true);
+  expect(scanOutbound(`pat ${['github', 'pat', '11ABCDEFG0123456789', 'abcdefghijklmnop'].join('_')}`).some((f) => f.label === 'GitHub token')).toBe(true);
+  expect(scanOutbound(`refresh ${['ghr', 'abcdefghij1234567890ABCD'].join('_')}`).some((f) => f.label === 'GitHub token')).toBe(true);
+  expect(scanOutbound(`-----BEGIN PRIVATE ${'KEY'}-----\nMIIEvwIBADANBgkqhkiG9w0B`).some((f) => f.label === 'private key')).toBe(true);
+});
+
+test('hard-block policy resists line breaks inside phrases', () => {
+  expect(approvalPolicyRefusal({ title: 'Pay', summary: 'Wire\ntransfer of $500' })).not.toBeNull();
+  expect(approvalPolicyRefusal({ title: 'Trade', content: 'Buy 10\n  shares of AAPL tomorrow' })).not.toBeNull();
+  expect(approvalPolicyRefusal({ title: 'Fix', draft: 'Reset the\r\npassword on the router' })).not.toBeNull();
 });

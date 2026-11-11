@@ -1,7 +1,8 @@
 import { chmodSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { join, normalize } from 'node:path';
+import { homedir } from 'node:os';
+import { join, normalize, sep } from 'node:path';
 import { brotliCompressSync, gzipSync } from 'node:zlib';
-import type { Snapshot } from '../shared/types';
+import type { Item, Snapshot } from '../shared/types';
 import { briefSpeech, speak, transcribeFile } from './audio';
 import { capabilities } from './capabilities';
 import { channelInput, channelPatch } from './channels';
@@ -16,7 +17,7 @@ import { UserError } from './errors';
 import { saveFileVersion } from './fileversions';
 import { hermes } from './hermes';
 import { MEMORY_MAX_BYTES, clearMemory, readMemory, writeMemory } from './memory';
-import { idempotencyKey, idempotentItem, limits, rememberIdempotent, type SlidingWindow } from './limits';
+import { idempotencyKey, idempotentInflight, idempotentItem, limits, rememberIdempotent, startIdempotentInflight, type SlidingWindow } from './limits';
 import { HARD_BLOCKS } from './safety';
 import { presence } from './presence';
 import { hasSubscriptions, notify, publicKey, saveSubscription } from './push';
@@ -49,11 +50,11 @@ function tooMany(bucket: SlidingWindow, device: string, what: string): Response 
   });
 }
 
-/** Read a request body with a hard byte cap, including chunked bodies that have no Content-Length. */
-export async function readTextCapped(req: Request, limit: number): Promise<string> {
+/** Read raw request bytes with a hard byte cap, including chunked bodies that have no Content-Length. */
+export async function readBytesCapped(req: Request, limit: number): Promise<Uint8Array> {
   const declared = Number(req.headers.get('content-length') ?? 0);
-  if (Number.isFinite(declared) && declared > limit) throw new Error('body too large');
-  if (!req.body) return '';
+  if (Number.isFinite(declared) && declared > limit) throw new UserError('body too large', 413);
+  if (!req.body) return new Uint8Array(0);
   const reader = req.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
@@ -63,17 +64,34 @@ export async function readTextCapped(req: Request, limit: number): Promise<strin
     size += value.byteLength;
     if (size > limit) {
       await reader.cancel().catch(() => {});
-      throw new Error('body too large');
+      throw new UserError('body too large', 413);
     }
     chunks.push(value);
   }
-  return new TextDecoder().decode(Buffer.concat(chunks));
+  return new Uint8Array(Buffer.concat(chunks));
+}
+
+/** Read a request body as UTF-8 text with a hard byte cap, including chunked bodies that have no Content-Length. */
+export async function readTextCapped(req: Request, limit: number): Promise<string> {
+  return new TextDecoder().decode(await readBytesCapped(req, limit));
 }
 
 async function body<T = any>(req: Request, limit = 256_000): Promise<T> {
-  if (!(req.headers.get('content-type') ?? '').includes('application/json')) throw new Error('expected JSON');
+  if (!(req.headers.get('content-type') ?? '').toLowerCase().includes('application/json')) {
+    throw new UserError('expected JSON', 400);
+  }
   const text = await readTextCapped(req, limit);
-  return (text ? JSON.parse(text) : {}) as T;
+  if (!text) return {} as T;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new UserError('invalid json', 400);
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new UserError('invalid json', 400);
+  }
+  return parsed as T;
 }
 
 /** Refuse an oversized body before it is buffered; the upload paths check the same limit per file. */
@@ -102,7 +120,7 @@ function messageText(raw: unknown, hasFiles: boolean): string {
  * message") are useful and stay; anything that looks like an errno path, a Hermes body or a stack fragment is replaced
  * with a code, and the detail is logged against a request id the user can quote.
  */
-const ERROR_CODES: Record<number, string> = { 400: 'bad_request', 401: 'not_paired', 403: 'forbidden', 404: 'not_found', 413: 'too_large', 429: 'too_many', 500: 'internal' };
+const ERROR_CODES: Record<number, string> = { 400: 'bad_request', 401: 'not_paired', 403: 'forbidden', 404: 'not_found', 409: 'conflict', 413: 'too_large', 429: 'too_many', 503: 'unavailable', 500: 'internal' };
 export function apiError(e: any, path: string): Response {
   const msg = String(e?.message ?? e ?? 'error');
   // A message a validator wrote for the person using the app (see server/errors.ts) keeps its own status and wording.
@@ -141,6 +159,7 @@ const API_METHODS: [RegExp, string[]][] = [
   [/^\/api\/pair$/, ['POST']],
   [/^\/api\/state$/, ['GET']],
   [/^\/api\/items$/, ['GET']],
+  [/^\/api\/items\/[\w-]+$/, ['GET']],
   [/^\/api\/channels$/, ['GET', 'POST']],
   [/^\/api\/channels\/[\w-]+$/, ['DELETE']],
   [/^\/api\/channels\/[\w-]+\/seen$/, ['POST']],
@@ -157,6 +176,7 @@ const API_METHODS: [RegExp, string[]][] = [
   [/^\/api\/suggestions$/, ['GET']],
   [/^\/api\/memory$/, ['GET', 'PUT', 'DELETE']],
   [/^\/api\/policy$/, ['GET']],
+  [/^\/api\/browser\/ws$/, ['GET']],
   [/^\/api\/browser\/(status|tabs|vaults)$/, ['GET']],
   [/^\/api\/browser\/(open|input|viewport|autofill)$/, ['POST']],
   [/^\/api\/messages$/, ['POST']],
@@ -169,8 +189,10 @@ const API_METHODS: [RegExp, string[]][] = [
   [/^\/api\/uploads\/[\w-]+$/, ['GET']],
   [/^\/api\/audio\/transcribe$/, ['POST']],
   [/^\/api\/cards\/[\w-]+\/act$/, ['POST']],
+  [/^\/api\/deliverables\/[\w-]+\/(action|approval)$/, ['POST']],
   [/^\/api\/runs\/stop$/, ['POST']],
   [/^\/api\/pages\/[\w-]+$/, ['DELETE']],
+  [/^\/api\/files\/[\w-]+\/meta$/, ['GET']],
   [/^\/api\/files\/[\w-]+$/, ['GET']],
   [/^\/api\/files\/[\w-]+\/versions$/, ['POST']],
   [/^\/api\/settings$/, ['PUT']],
@@ -223,6 +245,48 @@ const APP_CSP = [
 
 import * as browser from './browser';
 
+/** Strip local paths, URLs/ports, markup and stack fragments from route-specific error responses. */
+function safeRouteMessage(e: unknown, fallback: string): string {
+  if (e instanceof UserError) return e.message;
+  const msg = String((e as any)?.message ?? e ?? '');
+  if (!msg || msg.length > 200) return fallback;
+  if (
+    /([/\\{}<>]|https?:\/\/|\b\d{1,3}(?:\.\d{1,3}){3}\b|\blocalhost\b|ENOENT|EACCES|EPERM|Error:\s|\bat\s+\S|stderr)/i.test(
+      msg,
+    )
+  ) {
+    return fallback;
+  }
+  return msg;
+}
+
+function safeAudioError(e: unknown): string {
+  if (e instanceof UserError) return e.message;
+  const msg = String((e as any)?.message ?? '');
+  const httpCode = msg.match(/^Transcription failed \((\d{3})\):/);
+  if (httpCode) return `Transcription failed (${httpCode[1]})`;
+  return 'Transcription failed';
+}
+
+const activeChannel = (id: string) => {
+  const ch = channels.get(id);
+  return ch && ch.archived_at == null ? ch : null;
+};
+
+async function resolveIdempotent(scope: string): Promise<Item | null> {
+  for (;;) {
+    const previous = idempotentItem(scope);
+    if (previous) return items.get(previous) ?? null;
+    const pending = idempotentInflight(scope);
+    if (!pending) return null;
+    const settledId = await pending;
+    if (settledId) {
+      const hit = items.get(settledId);
+      if (hit) return hit;
+    }
+  }
+}
+
 // ---------- public app server (the tunnel points here) ----------
 export async function handleApp(req: Request, server?: any): Promise<Response> {
   const url = new URL(req.url);
@@ -239,17 +303,21 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
   if (path === '/api/version' && req.method === 'GET') return json({ version: VERSION });
 
   if (path === '/api/pair' && req.method === 'POST') {
-    // The brake is checked before the code is even looked at, and says how long the wait is instead of "invalid code".
-    const brake = pairBlocked();
-    if (brake.blocked) {
-      return json({ error: 'too many tries', code: 'too_many', retry_after_ms: brake.waitMs }, 429, {
-        'retry-after': String(Math.max(1, Math.ceil(brake.waitMs / 1000))),
-      });
+    try {
+      // The brake is checked before the code is even looked at, and says how long the wait is instead of "invalid code".
+      const brake = pairBlocked();
+      if (brake.blocked) {
+        return json({ error: 'too many tries', code: 'too_many', retry_after_ms: brake.waitMs }, 429, {
+          'retry-after': String(Math.max(1, Math.ceil(brake.waitMs / 1000))),
+        });
+      }
+      const { code } = await body<{ code?: string }>(req);
+      const token = await redeemPairCode(String(code ?? ''), req.headers.get('user-agent') ?? 'device');
+      if (!token) return err(401, 'invalid or expired code');
+      return json({ ok: true }, 200, { 'set-cookie': deviceCookie(token, isHttps(req)) });
+    } catch (e: any) {
+      return apiError(e, path);
     }
-    const { code } = await body<{ code?: string }>(req);
-    const token = await redeemPairCode(String(code ?? ''), req.headers.get('user-agent') ?? 'device');
-    if (!token) return err(401, 'invalid or expired code');
-    return json({ ok: true }, 200, { 'set-cookie': deviceCookie(token, isHttps(req)) });
   }
 
   /**
@@ -258,11 +326,12 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
    */
   const hookMatch = path.match(/^\/api\/webhooks\/([\w-]{8,64})$/);
   if (hookMatch && req.method === 'POST') {
-    // The token is the only credential on this route: count it, throttle it per source, and never log it.
-    if (!webhookMatches(webhookToken(), hookMatch[1])) return err(401, 'bad webhook token');
-    const ip = inboundIp(req);
+    // Rate-limit per source IP BEFORE checking the token so invalid token guesses cannot brute-force unrestrictedly.
+    const ip = inboundIp(req, server?.requestIP?.(req)?.address);
     if (!webhookIpReady(ip)) return err(429, 'too many webhooks');
     recordWebhookIp(ip);
+    // The token is the only credential on this route: count it, throttle it per source, and never log it.
+    if (!webhookMatches(webhookToken(), hookMatch[1])) return err(401, 'bad webhook token');
     if (tooLarge(req, 256_000)) return err(413, 'payload too large');
     if (!webhookReady()) return err(429, 'too many webhooks');
     const kindRaw = url.searchParams.get('kind') ?? '';
@@ -317,11 +386,16 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
     if (path === '/api/items' && req.method === 'GET') {
       const before = url.searchParams.get('before') ?? '';
       const channel = url.searchParams.get('channel') ?? '';
-      if (channel && !channels.get(channel)) return err(404, 'no such channel');
+      if (channel && !activeChannel(channel)) return err(404, 'no such channel');
       // No cursor means "the newest page". Passing an empty id used to fall through to `items.get('')`, which is null,
       // so the route answered 200 with an empty thread — indistinguishable from an empty conversation.
       if (!before) return json(items.latest(100, channel || undefined));
       return json(items.before(before, 100, channel || undefined));
+    }
+    const itemMatch = path.match(/^\/api\/items\/([\w-]+)$/);
+    if (itemMatch && req.method === 'GET') {
+      const item = items.get(itemMatch[1]);
+      return item ? json({ item }) : err(404, 'no such item');
     }
 
     // ---- topic channels (see server/channels.ts) ----
@@ -330,7 +404,7 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
       const rawBody = await body(req);
       // An `id` of a channel that is still open edits it (the sheet's save path); anything else creates.
       if (typeof (rawBody as any)?.id === 'string' && (rawBody as any).id) {
-        const existing = channels.get((rawBody as any).id);
+        const existing = activeChannel((rawBody as any).id);
         if (!existing) return err(404, 'no such channel');
         const channel = channels.update(existing.id, channelPatch(rawBody));
         broadcast({ type: 'channel', channel: channel! });
@@ -348,13 +422,13 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
     }
     const channelSeen = path.match(/^\/api\/channels\/([\w-]+)\/seen$/);
     if (channelSeen && req.method === 'POST') {
-      if (!channels.get(channelSeen[1])) return err(404, 'no such channel');
+      if (!activeChannel(channelSeen[1])) return err(404, 'no such channel');
       channels.seen(channelSeen[1]);
       return json({ ok: true });
     }
     const channelItems = path.match(/^\/api\/channels\/([\w-]+)\/items$/);
     if (channelItems && req.method === 'GET') {
-      if (!channels.get(channelItems[1])) return err(404, 'no such channel');
+      if (!activeChannel(channelItems[1])) return err(404, 'no such channel');
       const before = url.searchParams.get('before') ?? '';
       if (before) return json(items.before(before, 100, channelItems[1]));
       return json(items.latest(100, channelItems[1]));
@@ -466,9 +540,10 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
       let host = '';
       try {
         host = await browser.currentHost();
+        const origin = await browser.currentOrigin();
         const login = await readLogin(host, which);
         try {
-          const filled = await browser.fillLogin(login.username, login.password, host);
+          const filled = await browser.fillLogin(login.username, login.password, origin || host);
           if (!filled.pass) return err(400, `Found the ${login.vault} login for ${host}, but there is no password field on the page.`);
           return json({ host, vault: login.vault, filled });
         } finally {
@@ -476,51 +551,92 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
           login.password = '';
         }
       } catch (e: any) {
-        return err(400, e?.message ?? 'Autofill failed');
+        if (e instanceof UserError) return err(e.status, e.message);
+        const safe = safeRouteMessage(e, 'Autofill failed');
+        if (safe === 'Autofill failed') console.error('[autofill]', e?.stack ?? e);
+        return err(400, safe);
       }
     }
 
     if (path === '/api/messages' && req.method === 'POST') {
-      const limited = tooMany(limits.messages, device, 'messages');
-      if (limited) return limited;
-      // A retrying client can send the same key twice; the second request gets the first item instead of a second turn.
+      // Check cached or in-flight idempotency BEFORE burning per-device quota, and re-check synchronously after await body().
       const idem = idempotencyKey(req);
       const scope = idem ? `${device}:${idem}` : null;
       if (scope) {
-        const previous = idempotentItem(scope);
-        const item = previous ? items.get(previous) : null;
-        if (item) return json({ item, duplicate: true });
+        const existing = await resolveIdempotent(scope);
+        if (existing) return json({ item: existing, duplicate: true });
       }
-      const { text, channel_id, attachment_ids } = await body<{ text?: string; channel_id?: string; attachment_ids?: string[] }>(req);
-      const ids = Array.isArray(attachment_ids) ? attachment_ids.slice(0, 6).map(String) : [];
-      if (attachment_ids && !Array.isArray(attachment_ids)) return err(400, 'attachment_ids must be a list');
-      const rows = ids.map((id) => attachments.get(id)).filter((r): r is AttachmentRow => !!r);
-      if (rows.length !== ids.length) return err(400, 'unknown attachment');
-      const t = messageText(text, rows.length > 0);
-      if (!t) return err(400, 'empty message');
-      if (t.length > MAX_MESSAGE) return err(400, 'message too long');
-      const note = attachmentNote(rows);
-      const item = submitUser(t, note ? `${t}${note}` : undefined, channel_id, rows.map(toAttachment));
-      if (rows.length) attachments.link(ids, item.id);
-      if (scope) rememberIdempotent(scope, item.id);
-      return json({ item });
+      const rawBody = await body<{ text?: string; channel_id?: string; attachment_ids?: string[] }>(req);
+      if (scope) {
+        const existing = await resolveIdempotent(scope);
+        if (existing) return json({ item: existing, duplicate: true });
+      }
+      const finishIdem = scope ? startIdempotentInflight(scope) : null;
+      let createdId: string | null = null;
+      try {
+        const { text, channel_id, attachment_ids } = rawBody;
+        if (channel_id && !activeChannel(String(channel_id))) return err(404, 'no such channel');
+        const limited = tooMany(limits.messages, device, 'messages');
+        if (limited) return limited;
+        const ids = Array.isArray(attachment_ids) ? attachment_ids.slice(0, 6).map(String) : [];
+        if (attachment_ids && !Array.isArray(attachment_ids)) return err(400, 'attachment_ids must be a list');
+        const rows = ids.map((id) => attachments.get(id)).filter((r): r is AttachmentRow => !!r);
+        if (rows.length !== ids.length) return err(400, 'unknown attachment');
+        const t = messageText(text, rows.length > 0);
+        if (!t) return err(400, 'empty message');
+        if (t.length > MAX_MESSAGE) return err(400, 'message too long');
+        const note = attachmentNote(rows);
+        const item = submitUser(t, note ? `${t}${note}` : undefined, channel_id, rows.map(toAttachment));
+        if (rows.length) attachments.link(ids, item.id);
+        createdId = item.id;
+        if (scope) rememberIdempotent(scope, item.id);
+        return json({ item });
+      } finally {
+        finishIdem?.(createdId);
+      }
     }
     if (path === '/api/tasks' && req.method === 'POST') {
-      const limited = tooMany(limits.tasks, device, 'tasks');
-      if (limited) return limited;
-      const { text, channel_id, attachment_ids } = await body<{ text?: string; channel_id?: string; attachment_ids?: string[] }>(req);
-      // The same attachment contract as /api/messages: the task keeps the files, and its prompt names their paths so
-      // the agent can open them. A background send with a photo and no caption is a legitimate message.
-      const ids = Array.isArray(attachment_ids) ? attachment_ids.slice(0, 6).map(String) : [];
-      if (attachment_ids && !Array.isArray(attachment_ids)) return err(400, 'attachment_ids must be a list');
-      const rows = ids.map((id) => attachments.get(id)).filter((r): r is AttachmentRow => !!r);
-      if (rows.length !== ids.length) return err(400, 'unknown attachment');
-      const t = String(text ?? '').trim() || (rows.length ? 'Look at the file I attached.' : '');
-      if (!t) return err(400, 'empty message');
-      if (t.length > MAX_MESSAGE) return err(400, 'message too long');
-      const started = startUserTask(t, channel_id, rows.map(toAttachment), attachmentNote(rows));
-      if (rows.length) attachments.link(ids, started.item.id);
-      return json(started);
+      const idem = idempotencyKey(req);
+      const scope = idem ? `task:${device}:${idem}` : null;
+      if (scope) {
+        const existing = await resolveIdempotent(scope);
+        if (existing) {
+          const task = existing.task_id ? tasks.get(existing.task_id) : undefined;
+          return json({ item: existing, ...(task ? { task } : {}), duplicate: true });
+        }
+      }
+      const rawBody = await body<{ text?: string; channel_id?: string; attachment_ids?: string[] }>(req);
+      if (scope) {
+        const existing = await resolveIdempotent(scope);
+        if (existing) {
+          const task = existing.task_id ? tasks.get(existing.task_id) : undefined;
+          return json({ item: existing, ...(task ? { task } : {}), duplicate: true });
+        }
+      }
+      const finishIdem = scope ? startIdempotentInflight(scope) : null;
+      let createdId: string | null = null;
+      try {
+        const { text, channel_id, attachment_ids } = rawBody;
+        if (channel_id && !activeChannel(String(channel_id))) return err(404, 'no such channel');
+        const limited = tooMany(limits.tasks, device, 'tasks');
+        if (limited) return limited;
+        // The same attachment contract as /api/messages: the task keeps the files, and its prompt names their paths so
+        // the agent can open them. A background send with a photo and no caption is a legitimate message.
+        const ids = Array.isArray(attachment_ids) ? attachment_ids.slice(0, 6).map(String) : [];
+        if (attachment_ids && !Array.isArray(attachment_ids)) return err(400, 'attachment_ids must be a list');
+        const rows = ids.map((id) => attachments.get(id)).filter((r): r is AttachmentRow => !!r);
+        if (rows.length !== ids.length) return err(400, 'unknown attachment');
+        const t = String(text ?? '').trim() || (rows.length ? 'Look at the file I attached.' : '');
+        if (!t) return err(400, 'empty message');
+        if (t.length > MAX_MESSAGE) return err(400, 'message too long');
+        const started = startUserTask(t, channel_id, rows.map(toAttachment), attachmentNote(rows));
+        if (rows.length) attachments.link(ids, started.item.id);
+        createdId = started.item.id;
+        if (scope) rememberIdempotent(scope, started.item.id);
+        return json(started);
+      } finally {
+        finishIdem?.(createdId);
+      }
     }
 
     // ---- uploads, voice memos and spoken briefs (see server/uploads.ts, server/audio.ts) ----
@@ -550,7 +666,7 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
       if (tooLarge(req, MAX_UPLOAD_BYTES)) return err(413, 'that recording is too large');
       let bytes: Uint8Array;
       let mime: string;
-      if ((req.headers.get('content-type') ?? '').includes('multipart/form-data')) {
+      if ((req.headers.get('content-type') ?? '').toLowerCase().includes('multipart/form-data')) {
         let mp: MultipartResult | null = null;
         try {
           mp = await parseMultipartCapped(req.body!, req.headers.get('content-type'), MAX_UPLOAD_BYTES, ['audio', 'file'], join(uploadDir(), 'incoming'));
@@ -566,7 +682,12 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
           rmSync(mp.file.path, { force: true });
         }
       } else {
-        bytes = new Uint8Array(await req.arrayBuffer());
+        try {
+          bytes = await readBytesCapped(req, MAX_UPLOAD_BYTES);
+        } catch (e) {
+          if (e instanceof UserError && e.status === 413) return err(413, 'that recording is too large');
+          throw e;
+        }
         mime = normalizeMime(req.headers.get('content-type'));
       }
       // A missing or chunked content-length bypasses tooLarge; the hard cap on the buffered bytes is the real gate.
@@ -583,7 +704,8 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
         const text = await transcribeFile(row.path);
         return json({ text, attachment });
       } catch (e: any) {
-        return json({ error: e?.message ?? 'Transcription failed', attachment, text: '' }, 503);
+        if (!(e instanceof UserError)) console.error('[audio] transcribe failed', e?.stack ?? e);
+        return json({ error: safeAudioError(e), attachment, text: '' }, 503);
       }
     }
 
@@ -639,6 +761,12 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
       return json({ ok: true });
     }
 
+    const fileMetaMatch = path.match(/^\/api\/files\/([\w-]+)\/meta$/);
+    if (fileMetaMatch && req.method === 'GET') {
+      const f = files.get(fileMetaMatch[1]);
+      return f ? json({ file: f.entry }) : err(404, 'no such file');
+    }
+
     const fileMatch = path.match(/^\/api\/files\/([\w-]+)$/);
     if (fileMatch && req.method === 'GET') return await serveFile(fileMatch[1], url.searchParams.has('download'));
 
@@ -683,7 +811,18 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
     }
 
     if (path === '/api/settings' && req.method === 'PUT') {
-      const next = settings.update(await body(req));
+      const patch = await body<Record<string, unknown>>(req);
+      if (patch.timezone !== undefined) {
+        if (typeof patch.timezone !== 'string' || !patch.timezone.trim()) throw new UserError('invalid timezone', 400);
+        const tz = patch.timezone.trim();
+        try {
+          new Intl.DateTimeFormat(undefined, { timeZone: tz });
+        } catch {
+          throw new UserError('invalid timezone', 400);
+        }
+        patch.timezone = tz;
+      }
+      const next = settings.update(patch);
       broadcast({ type: 'settings', settings: next });
       return json({ settings: next });
     }
@@ -696,7 +835,13 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
     }
     if (path === '/api/push/key' && req.method === 'GET') return json({ key: publicKey });
     if (path === '/api/push/subscribe' && req.method === 'POST') {
-      saveSubscription(await body(req), device);
+      try {
+        saveSubscription(await body(req), device);
+      } catch (e) {
+        if (e instanceof UserError) throw e;
+        if (e instanceof TypeError) throw new UserError('invalid push subscription', 400);
+        throw e;
+      }
       return json({ ok: true });
     }
     if (path === '/api/presence' && req.method === 'POST') {
@@ -797,22 +942,25 @@ async function serveStatic(req: Request, path: string): Promise<Response> {  // 
   }
   const rel = normalize(decoded).replace(/^(\.\.[/\\])+/, '');
   const candidate = join(config.webDir, rel);
+  const webDirRoot = config.webDir.endsWith(sep) ? config.webDir : `${config.webDir}${sep}`;
+  const rawUrlPath = rel.replaceAll('\\', '/');
+  const urlPath = rawUrlPath.startsWith('/') ? rawUrlPath : `/${rawUrlPath}`;
   // `isFile`, not `existsSync`: a directory passes existence and a nonzero stat size, so `GET /assets/` used to be
   // served as a body and died with EISDIR instead of falling back to the app shell.
-  if (candidate.startsWith(config.webDir) && rel !== '/' && isFile(candidate)) {
+  if ((candidate === config.webDir || candidate.startsWith(webDirRoot)) && urlPath !== '/' && isFile(candidate)) {
     // The build writes `.br`/`.gz` siblings; serve one when the client accepts it. The type comes from the original
     // path, not the `.br` sibling (Bun would otherwise infer application/octet-stream).
     const encoding = preferredEncoding(req);
     const encoded = encoding ? encodedPath(candidate, encoding, isFile) : null;
-    const immutable = rel.startsWith('/assets/');
+    const immutable = urlPath.startsWith('/assets/');
     return new Response(Bun.file(encoded ?? candidate), {
       headers: {
         ...SECURITY_HEADERS,
         ...encodingHeaders(encoded ? encoding : null),
         'content-type': Bun.file(candidate).type,
-        ...(rel.endsWith('.html') ? { 'content-security-policy': APP_CSP } : {}),
+        ...(urlPath.endsWith('.html') ? { 'content-security-policy': APP_CSP } : {}),
         'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache',
-        ...(rel === '/sw.js' ? { 'service-worker-allowed': '/' } : {}),
+        ...(urlPath === '/sw.js' ? { 'service-worker-allowed': '/' } : {}),
       },
     });
   }
@@ -844,11 +992,13 @@ async function doctor() {
     add('Hermes API key accepted', auth, auth ? 'ok' : 'Hermes rejected the key (401)');
   }
   const shim = join(config.root, 'server', 'mcp-shim.ts');
+  const shimForward = shim.replaceAll('\\', '/');
   let cfg = '';
   try {
     cfg = readFileSync(join(config.hermesHome, 'config.yaml'), 'utf8');
   } catch {}
-  add('Duet tools in Hermes config', cfg.includes(shim), cfg.includes(shim) ? 'mcp_servers entry points at this checkout' : `add an mcp_servers entry running ${shim}`);
+  const shimConfigured = cfg.includes(shim) || cfg.includes(shimForward);
+  add('Duet tools in Hermes config', shimConfigured, shimConfigured ? 'mcp_servers entry points at this checkout' : `add an mcp_servers entry running ${shim}`);
   const lastTool = kv.get<number>('last_tool_call_at', 0);
   add('Hermes has called a Duet tool', lastTool > 0, lastTool ? `last call ${new Date(lastTool).toLocaleString()}` : 'not yet (normal on a fresh install)', true);
   add('public URL (needed for iOS push)', !!config.publicUrl, config.publicUrl || 'set DUET_PUBLIC_URL in .env');
@@ -864,7 +1014,13 @@ async function doctor() {
  * start. Both stay quiet during quiet hours and both land in the general channel, where the user already looks.
  */
 function startTriggerLoops() {
-  const home = (p: string) => p.replace(/^\/Users\/[^/]+/, '~');
+  const userHome = homedir();
+  const home = (p: string) => {
+    if (userHome && (p === userHome || p.startsWith(`${userHome}/`) || p.startsWith(`${userHome}\\`))) {
+      return `~${p.slice(userHome.length)}`;
+    }
+    return p.replace(/^(\/Users\/[^/]+|\/home\/[^/]+|[A-Za-z]:[\\/]Users[\\/][^\\/]+)/, '~');
+  };
   if (config.watchDir) {
     startFolderWatch(async (fresh: WatchedFile[]) => {
       const label = fresh.length === 1 ? `New file in ${home(config.watchDir)}` : `${fresh.length} new files in ${home(config.watchDir)}`;
@@ -886,7 +1042,7 @@ function startTriggerLoops() {
     } catch {
       // A denied or slow Calendar is already reported by the connectors list; the loop just waits for next time.
     }
-  }, 60_000);
+  }, 60_000).unref?.();
 }
 
 // ---------- internal server (loopback only: MCP shim + CLI) ----------
@@ -950,7 +1106,7 @@ let internalServer: any = null;
  * `serveStatic`; this covers `/api/state`, `/api/items` and search, which are the large ones on a phone reconnect.
  * SSE, uploads and delivered files are already streams or binary and are left alone.
  */
-async function compressJson(req: Request, pending: Promise<Response>): Promise<Response> {
+export async function compressJson(req: Request, pending: Promise<Response>): Promise<Response> {
   const res = await pending;
   if (!res || !(res.headers.get('content-type') ?? '').startsWith('application/json')) return res;
   if (res.headers.get('content-encoding')) return res;
@@ -958,7 +1114,7 @@ async function compressJson(req: Request, pending: Promise<Response>): Promise<R
   if (!encoding) return res;
   const text = await res.text();
   // Below a kilobyte the frame headers cost more than the compression wins.
-  if (text.length < 1024) return new Response(text, { status: res.status, headers: res.headers });
+  if (Buffer.byteLength(text, 'utf8') < 1024) return new Response(text, { status: res.status, headers: res.headers });
   const body = encoding === 'br' ? brotliCompressSync(text) : gzipSync(text, { level: 6 });
   const headers = new Headers(res.headers);
   headers.set('content-encoding', encoding);
@@ -1008,7 +1164,7 @@ export function startServers() {
         };
         browser.open().catch((e: Error) => {
           try {
-            ws.send(JSON.stringify({ type: 'error', message: e.message }));
+            ws.send(JSON.stringify({ type: 'error', message: safeRouteMessage(e, 'Could not open browser') }));
           } catch {}
         });
       },
@@ -1025,7 +1181,7 @@ export function startServers() {
           await browser.input(evt);
         } catch (e: any) {
           try {
-            ws.send(JSON.stringify({ type: 'error', message: e?.message ?? 'input failed' }));
+            ws.send(JSON.stringify({ type: 'error', message: safeRouteMessage(e, 'input failed') }));
           } catch {}
         }
       },
@@ -1077,6 +1233,9 @@ async function shutdown(signal: string) {
     internalServer?.stop(true);
   } catch {}
   abortActiveRuns();
+  try {
+    browser.close();
+  } catch {}
   await Bun.sleep(150);
   try {
     db.close();
@@ -1085,3 +1244,4 @@ async function shutdown(signal: string) {
 }
 process.on('SIGTERM', () => void shutdown('SIGTERM'));
 process.on('SIGINT', () => void shutdown('SIGINT'));
+if (process.platform === 'win32') process.on('SIGBREAK', () => void shutdown('SIGBREAK'));

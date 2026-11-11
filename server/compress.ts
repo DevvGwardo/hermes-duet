@@ -7,7 +7,8 @@ export type Encoding = 'br' | 'gzip';
 function quality(accept: string, coding: string): number {
   let wildcard = 0;
   for (const part of accept.split(',')) {
-    const [name, ...params] = part.trim().toLowerCase().split(';');
+    const [rawName, ...params] = part.trim().toLowerCase().split(';');
+    const name = (rawName ?? '').trim();
     const q = params.map((p) => p.trim()).find((p) => p.startsWith('q='));
     const weight = q === undefined ? 1 : Number(q.slice(2));
     const value = Number.isFinite(weight) ? Math.max(0, Math.min(1, weight)) : 1;

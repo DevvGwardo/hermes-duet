@@ -64,3 +64,25 @@ test('broadcast reaches an open sse client', async () => {
     } catch {}
   }
 });
+
+test('pre-aborted request does not register a client or leak a timer', async () => {
+  const before = clientCount();
+  const ac = new AbortController();
+  ac.abort();
+  const res = sseResponse(new Request('http://x/events', { signal: ac.signal }));
+  expect(clientCount()).toBe(before);
+  const reader = res.body!.getReader();
+  expect((await reader.read()).done).toBe(true);
+});
+
+test('aborting an open sse response drops the client count cleanly', async () => {
+  const before = clientCount();
+  const ac = new AbortController();
+  const res = sseResponse(new Request('http://x/events', { signal: ac.signal }));
+  expect(clientCount()).toBe(before + 1);
+  ac.abort();
+  expect(clientCount()).toBe(before);
+  try {
+    await res.body!.cancel();
+  } catch {}
+});

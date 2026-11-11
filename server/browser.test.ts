@@ -1,5 +1,17 @@
-import { describe, expect, test } from 'bun:test';
-import { MOBILE_VIEWPORT, normalizeInput, normalizeUrl, sameLoginSite, viewportMetrics } from './browser';
+import { afterEach, describe, expect, test } from 'bun:test';
+import {
+  MOBILE_VIEWPORT,
+  chromeLaunchArgs,
+  close,
+  connect,
+  findChrome,
+  normalizeInput,
+  normalizeUrl,
+  onEvent,
+  sameLoginSite,
+  sameOriginSite,
+  viewportMetrics,
+} from './browser';
 
 describe('normalizeUrl', () => {
   test('keeps absolute http(s) urls untouched', () => {
@@ -134,5 +146,85 @@ describe('fillCard host rule', () => {
 
   test('a card with no bound host is never fillable', () => {
     expect(sameLoginSite('', 'shop.example.com')).toBe(false);
+  });
+});
+
+describe('sameOriginSite', () => {
+  test('enforces https scheme and port when full URL is given', () => {
+    expect(sameOriginSite('https://shop.example.com/checkout', 'https://shop.example.com/pay')).toBe(true);
+    expect(sameOriginSite('https://shop.example.com/checkout', 'https://www.shop.example.com/pay')).toBe(true);
+    expect(sameOriginSite('https://shop.example.com/checkout', 'http://shop.example.com/pay')).toBe(false);
+    expect(sameOriginSite('https://shop.example.com:8443/pay', 'https://shop.example.com/pay')).toBe(false);
+    expect(sameOriginSite('https://shop.example.com:443/pay', 'https://shop.example.com/pay')).toBe(true);
+  });
+
+  test('requires https for bare non-local hostnames while allowing http loopback', () => {
+    expect(sameOriginSite('shop.example.com', 'https://shop.example.com/pay')).toBe(true);
+    expect(sameOriginSite('shop.example.com', 'http://shop.example.com/pay')).toBe(false);
+    expect(sameOriginSite('localhost', 'http://localhost:3000/login')).toBe(true);
+    expect(sameOriginSite('http://localhost:3000', 'http://localhost:8080/login')).toBe(false);
+    expect(sameOriginSite('https://shop.example.com', 'javascript:alert(1)')).toBe(false);
+  });
+});
+
+describe('Chrome discovery, flags & CDP lifecycle', () => {
+  const savedPort = process.env.DUET_CHROME_PORT;
+  afterEach(() => {
+    close();
+    if (savedPort === undefined) delete process.env.DUET_CHROME_PORT;
+    else process.env.DUET_CHROME_PORT = savedPort;
+  });
+
+  test('findChrome probes Windows and Linux candidates when DUET_CHROME_BIN is unset', () => {
+    expect(findChrome({ DUET_CHROME_BIN: '/custom/chrome' }, 'win32', () => false, () => null)).toBe('/custom/chrome');
+    expect(
+      findChrome(
+        { LOCALAPPDATA: 'C:\\Users\\Alice\\AppData\\Local' },
+        'win32',
+        (p) => p.includes('AppData\\Local\\Google\\Chrome\\Application\\chrome.exe'),
+        () => null,
+      ),
+    ).toContain('chrome.exe');
+    expect(findChrome({}, 'linux', () => false, (c) => (c === 'chromium' ? '/usr/bin/chromium' : null))).toBe('/usr/bin/chromium');
+  });
+
+  test('chromeLaunchArgs honors DUET_CHROME_NO_SANDBOX', () => {
+    expect(chromeLaunchArgs(9333, '/tmp/p', {})).not.toContain('--no-sandbox');
+    const args = chromeLaunchArgs(9333, '/tmp/p', { DUET_CHROME_NO_SANDBOX: '1' });
+    expect(args).toContain('--no-sandbox');
+    expect(args).toContain('--disable-dev-shm-usage');
+  });
+
+  test('connect rejects immediately if websocket closes before open, and malformed screencast frames do not throw', async () => {
+    let wsPort = 0;
+    const tcp = Bun.listen({
+      hostname: '127.0.0.1',
+      port: 0,
+      socket: {
+        open(socket) {
+          socket.end();
+        },
+        data() {},
+      },
+    });
+    wsPort = tcp.port;
+    const srv = Bun.serve({
+      port: 0,
+      fetch(req): Response {
+        const url = new URL(req.url);
+        if (url.pathname === '/json/version') {
+          return Response.json({ webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/cdp` });
+        }
+        return new Response('nope', { status: 404 });
+      },
+    });
+    process.env.DUET_CHROME_PORT = String(srv.port);
+    try {
+      await expect(connect()).rejects.toThrow();
+      expect(() => onEvent({ method: 'Page.screencastFrame', sessionId: 's1', params: { data: '!!!bad-base64!!!' } })).not.toThrow();
+    } finally {
+      tcp.stop(true);
+      srv.stop(true);
+    }
   });
 });

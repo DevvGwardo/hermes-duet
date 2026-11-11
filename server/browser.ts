@@ -12,11 +12,52 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { config } from './config';
+import { UserError } from './errors';
 
-const DEBUG_PORT = Number(process.env.DUET_CHROME_PORT ?? 9333);
-const PROFILE = process.env.DUET_CHROME_PROFILE ?? join(config.hermesHome, 'duet-chrome');
-const CHROME =
-  process.env.DUET_CHROME_BIN ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const debugPort = () => Number(process.env.DUET_CHROME_PORT ?? 9333);
+const profileDir = () => process.env.DUET_CHROME_PROFILE ?? join(config.hermesHome, 'duet-chrome');
+
+/** Discover Google Chrome / Chromium binary path on macOS, Windows, or Linux unless DUET_CHROME_BIN is set. */
+export function findChrome(
+  env: Record<string, string | undefined> = process.env,
+  platform: string = process.platform,
+  exists: (p: string) => boolean = existsSync,
+  which: (cmd: string) => string | null = (cmd) => {
+    try {
+      return Bun.which(cmd);
+    } catch {
+      return null;
+    }
+  },
+): string {
+  const custom = env.DUET_CHROME_BIN?.trim();
+  if (custom) return custom;
+  if (platform === 'darwin') {
+    const candidates = [
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      '/Applications/Chromium.app/Contents/MacOS/Chromium',
+    ];
+    return candidates.find(exists) ?? candidates[0]!;
+  }
+  if (platform === 'win32') {
+    const local = env.LOCALAPPDATA?.trim();
+    const pf = env.PROGRAMFILES?.trim() || 'C:\\Program Files';
+    const pf86 = env['PROGRAMFILES(X86)']?.trim() || 'C:\\Program Files (x86)';
+    const candidates = [
+      ...(local ? [join(local, 'Google', 'Chrome', 'Application', 'chrome.exe')] : []),
+      join(pf, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+      join(pf86, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+      ...(local ? [join(local, 'Chromium', 'Application', 'chrome.exe')] : []),
+    ];
+    return candidates.find(exists) ?? which('chrome') ?? candidates[0]!;
+  }
+  for (const cmd of ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser']) {
+    const resolved = which(cmd);
+    if (resolved) return resolved;
+  }
+  const unixPaths = ['/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser'];
+  return unixPaths.find(exists) ?? unixPaths[0]!;
+}
 /** Phone screens are small; capping the frame width is what keeps this ~200KB/s instead of 1MB/s. */
 const MAX_WIDTH = Number(process.env.DUET_CHROME_WIDTH ?? 760);
 const QUALITY = Number(process.env.DUET_CHROME_QUALITY ?? 45);
@@ -53,7 +94,7 @@ function log(...a: unknown[]) {
 
 async function reachable(): Promise<string | null> {
   try {
-    const r = await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/version`, {
+    const r = await fetch(`http://127.0.0.1:${debugPort()}/json/version`, {
       signal: AbortSignal.timeout(700),
     });
     if (!r.ok) return null;
@@ -64,29 +105,37 @@ async function reachable(): Promise<string | null> {
   }
 }
 
+export function chromeLaunchArgs(port: number, profile: string, env: Record<string, string | undefined> = process.env): string[] {
+  const noSandbox = ['1', 'true', 'yes'].includes(String(env.DUET_CHROME_NO_SANDBOX ?? '').trim().toLowerCase());
+  return [
+    `--remote-debugging-port=${port}`,
+    `--user-data-dir=${profile}`,
+    // Keep the profile a normal user profile: --enable-automation is what sites sniff for.
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--disable-features=Translate,OptimizationHints',
+    '--restore-last-session=false',
+    ...(noSandbox ? ['--no-sandbox', '--disable-dev-shm-usage'] : []),
+    'about:blank',
+  ];
+}
+
 async function ensureChrome(): Promise<void> {
   if (await reachable()) return;
-  if (!existsSync(CHROME)) throw new Error(`no Chrome at ${CHROME}`);
-  mkdirSync(PROFILE, { recursive: true });
-  log('launching Chrome', PROFILE);
-  chrome = Bun.spawn(
-    [
-      CHROME,
-      `--remote-debugging-port=${DEBUG_PORT}`,
-      `--user-data-dir=${PROFILE}`,
-      // Keep the profile a normal user profile: --enable-automation is what sites sniff for.
-      '--no-first-run',
-      '--no-default-browser-check',
-      '--disable-features=Translate,OptimizationHints',
-      '--restore-last-session=false',
-      'about:blank',
-    ],
-    { stdout: 'ignore', stderr: 'ignore', stdin: 'ignore' },
-  );
+  const bin = findChrome();
+  if (!existsSync(bin)) throw new Error(`no Chrome at ${bin}`);
+  const profile = profileDir();
+  mkdirSync(profile, { recursive: true });
+  log('launching Chrome', profile);
+  chrome = Bun.spawn([bin, ...chromeLaunchArgs(debugPort(), profile)], { stdout: 'ignore', stderr: 'ignore', stdin: 'ignore' });
   for (let i = 0; i < 60; i++) {
     if (await reachable()) return;
     await Bun.sleep(250);
   }
+  try {
+    chrome.kill();
+  } catch {}
+  chrome = null;
   throw new Error('Chrome did not expose a debugging port');
 }
 
@@ -123,11 +172,15 @@ function rejectPending(reason: string) {
   pending.clear();
 }
 
-function onEvent(msg: any) {
+export function onEvent(msg: any) {
   const { method, params, sessionId } = msg;
   if (method === 'Page.screencastFrame') {
     // Ack first: without it Chrome stops sending after a couple of frames.
-    if (sessionId) ws?.send(JSON.stringify({ id: cmdId++, method: 'Page.screencastFrameAck', params: { sessionId }, sessionId }));
+    if (sessionId && ws?.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(JSON.stringify({ id: cmdId++, method: 'Page.screencastFrameAck', params: { sessionId }, sessionId }));
+      } catch {}
+    }
 
     const targetId = [...sessions.entries()].find(([, s]) => s === sessionId)?.[0] ?? '';
     if (targetId !== active) return;
@@ -140,8 +193,14 @@ function onEvent(msg: any) {
     if (++shotCount > MAX_SHOTS_PER_SEC) return;
     lastFrameAt = now;
 
+    if (typeof params?.data !== 'string' || !params.data) return;
+    let jpeg: Uint8Array;
+    try {
+      jpeg = Uint8Array.from(atob(params.data), (c) => c.charCodeAt(0));
+    } catch {
+      return;
+    }
     const meta = params.metadata ?? {};
-    const jpeg = Uint8Array.from(atob(params.data), (c) => c.charCodeAt(0));
     const frame: Frame = {
       jpeg,
       width: meta.deviceWidth || 0,
@@ -252,14 +311,27 @@ export async function connect(): Promise<void> {
     if (!url) throw new Error('Chrome debugging endpoint disappeared');
     await new Promise<void>((resolve, reject) => {
       const sock = new WebSocket(url);
-      const fail = (e: unknown) => reject(e instanceof Error ? e : new Error(String(e)));
+      let settled = false;
+      const fail = (e: unknown) => {
+        if (settled) return;
+        settled = true;
+        if (e instanceof Error) {
+          reject(e);
+          return;
+        }
+        const msg = typeof (e as any)?.message === 'string' && (e as any).message ? (e as any).message : 'browser connection error';
+        reject(new Error(msg));
+      };
       sock.onopen = () => {
+        if (settled) return;
+        settled = true;
         ws = sock;
         send('Target.setDiscoverTargets', { discover: true }).catch(() => {});
         resolve();
       };
       sock.onerror = fail;
       sock.onclose = () => {
+        if (!settled) fail(new Error('browser connection closed'));
         if (ws === sock) ws = null;
         sessions.clear();
         active = null;
@@ -362,7 +434,7 @@ export async function focusTab(tabId: string): Promise<void> {
 
 async function dispatch(method: string, params: Record<string, unknown>) {
   const sessionId = active ? sessions.get(active) : undefined;
-  if (!sessionId) throw new Error('no active tab');
+  if (!sessionId) throw new UserError('no active tab', 400);
   const r = await send(method, params, sessionId);
   if (r?.error) throw new Error(r.error.message ?? 'CDP error');
   return r;
@@ -453,7 +525,7 @@ export function normalizeInput(raw: unknown): PhoneInput | null {
 
 export async function input(raw: unknown): Promise<void> {
   const evt = normalizeInput(raw);
-  if (!evt) throw new Error('unsupported input event');
+  if (!evt) throw new UserError('unsupported input event', 400);
   // First touch after the app restarts can arrive before anything is streaming: opening
   // is cheap and makes the very first tap work instead of failing with "no active tab".
   if (!active && evt.type !== 'navigate' && evt.type !== 'tab' && evt.type !== 'new-tab') {
@@ -531,12 +603,43 @@ export async function input(raw: unknown): Promise<void> {
 
 /** Give Hermes a CDP URL it can drive, so agent and phone share one browser. */
 export function cdpUrl(): string {
-  return `http://127.0.0.1:${DEBUG_PORT}`;
+  return `http://127.0.0.1:${debugPort()}`;
 }
 
 export function status(): { running: boolean; port: number; profile: string; tabs: number } {
-  return { running: !!ws && ws.readyState === WebSocket.OPEN, port: DEBUG_PORT, profile: PROFILE, tabs: sessions.size };
+  return { running: !!ws && ws.readyState === WebSocket.OPEN, port: debugPort(), profile: profileDir(), tabs: sessions.size };
 }
+
+/** Close CDP socket, timers and any Chrome instance spawned by this process. */
+export function close(): void {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  reconnectAttempt = 0;
+  const sock = ws;
+  ws = null;
+  sessions.clear();
+  titles.clear();
+  active = null;
+  lastFrame = null;
+  rejectPending('browser shutting down');
+  if (sock) {
+    try {
+      sock.onclose = null;
+      sock.onerror = null;
+      sock.close();
+    } catch {}
+  }
+  if (chrome) {
+    try {
+      chrome.kill();
+    } catch {}
+    chrome = null;
+  }
+}
+
+export const shutdown = close;
 
 // ---------------------------------------------------------------------------
 // Viewport emulation
@@ -558,7 +661,7 @@ export function viewportMetrics(mode: ViewportMode) {
 export async function setViewport(raw: unknown): Promise<ViewportMode> {
   const mode: ViewportMode = raw === 'mobile' ? 'mobile' : 'desktop';
   const sessionId = active ? sessions.get(active) : undefined;
-  if (!sessionId) throw new Error('no active tab');
+  if (!sessionId) throw new UserError('no active tab', 400);
   const metrics = viewportMetrics(mode);
   if (metrics) {
     await send('Emulation.setDeviceMetricsOverride', { ...metrics, screenOrientation: { type: 'portraitPrimary', angle: 0 } }, sessionId);
@@ -579,7 +682,7 @@ export async function setViewport(raw: unknown): Promise<ViewportMode> {
 async function sessionId(): Promise<string> {
   if (!active) await open().catch(() => {});
   const id = active ? sessions.get(active) : undefined;
-  if (!id) throw new Error('no active tab');
+  if (!id) throw new UserError('no active tab', 400);
   return id;
 }
 
@@ -587,8 +690,11 @@ async function sessionId(): Promise<string> {
  * Focus the first visible element matching one of `selectors` and type into it with Input.insertText, which Chrome
  * delivers as a trusted edit. Returns false when the page has no such field (yet) instead of throwing, so a login page
  * that is still rendering gets a clear "not found" rather than a stack trace.
+ *
+ * When `expectedSite` is supplied, origin AND `document.activeElement` are re-verified immediately before
+ * `Input.insertText` so a page script navigation or focus steal cannot redirect sensitive credentials or card digits.
  */
-async function typeInto(sid: string, selectors: string[], value: string): Promise<boolean> {
+async function typeInto(sid: string, selectors: string[], value: string, expectedSite?: string): Promise<boolean> {
   const expr = `(() => {
     const sels = ${JSON.stringify(selectors)};
     for (const s of sels) {
@@ -599,12 +705,34 @@ async function typeInto(sid: string, selectors: string[], value: string): Promis
       if (r.width <= 0 || r.height <= 0) continue;
       el.focus();
       if (typeof el.select === 'function') el.select();
-      return true;
+      if (document.activeElement !== el) continue;
+      return { ok: true, href: String(location.href || '') };
     }
-    return false;
+    return { ok: false, href: String(location.href || '') };
   })()`;
   const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true }, sid);
-  if (!r?.result?.result?.value) return false;
+  const v = r?.result?.result?.value as { ok?: boolean; href?: string } | undefined;
+  if (expectedSite && !sameOriginSite(expectedSite, String(v?.href ?? ''))) {
+    throw new UserError('the tab moved to another site before typing, so nothing was filled', 400);
+  }
+  if (!v?.ok) return false;
+
+  const verifyExpr = `(() => {
+    const el = document.activeElement;
+    if (!el || el.disabled || el.readOnly) return { ok: false, href: String(location.href || '') };
+    const sels = ${JSON.stringify(selectors)};
+    const matched = sels.some((s) => { try { return typeof el.matches === 'function' && el.matches(s); } catch { return false; } });
+    return { ok: matched, href: String(location.href || '') };
+  })()`;
+  const check = await send('Runtime.evaluate', { expression: verifyExpr, returnByValue: true }, sid);
+  const cv = check?.result?.result?.value as { ok?: boolean; href?: string } | undefined;
+  if (expectedSite && !sameOriginSite(expectedSite, String(cv?.href ?? ''))) {
+    throw new UserError('the tab moved to another site before typing, so nothing was filled', 400);
+  }
+  if (!cv?.ok) {
+    throw new UserError('the active input changed before typing, so nothing was filled', 400);
+  }
+
   await send('Input.insertText', { text: value }, sid);
   return true;
 }
@@ -634,6 +762,58 @@ export function sameLoginSite(savedHost: string, pageHost: string): boolean {
   return page === saved || page.endsWith(`.${saved}`);
 }
 
+function effectivePort(u: URL): string {
+  if (u.port) return u.port;
+  return u.protocol === 'https:' ? '443' : u.protocol === 'http:' ? '80' : '';
+}
+
+function isLocalHostname(host: string): boolean {
+  const h = host.trim().toLowerCase().replace(/^\[|\]$/g, '');
+  return h === 'localhost' || h === '127.0.0.1' || h === '::1';
+}
+
+/**
+ * Full-origin + site check for autofill and single-use cards. Accepts either a full URL (`https://shop.example/pay`)
+ * or a bare host (`shop.example`, optionally with `:port`). When a full URL is given, scheme and effective port must
+ * match and hostname must satisfy `sameLoginSite`. When only a bare host is given, `https:` is required unless the
+ * destination is loopback (`localhost` / `127.0.0.1` / `::1`).
+ */
+export function sameOriginSite(expectedSite: string, pageUrl: string): boolean {
+  const expRaw = String(expectedSite ?? '').trim();
+  if (!expRaw) return false;
+  let page: URL;
+  try {
+    page = new URL(pageUrl);
+  } catch {
+    return false;
+  }
+  if (page.protocol !== 'http:' && page.protocol !== 'https:') return false;
+  if (!page.hostname) return false;
+
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(expRaw)) {
+    let exp: URL;
+    try {
+      exp = new URL(expRaw);
+    } catch {
+      return false;
+    }
+    if (exp.protocol !== 'http:' && exp.protocol !== 'https:') return false;
+    if (!sameLoginSite(exp.hostname, page.hostname)) return false;
+    if (page.protocol !== exp.protocol) return false;
+    if (effectivePort(page) !== effectivePort(exp)) return false;
+    return true;
+  }
+
+  const colon = expRaw.lastIndexOf(':');
+  const hasPort = colon > 0 && /^\d+$/.test(expRaw.slice(colon + 1)) && !expRaw.includes(']');
+  const expHost = hasPort ? expRaw.slice(0, colon) : expRaw;
+  const expPort = hasPort ? expRaw.slice(colon + 1) : '';
+  if (!sameLoginSite(expHost, page.hostname)) return false;
+  if (page.protocol !== 'https:' && !(page.protocol === 'http:' && isLocalHostname(page.hostname))) return false;
+  if (expPort && effectivePort(page) !== expPort) return false;
+  return true;
+}
+
 /** Take the password back out of the DOM once the form has been submitted, so the page can't read it later. */
 async function clearPassword(sid: string): Promise<void> {
   const expr = `(() => {
@@ -650,23 +830,24 @@ async function clearPassword(sid: string): Promise<void> {
  * Fill the username and password fields of the page in front of the user. They tapped a button; the credentials come
  * from a local vault CLI and are typed straight into Chrome. Nothing is logged, echoed back, or put in a card.
  *
- * `host` is the site the login was looked up for. The vault CLI takes a second or two, and the agent may have
- * navigated the tab in that window, so the page is re-checked here before a single character is typed: a hostile page
- * must not be able to receive a password saved for somewhere else.
+ * `expectedSite` is the origin or hostname the login was looked up for. The vault CLI takes a second or two, and the
+ * agent may have navigated the tab in that window, so the page origin and active field are re-checked before every
+ * keystroke is typed: a hostile page must not be able to receive a password saved for somewhere else.
  */
-export async function fillLogin(username: string, password: string, host: string): Promise<{ user: boolean; pass: boolean }> {
+export async function fillLogin(username: string, password: string, expectedSite: string): Promise<{ user: boolean; pass: boolean }> {
   const sid = await sessionId();
-  const page = await currentHost();
-  if (!sameLoginSite(host, page)) {
-    throw new Error(`the tab moved to ${page || 'another site'} while I was fetching that login, so nothing was filled`);
+  const pageUrl = await currentHref(sid);
+  if (!sameOriginSite(expectedSite, pageUrl)) {
+    const label = safeUrlHost(pageUrl) || 'another site';
+    throw new UserError(`the tab moved to ${label} while I was fetching that login, so nothing was filled`, 400);
   }
-  const user = await typeInto(sid, LOGIN_USER, username);
+  const user = await typeInto(sid, LOGIN_USER, username, expectedSite);
   // Tab moves focus the way a person would; some pages only reveal the password step after the username is entered.
   if (user) {
     await send('Input.dispatchKeyEvent', { type: 'keyDown', windowsVirtualKeyCode: 9, key: 'Tab' }, sid);
     await send('Input.dispatchKeyEvent', { type: 'keyUp', windowsVirtualKeyCode: 9, key: 'Tab' }, sid);
   }
-  const pass = await typeInto(sid, LOGIN_PASS, password);
+  const pass = await typeInto(sid, LOGIN_PASS, password, expectedSite);
   if (pass) {
     // Submit, so the login actually completes without another tap on the phone.
     await send('Input.dispatchKeyEvent', { type: 'keyDown', windowsVirtualKeyCode: 13, key: 'Enter', text: '\r' }, sid);
@@ -686,29 +867,53 @@ const CARD_CVV = ['input[autocomplete="cc-csc"]', 'input[name*="cvc" i]', 'input
  * Type an issued single-use card into the checkout. The caller keeps the number only in memory and calls this
  * immediately after issuing it; only which fields were found is reported back.
  *
- * `expectedHost` is the merchant host the payment was approved for. The vault lookup for a login takes a second or
- * two and the agent may have navigated the tab in that window; the same holds between a payment approval and this
- * fill, so the page is re-checked here before a single character is typed: a prompt-injected agent that steered the
- * tab elsewhere must not receive card digits meant for the merchant.
+ * `expectedSite` may be the full checkout URL (`merchant_url`) or the merchant hostname (`merchant_host`). Origin,
+ * scheme, port, and `document.activeElement` are checked up front and right before each `Input.insertText` so a
+ * navigated tab or focus steal cannot capture card digits meant for the merchant.
  */
-export async function fillCard(card: { number: string; expMonth: number; expYear: number; cvv: string }, expectedHost: string): Promise<{ number: boolean; expiry: boolean; cvv: boolean }> {
-  const page = await currentHost();
-  if (!sameLoginSite(expectedHost, page)) {
-    throw new Error(`the tab is on ${page || 'an unknown page'} but the card was approved for ${expectedHost || 'an unknown site'}, so nothing was filled`);
-  }
+export async function fillCard(card: { number: string; expMonth: number; expYear: number; cvv: string }, expectedSite: string): Promise<{ number: boolean; expiry: boolean; cvv: boolean }> {
   const sid = await sessionId();
+  const pageUrl = await currentHref(sid);
+  if (!sameOriginSite(expectedSite, pageUrl)) {
+    const label = safeUrlHost(pageUrl) || 'an unknown page';
+    const expectedLabel = safeUrlHost(expectedSite) || expectedSite || 'an unknown site';
+    throw new UserError(`the tab is on ${label} but the card was approved for ${expectedLabel}, so nothing was filled`, 400);
+  }
   const exp = `${String(card.expMonth).padStart(2, '0')}/${String(card.expYear).slice(-2)}`;
-  const number = await typeInto(sid, CARD_NUMBER, card.number);
-  const expiry = await typeInto(sid, CARD_EXPIRY, exp);
-  const cvv = await typeInto(sid, CARD_CVV, card.cvv);
+  const number = await typeInto(sid, CARD_NUMBER, card.number, expectedSite);
+  const expiry = await typeInto(sid, CARD_EXPIRY, exp, expectedSite);
+  const cvv = await typeInto(sid, CARD_CVV, card.cvv, expectedSite);
   return { number, expiry, cvv };
+}
+
+function safeUrlHost(raw: string): string {
+  try {
+    return new URL(raw).hostname;
+  } catch {
+    return /^[a-z0-9.-]+$/i.test(raw) ? raw : '';
+  }
+}
+
+async function currentHref(sid?: string): Promise<string> {
+  const s = sid ?? (await sessionId());
+  const r = await send('Runtime.evaluate', { expression: 'location.href', returnByValue: true }, s);
+  return String(r?.result?.result?.value ?? '');
+}
+
+/** Origin (scheme + host + port) of the active tab, for origin-bound autofill. */
+export async function currentOrigin(): Promise<string> {
+  const href = await currentHref();
+  try {
+    const u = new URL(href);
+    return u.protocol === 'http:' || u.protocol === 'https:' ? u.origin : '';
+  } catch {
+    return '';
+  }
 }
 
 /** Hostname of the page in front of the user, for looking up which login it needs. */
 export async function currentHost(): Promise<string> {
-  const sid = await sessionId();
-  const r = await send('Runtime.evaluate', { expression: 'location.href', returnByValue: true }, sid);
-  const href = String(r?.result?.result?.value ?? '');
+  const href = await currentHref();
   try {
     return new URL(href).hostname;
   } catch {

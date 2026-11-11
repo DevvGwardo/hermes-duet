@@ -16,6 +16,12 @@ test('q=0 is a refusal, not a preference', () => {
   expect(preferredEncoding(req('br;q=0, gzip;q=0'))).toBe(null);
 });
 
+test('whitespace before semicolon parameters is ignored', () => {
+  expect(preferredEncoding(req('br ; q=0.8, gzip'))).toBe('br');
+  expect(preferredEncoding(req('br ; q=0, gzip;q=0.5'))).toBe('gzip');
+  expect(preferredEncoding(req('br ; q=0, *;q=0.5'))).toBe('gzip');
+});
+
 test('no header means no compression', () => {
   expect(preferredEncoding(req(''))).toBe(null);
 });

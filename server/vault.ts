@@ -59,21 +59,53 @@ export function parseLogin(json: any): { username: string; password: string } | 
   return null;
 }
 
+/** Quote-aware argv tokenizer that preserves Windows backslashes inside paths. */
+export function splitArgs(raw: string): string[] {
+  const out: string[] = [];
+  let cur = '';
+  let quote: '"' | "'" | null = null;
+  let hasToken = false;
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i]!;
+    if (quote) {
+      if (ch === quote) quote = null;
+      else cur += ch;
+      hasToken = true;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+      hasToken = true;
+    } else if (/\s/.test(ch)) {
+      if (hasToken) {
+        out.push(cur);
+        cur = '';
+        hasToken = false;
+      }
+    } else {
+      cur += ch;
+      hasToken = true;
+    }
+  }
+  if (hasToken) out.push(cur);
+  return out;
+}
+
 /** Which vaults are installed, from the outside in: what is on PATH decides everything else. */
 export function vaultPlan(env: Env, has: (cmd: string) => boolean): { id: VaultId; name: string; cmd: string; installed: boolean; hint: string }[] {
+  const opCmd = splitArgs(env.DUET_OP_CMD?.trim() || 'op item get {domain} --format json')[0] ?? 'op';
+  const bwCmd = splitArgs(env.DUET_BW_CMD?.trim() || 'bw get item {domain} --raw')[0] ?? 'bw';
   return [
     {
       id: '1password',
       name: '1Password',
-      cmd: (env.DUET_OP_CMD ?? 'op item get {domain} --format json').split(/\s+/)[0],
-      installed: has((env.DUET_OP_CMD ?? 'op item get {domain} --format json').split(/\s+/)[0]),
+      cmd: opCmd,
+      installed: has(opCmd),
       hint: 'Install the 1Password CLI (brew install 1password-cli) and turn on "Connect with 1Password CLI" in the app.',
     },
     {
       id: 'bitwarden',
       name: 'Bitwarden',
-      cmd: (env.DUET_BW_CMD ?? 'bw get item {domain} --raw').split(/\s+/)[0],
-      installed: has((env.DUET_BW_CMD ?? 'bw get item {domain} --raw').split(/\s+/)[0]),
+      cmd: bwCmd,
+      installed: has(bwCmd),
       hint: 'Install the Bitwarden CLI (brew install bitwarden-cli) and run `bw unlock`; set BW_SESSION for the server.',
     },
   ];
@@ -81,7 +113,7 @@ export function vaultPlan(env: Env, has: (cmd: string) => boolean): { id: VaultI
 
 /** Fill `{domain}` in a command template; nothing else from the URL reaches the argv. */
 export function commandFor(template: string, domain: string): { cmd: string; args: string[] } {
-  const [cmd, ...args] = template.split(/\s+/);
+  const [cmd = '', ...args] = splitArgs(template);
   return { cmd, args: args.map((a) => a.replaceAll('{domain}', domain)) };
 }
 
@@ -153,11 +185,11 @@ export async function vaults(): Promise<VaultStatus[]> {
       continue;
     }
     if (p.id === '1password') {
-      const who = await runner('op', ['whoami']).catch(() => ({ out: '', err: '', code: 1 }));
+      const who = await runner(p.cmd, ['whoami']).catch(() => ({ out: '', err: '', code: 1 }));
       const ready = who.code === 0 && !!who.out.trim();
       out.push({ id: p.id, name: p.name, installed: true, ready, detail: ready ? `Signed in as ${who.out.trim().slice(0, 60)}` : 'Installed, not signed in', hint: ready ? undefined : 'Run `op signin` on the Mac.' });
     } else {
-      const st = await runner('bw', ['status']).catch(() => ({ out: '', err: '', code: 1 }));
+      const st = await runner(p.cmd, ['status']).catch(() => ({ out: '', err: '', code: 1 }));
       let status = '';
       try {
         status = String(JSON.parse(st.out)?.status ?? '');
@@ -193,7 +225,7 @@ export async function readLogin(domain: string, which?: VaultId): Promise<{ vaul
     if (r.code !== 0) {
       // A vault error may echo the command; never let a credential ride into an error the UI shows.
       const first = (r.err || r.out).trim().split('\n')[0]?.slice(0, 120) || `exit ${r.code}`;
-      errors.push(`${p.name}: ${/pass/i.test(first) ? 'the vault command failed' : first}`);
+      errors.push(`${p.name}: ${/pass|secret|token|key|session/i.test(first) ? 'the vault command failed' : first}`);
       continue;
     }
     let json: any = null;

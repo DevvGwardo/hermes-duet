@@ -1,6 +1,10 @@
-import { describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, test } from 'bun:test';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { CardData } from '../shared/types';
-import { briefSpeech, cleanTranscript, sttTarget, ttsTarget } from './audio';
+import { config } from './config';
+import { UserError } from './errors';
+import { briefSpeech, cleanTranscript, speak, sttTarget, transcribeFile, ttsTarget } from './audio';
 
 const has = (present: string[]) => (cmd: string) => present.includes(cmd);
 
@@ -114,5 +118,76 @@ describe('briefSpeech', () => {
   test('caps very long briefs', () => {
     const long = brief({ entries: Array.from({ length: 5 }, (_, i) => ({ title: 'x'.repeat(2000), detail: 'y'.repeat(2000) })) });
     expect(briefSpeech(long).length).toBeLessThanOrEqual(4000);
+  });
+});
+
+describe('quoted Windows command paths & speak safety', () => {
+  const savedEnv = {
+    ttsCmd: process.env.DUET_TTS_CMD,
+    ttsUrl: process.env.DUET_TTS_URL,
+    sttCmd: process.env.DUET_STT_CMD,
+    sttUrl: process.env.DUET_STT_URL,
+  };
+  const realFetch = globalThis.fetch;
+
+  afterEach(() => {
+    const restore = (k: string, v: string | undefined) => {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    };
+    restore('DUET_TTS_CMD', savedEnv.ttsCmd);
+    restore('DUET_TTS_URL', savedEnv.ttsUrl);
+    restore('DUET_STT_CMD', savedEnv.sttCmd);
+    restore('DUET_STT_URL', savedEnv.sttUrl);
+    globalThis.fetch = realFetch;
+  });
+
+  test('sttTarget and ttsTarget preserve spaces inside quoted paths', () => {
+    expect(sttTarget({ DUET_STT_CMD: '"C:\\Program Files\\Whisper\\whisper-cli.exe" -m "C:\\Models\\ggml base.bin" -f {file}' }, has([]))).toEqual({
+      kind: 'cmd',
+      cmd: 'C:\\Program Files\\Whisper\\whisper-cli.exe',
+      args: ['-m', 'C:\\Models\\ggml base.bin', '-f', '{file}'],
+    });
+    expect(ttsTarget({ DUET_TTS_CMD: '"C:\\Program Files\\Piper\\piper.exe" --model m.onnx --output_file {out}' }, 'win32')).toEqual({
+      kind: 'cmd',
+      cmd: 'C:\\Program Files\\Piper\\piper.exe',
+      args: ['--model', 'm.onnx', '--output_file', '{out}'],
+    });
+  });
+
+  test('missing TTS engine throws UserError 503', async () => {
+    if (process.platform === 'darwin') return;
+    delete process.env.DUET_TTS_URL;
+    delete process.env.DUET_TTS_CMD;
+    await expect(speak('Hello there')).rejects.toMatchObject({ status: 503 });
+  });
+
+  test('speak deduplicates concurrent synthesis, writes atomically, and cleans temp files on failure', async () => {
+    delete process.env.DUET_TTS_CMD;
+    process.env.DUET_TTS_URL = 'http://tts.local/speak';
+    const dir = join(config.dataDir, 'tts');
+    let fetches = 0;
+    globalThis.fetch = (async () => {
+      fetches++;
+      await Bun.sleep(20);
+      return new Response(new Uint8Array([1, 2, 3, 4]), { status: 200 });
+    }) as any;
+
+    const unique = `concurrent test ${Date.now()} ${Math.random()}`;
+    const [a, b] = await Promise.all([speak(unique), speak(unique)]);
+    expect(fetches).toBe(1);
+    expect(a.path).toBe(b.path);
+    expect(Array.from(readFileSync(a.path))).toEqual([1, 2, 3, 4]);
+    expect(readdirSync(dir).some((n) => n.endsWith('.tmp'))).toBe(false);
+
+    // Failed synthesis leaves no .tmp or partial final file behind.
+    globalThis.fetch = (async () => new Response('boom', { status: 500 })) as any;
+    await expect(speak(`fail test ${Date.now()} ${Math.random()}`)).rejects.toThrow(/TTS failed/);
+    expect(readdirSync(dir).some((n) => n.endsWith('.tmp'))).toBe(false);
+
+    delete process.env.DUET_TTS_URL;
+    process.env.DUET_STT_URL = 'http://stt.local/transcribe';
+    globalThis.fetch = (async () => new Response(JSON.stringify({ text: '[00:00.000 --> 00:01.000]  hello world' }), { status: 200 })) as any;
+    expect(await transcribeFile(a.path)).toBe('hello world');
   });
 });

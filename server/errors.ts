@@ -10,7 +10,7 @@
 export class UserError extends Error {
   constructor(
     message: string,
-    readonly status: 400 | 404 | 409 | 413 | 429 = 400,
+    readonly status: 400 | 404 | 409 | 413 | 429 | 503 = 400,
   ) {
     super(message);
     this.name = 'UserError';

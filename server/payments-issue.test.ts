@@ -35,6 +35,7 @@ test('privacy issues a single-use card capped at the approved total', async () =
     expect(body.type).toBe('SINGLE_USE');
     expect(body.spend_limit).toBe(5000);
     expect(s.calls[0].init.headers.authorization).toBe('Bearer k-test');
+    expect(typeof s.calls[0].init.headers['idempotency-key']).toBe('string');
     expect(card.last4).toBe('1111');
     expect(card.expiresAt).toBe(NOW + CARD_TTL_MS);
   } finally {
@@ -60,6 +61,7 @@ test('stripe creates a virtual card with an all-time spending limit, then reads 
     expect(form.get('spending_controls[spending_limits][0][amount]')).toBe('2500');
     expect(form.get('spending_controls[spending_limits][0][interval]')).toBe('all_time');
     expect(s.calls[1].init.method).toBe('GET');
+    expect(s.calls[1].init.headers['idempotency-key']).toBeUndefined();
     const details = new URL(s.calls[1].url);
     expect(details.pathname).toBe('/v1/issuing/cards/card_1');
     expect(details.searchParams.getAll('expand[]')).toEqual(['number', 'cvc']);

@@ -12,8 +12,9 @@ import { attachments, channels, files, items, kv, newId, pages, tasks } from './
 import { UserError } from './errors';
 import { hermes } from './hermes';
 import { GENERAL_CHANNEL } from './schema';
-import { apiError, handleApp, handleInternal, readTextCapped } from './index';
+import { apiError, compressJson, handleApp, handleInternal, readBytesCapped, readTextCapped } from './index';
 import { resetIdempotency, resetLimits } from './limits';
+import * as browser from './browser';
 import { MAX_UPLOAD_BYTES } from './uploads';
 
 const BASE = 'http://127.0.0.1:7456';
@@ -666,5 +667,355 @@ describe('memory routes', () => {
     const res = await authed('/api/memory', { method: 'POST' });
     expect(res.status).toBe(405);
     expect(res.headers.get('allow')).toBe('GET, PUT, DELETE');
+  });
+});
+
+describe('phase 2 API & security hardening', () => {
+  test('GET /api/items/:id and GET /api/files/:id/meta work and enforce 404/405', async () => {
+    const created = await authed('/api/messages', jsonPost({ text: 'lookup item probe' }));
+    expect(created.status).toBe(200);
+    const createdItem = ((await created.json()) as any).item;
+
+    const gotItem = await authed(`/api/items/${createdItem.id}`);
+    expect(gotItem.status).toBe(200);
+    expect(((await gotItem.json()) as any).item.id).toBe(createdItem.id);
+    expect((await authed('/api/items/item-does-not-exist')).status).toBe(404);
+    const wrongItemMethod = await authed(`/api/items/${createdItem.id}`, { method: 'POST' });
+    expect(wrongItemMethod.status).toBe(405);
+    expect(wrongItemMethod.headers.get('allow')).toBe('GET');
+
+    const fileId = newId();
+    const fileDir = join(config.dataDir, 'files', fileId);
+    mkdirSync(fileDir, { recursive: true });
+    const fPath = join(fileDir, 'report.txt');
+    writeFileSync(fPath, 'hello report');
+    files.add({ id: fileId, title: 'Report', name: 'report.txt', mime: 'text/plain', size: 12, created_at: Date.now() }, fPath);
+
+    const gotMeta = await authed(`/api/files/${fileId}/meta`);
+    expect(gotMeta.status).toBe(200);
+    expect(((await gotMeta.json()) as any).file).toMatchObject({ id: fileId, name: 'report.txt', size: 12 });
+    expect((await authed('/api/files/no-such-file/meta')).status).toBe(404);
+    expect((await authed(`/api/files/${fileId}/meta`, { method: 'POST' })).status).toBe(405);
+
+    for (const [route, allow] of [
+      ['/api/browser/ws', 'GET'],
+      [`/api/deliverables/${fileId}/action`, 'POST'],
+      [`/api/deliverables/${fileId}/approval`, 'POST'],
+    ] as const) {
+      const m = allow === 'GET' ? 'POST' : 'GET';
+      const r = await authed(route, { method: m });
+      expect(r.status).toBe(405);
+      expect(r.headers.get('allow')).toBe(allow);
+    }
+  });
+
+  test('archived channels are rejected across channel edit, items, seen, and sends', async () => {
+    const ch = ((await (await authed('/api/channels', jsonPost({ name: `arch-${newId().slice(-6)}` }))).json()) as any).channel;
+    const del = await authed(`/api/channels/${ch.id}`, { method: 'DELETE' });
+    expect(del.status).toBe(200);
+
+    expect((await authed('/api/channels', jsonPost({ id: ch.id, topic: 'late' }))).status).toBe(404);
+    expect((await authed(`/api/items?channel=${encodeURIComponent(ch.id)}`)).status).toBe(404);
+    expect((await authed(`/api/channels/${ch.id}/seen`, { method: 'POST' })).status).toBe(404);
+    expect((await authed(`/api/channels/${ch.id}/items`)).status).toBe(404);
+    expect((await authed('/api/messages', jsonPost({ text: 'after archive', channel_id: ch.id }))).status).toBe(404);
+  });
+
+  test('PUT /api/settings validates timezone when provided', async () => {
+    for (const badTz of ['Mars/Olympus_Mons', '', 123, null]) {
+      const res = await authed('/api/settings', jsonPut({ timezone: badTz }));
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as any).error).toBe('invalid timezone');
+    }
+    const ok = await authed('/api/settings', jsonPut({ timezone: 'America/New_York' }));
+    expect(ok.status).toBe(200);
+    expect(((await ok.json()) as any).settings.timezone).toBe('America/New_York');
+  });
+
+  test('body parsing validates JSON shape, handles /api/pair bad JSON cleanly, and throws 413 on overflow', async () => {
+    const cookieHdr = await paired();
+    for (const badBody of ['{not-json', 'null', '[]', '"hello"', '123']) {
+      const pairRes = await app('/api/pair', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: badBody,
+      });
+      expect(pairRes.status).toBe(400);
+
+      const chRes = await app('/api/channels', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie: cookieHdr },
+        body: badBody,
+      });
+      expect(chRes.status).toBe(400);
+      expect(((await chRes.json()) as any).code).toBe('bad_request');
+    }
+
+    const wrongCt = await authed('/api/channels', { method: 'POST', headers: { 'content-type': 'text/plain' }, body: '{}' });
+    expect(wrongCt.status).toBe(400);
+
+    const oversize = new Request(`${BASE}/api/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-length': '300000' },
+      body: 'x',
+    });
+    await expect(readTextCapped(oversize, 256_000)).rejects.toMatchObject({ status: 413, message: 'body too large' });
+
+    expect(apiError(new UserError('busy', 409), '/api/x').status).toBe(409);
+    expect(((await apiError(new UserError('busy', 409), '/api/x').json()) as any).code).toBe('conflict');
+    expect(((await apiError(new UserError('down', 503), '/api/x').json()) as any).code).toBe('unavailable');
+  });
+
+  test('webhook IP rate limit runs BEFORE webhookMatches and falls back to socket IP', async () => {
+    const ip = `203.0.113.${Math.floor(Math.random() * 200) + 10}`;
+    const fakeServer = { requestIP: () => ({ address: ip }) };
+    let saw429 = false;
+    for (let i = 0; i < 40; i++) {
+      const req = new Request(`${BASE}/api/webhooks/wrong-token-${i}`, { method: 'POST' });
+      const res = await handleApp(req, fakeServer);
+      if (res.status === 429) {
+        saw429 = true;
+        break;
+      }
+      expect(res.status).toBe(401);
+    }
+    expect(saw429).toBe(true);
+  });
+
+  test('concurrent Idempotency-Key deduplicates in-flight POST /api/messages without burning quota', async () => {
+    resetIdempotency();
+    resetLimits();
+    const cookieHdr = await paired();
+    const key = `conc-${newId()}`;
+
+    const makeStreamReq = () => {
+      const stream = new ReadableStream<Uint8Array>({
+        async start(ctrl) {
+          ctrl.enqueue(new TextEncoder().encode('{"text":'));
+          await Bun.sleep(20);
+          ctrl.enqueue(new TextEncoder().encode('"concurrent idemp test"}'));
+          ctrl.close();
+        },
+      });
+      return new Request(`${BASE}/api/messages`, {
+        method: 'POST',
+        headers: {
+          cookie: cookieHdr,
+          'content-type': 'application/json',
+          'idempotency-key': key,
+        },
+        body: stream,
+        duplex: 'half',
+      } as RequestInit & { duplex: 'half' });
+    };
+
+    const [r1, r2] = await Promise.all([handleApp(makeStreamReq()), handleApp(makeStreamReq())]);
+    expect(r1.status).toBe(200);
+    expect(r2.status).toBe(200);
+    const b1 = (await r1.json()) as any;
+    const b2 = (await r2.json()) as any;
+    expect(b1.item.id).toBe(b2.item.id);
+    expect(Boolean(b1.duplicate) !== Boolean(b2.duplicate)).toBe(true);
+
+    // Repeating the remembered key past the 60/min budget still returns the item without hitting 429.
+    for (let i = 0; i < 65; i++) {
+      const replay = await authed('/api/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'idempotency-key': key },
+        body: JSON.stringify({ text: 'concurrent idemp test' }),
+      });
+      expect(replay.status).toBe(200);
+    }
+    resetLimits();
+
+    // POST /api/tasks also supports Idempotency-Key deduplication.
+    const realHasKey = hermes.hasKey;
+    hermes.hasKey = () => false;
+    try {
+      const tKey = `task-${newId()}`;
+      const t1 = await authed('/api/tasks', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'idempotency-key': tKey },
+        body: JSON.stringify({ text: 'dedup task' }),
+      });
+      const t2 = await authed('/api/tasks', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'idempotency-key': tKey },
+        body: JSON.stringify({ text: 'dedup task' }),
+      });
+      const tb1 = (await t1.json()) as any;
+      const tb2 = (await t2.json()) as any;
+      expect(tb2.item.id).toBe(tb1.item.id);
+      expect(tb2.task.id).toBe(tb1.task.id);
+      expect(tb2.duplicate).toBe(true);
+    } finally {
+      hermes.hasKey = realHasKey;
+    }
+  });
+
+  test('raw /api/audio/transcribe caps chunked streams and sanitizes 503 engine leaks', async () => {
+    const bigStream = new ReadableStream<Uint8Array>({
+      start(ctrl) {
+        ctrl.enqueue(new Uint8Array(1024));
+      },
+    });
+    const overReq = new Request(`${BASE}/api/audio/transcribe`, {
+      method: 'POST',
+      headers: { 'content-type': 'audio/webm', 'content-length': String(MAX_UPLOAD_BYTES + 1) },
+      body: bigStream,
+      duplex: 'half',
+    } as RequestInit & { duplex: 'half' });
+    await expect(readBytesCapped(overReq, MAX_UPLOAD_BYTES)).rejects.toMatchObject({ status: 413 });
+
+    const chunkedOver = new Request(`${BASE}/api/audio/transcribe`, {
+      method: 'POST',
+      headers: { cookie: await paired(), 'content-type': 'audio/webm' },
+      body: new ReadableStream<Uint8Array>({
+        start(ctrl) {
+          ctrl.enqueue(new Uint8Array(1024));
+          ctrl.enqueue(new Uint8Array(MAX_UPLOAD_BYTES));
+          ctrl.close();
+        },
+      }),
+      duplex: 'half',
+    } as RequestInit & { duplex: 'half' });
+    const overRes = await handleApp(chunkedOver);
+    expect(overRes.status).toBe(413);
+
+    const savedUrl = process.env.DUET_STT_URL;
+    const realFetch = globalThis.fetch;
+    const realErr = console.error;
+    console.error = () => {};
+    process.env.DUET_STT_URL = 'http://secret-whisper.internal:8080/transcribe';
+    globalThis.fetch = (async () => new Response('<html>internal host secret-whisper.internal:8080 crashed</html>', { status: 502 })) as any;
+    try {
+      const res = await authed('/api/audio/transcribe', {
+        method: 'POST',
+        headers: { 'content-type': 'audio/webm' },
+        body: new Uint8Array([1, 2, 3, 4]),
+      });
+      expect(res.status).toBe(503);
+      const body = (await res.json()) as any;
+      expect(body.text).toBe('');
+      expect(body.attachment.id).toBeTruthy();
+      expect(body.error).toBe('Transcription failed (502)');
+      expect(JSON.stringify(body)).not.toContain('secret-whisper.internal');
+    } finally {
+      if (savedUrl === undefined) delete process.env.DUET_STT_URL;
+      else process.env.DUET_STT_URL = savedUrl;
+      globalThis.fetch = realFetch;
+      console.error = realErr;
+    }
+  });
+
+  test('/api/browser/autofill sanitizes internal path leaks', async () => {
+    const savedPort = process.env.DUET_CHROME_PORT;
+    const savedBin = process.env.DUET_CHROME_BIN;
+    const savedOp = process.env.DUET_OP_CMD;
+    const realErr = console.error;
+    console.error = () => {};
+    let wsPort = 0;
+    const cdpSrv = Bun.serve({
+      port: 0,
+      fetch(req, server): Response | undefined {
+        const u = new URL(req.url);
+        if (u.pathname === '/json/version') {
+          return Response.json({ webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/cdp` });
+        }
+        if (u.pathname === '/cdp' && server.upgrade(req)) return undefined;
+        return new Response('nope', { status: 404 });
+      },
+      websocket: {
+        message(ws, raw) {
+          const msg = JSON.parse(typeof raw === 'string' ? raw : new TextDecoder().decode(raw));
+          if (msg.method === 'Target.getTargets') {
+            ws.send(JSON.stringify({ id: msg.id, result: { targetInfos: [{ targetId: 't1', type: 'page', title: 'Shop', url: 'https://shop.example/login' }] } }));
+          } else if (msg.method === 'Target.attachToTarget') {
+            ws.send(JSON.stringify({ id: msg.id, result: { sessionId: 's1' } }));
+          } else if (msg.method === 'Runtime.evaluate') {
+            ws.send(JSON.stringify({ id: msg.id, result: { result: { value: 'https://shop.example/login' } } }));
+          } else {
+            ws.send(JSON.stringify({ id: msg.id, result: {} }));
+          }
+        },
+      },
+    });
+    wsPort = cdpSrv.port ?? 0;
+    process.env.DUET_CHROME_PORT = '19999';
+    process.env.DUET_CHROME_BIN = '/nonexistent/secret/chrome/path';
+    process.env.DUET_OP_CMD = '/nonexistent/op/bin get {domain}';
+    const vault = await import('./vault');
+    const prevHas = vault.__setVaultHas(() => true);
+    const prevRunner = vault.__setVaultRunner(async () => ({
+      out: '',
+      err: 'spawn ENOENT /var/internal/op-wrapper/bin',
+      code: 1,
+    }));
+    browser.close();
+    try {
+      const noTabRes = await authed('/api/browser/autofill', jsonPost({}));
+      expect(noTabRes.status).toBe(400);
+      expect(((await noTabRes.json()) as any).error).toBe('no active tab');
+
+      process.env.DUET_CHROME_PORT = String(wsPort);
+      await browser.open();
+      const res = await authed('/api/browser/autofill', jsonPost({ provider: '1password' }));
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as any;
+      expect(body.error).toBe('Autofill failed');
+      expect(body.error).not.toContain('/var/internal/');
+      expect(body.error).not.toContain('ENOENT');
+    } finally {
+      vault.__setVaultHas(prevHas);
+      vault.__setVaultRunner(prevRunner);
+      browser.close();
+      cdpSrv.stop(true);
+      if (savedPort === undefined) delete process.env.DUET_CHROME_PORT;
+      else process.env.DUET_CHROME_PORT = savedPort;
+      if (savedBin === undefined) delete process.env.DUET_CHROME_BIN;
+      else process.env.DUET_CHROME_BIN = savedBin;
+      if (savedOp === undefined) delete process.env.DUET_OP_CMD;
+      else process.env.DUET_OP_CMD = savedOp;
+      console.error = realErr;
+    }
+  });
+
+  test('serveStatic sets asset cache-control, sw.js header, and blocks sibling webDir escape; compressJson uses UTF-8 byteLength', async () => {
+    const origWebDir = config.webDir;
+    const dir = mkdtempSync(join(tmpdir(), 'duet-static-'));
+    const webDir = join(dir, 'dist');
+    const siblingDir = join(dir, 'dist-secret');
+    mkdirSync(join(webDir, 'assets'), { recursive: true });
+    mkdirSync(siblingDir, { recursive: true });
+    writeFileSync(join(webDir, 'index.html'), '<html>ok</html>');
+    writeFileSync(join(webDir, 'assets', 'app.js'), 'console.log(1);');
+    writeFileSync(join(webDir, 'sw.js'), '// sw');
+    writeFileSync(join(siblingDir, 'leak.txt'), 'secret');
+    config.webDir = webDir;
+    try {
+      const asset = await app('/assets/app.js');
+      expect(asset.status).toBe(200);
+      expect(asset.headers.get('cache-control')).toContain('immutable');
+
+      const sw = await app('/sw.js');
+      expect(sw.status).toBe(200);
+      expect(sw.headers.get('service-worker-allowed')).toBe('/');
+
+      const sibling = await app('/../dist-secret/leak.txt');
+      expect(await sibling.text()).toBe('<html>ok</html>');
+    } finally {
+      config.webDir = origWebDir;
+      rmSync(dir, { recursive: true, force: true });
+    }
+
+    // 400 four-byte UTF-8 emojis = 800 UTF-16 code units (<1024 chars), 1600 UTF-8 bytes (>=1024 bytes).
+    const payload = JSON.stringify({ msg: '🚀'.repeat(400) });
+    expect(payload.length).toBeLessThan(1024);
+    expect(Buffer.byteLength(payload, 'utf8')).toBeGreaterThanOrEqual(1024);
+    const compressed = await compressJson(
+      new Request(`${BASE}/api/items`, { headers: { 'accept-encoding': 'gzip' } }),
+      Promise.resolve(new Response(payload, { headers: { 'content-type': 'application/json' } })),
+    );
+    expect(compressed.headers.get('content-encoding')).toBe('gzip');
   });
 });

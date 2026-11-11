@@ -4,10 +4,12 @@
 // at a URL you point us at); the morning brief can be listened to through macOS `say` (converted to AAC so phones can
 // play it), Piper, or an OpenAI-compatible TTS endpoint. Nothing is uploaded anywhere unless DUET_STT_URL /
 // DUET_TTS_URL says so.
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import type { CardData } from '../shared/types';
 import { config } from './config';
+import { UserError } from './errors';
+import { splitArgs } from './vault';
 
 type Env = Record<string, string | undefined>;
 
@@ -29,9 +31,11 @@ export function sttTarget(env: Env, has: (cmd: string) => boolean): SttTarget {
   if (url) return { kind: 'http', url, model: env.DUET_STT_MODEL?.trim() || 'whisper-1', key: env.DUET_STT_KEY?.trim() || '' };
   const custom = env.DUET_STT_CMD?.trim();
   if (custom) {
-    const [cmd, ...args] = custom.split(/\s+/);
-    // `{file}` expands per transcription; a template without it gets the path appended.
-    return { kind: 'cmd', cmd, args: args.includes('{file}') ? args : [...args, '{file}'] };
+    const [cmd = '', ...args] = splitArgs(custom);
+    if (cmd) {
+      // `{file}` expands per transcription; a template without it gets the path appended.
+      return { kind: 'cmd', cmd, args: args.includes('{file}') ? args : [...args, '{file}'] };
+    }
   }
   for (const cmd of ['whisper-cli', 'whisper-cpp']) {
     if (has(cmd)) return { kind: 'cmd', cmd, args: ['-f', '{file}', '-nt', '-np'] };
@@ -54,8 +58,8 @@ export function ttsTarget(env: Env, platform: string): TtsTarget {
   if (url) return { kind: 'http', url, model: env.DUET_TTS_MODEL?.trim() || 'tts-1', voice: env.DUET_TTS_VOICE?.trim() || 'alloy', key: env.DUET_TTS_KEY?.trim() || '' };
   const custom = env.DUET_TTS_CMD?.trim();
   if (custom) {
-    const [cmd, ...args] = custom.split(/\s+/);
-    return { kind: 'cmd', cmd, args };
+    const [cmd = '', ...args] = splitArgs(custom);
+    if (cmd) return { kind: 'cmd', cmd, args };
   }
   if (platform === 'darwin') return { kind: 'say' };
   return { kind: 'none', reason: 'No text-to-speech engine. Set DUET_TTS_CMD (Piper: "piper --model en_US-lessac-medium.onnx --output_file {out}") or DUET_TTS_URL.' };
@@ -152,7 +156,7 @@ async function runCommand(cmd: string, args: string[], stdin?: string): Promise<
 /** Transcribe a stored audio file with whatever local engine is configured. Returns '' when it heard nothing. */
 export async function transcribeFile(path: string): Promise<string> {
   const target = sttTarget(process.env, hasCommand);
-  if (target.kind === 'none') throw new Error(target.reason);
+  if (target.kind === 'none') throw new UserError(target.reason, 503);
   if (target.kind === 'cmd') {
     const args = target.args.map((a) => a.replaceAll('{file}', path));
     const { out, err, code } = await runCommand(target.cmd, args);
@@ -179,6 +183,7 @@ export async function transcribeFile(path: string): Promise<string> {
 }
 
 const ttsDir = () => join(config.dataDir, 'tts');
+const inFlightSpeak = new Map<string, Promise<{ path: string; mime: string }>>();
 
 /**
  * Synthesize text to a cached audio file. The cache key covers the engine, so changing voice or model makes a new
@@ -186,9 +191,9 @@ const ttsDir = () => join(config.dataDir, 'tts');
  */
 export async function speak(text: string): Promise<{ path: string; mime: string }> {
   const target = ttsTarget(process.env, process.platform);
-  if (target.kind === 'none') throw new Error(target.reason);
+  if (target.kind === 'none') throw new UserError(target.reason, 503);
   const spokenText = spoken(text);
-  if (!spokenText) throw new Error('nothing to say');
+  if (!spokenText) throw new UserError('nothing to say', 400);
   const key = Bun.hash(`${JSON.stringify(target)}\n${spokenText}`).toString(36);
   const dir = ttsDir();
   mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -196,32 +201,52 @@ export async function speak(text: string): Promise<{ path: string; mime: string 
   const out = join(dir, `${key}${ext}`);
   const mime = ext === '.mp3' ? 'audio/mpeg' : ext === '.m4a' ? 'audio/mp4' : ext === '.ogg' ? 'audio/ogg' : 'audio/wav';
   if (existsSync(out)) return { path: out, mime };
+  const existing = inFlightSpeak.get(out);
+  if (existing) return existing;
 
-  if (target.kind === 'say') {
-    const aiff = join(dir, `${key}.aiff`);
-    const said = await runCommand('say', ['-o', aiff, spokenText]);
-    if (said.code !== 0) throw new Error(`say failed: ${said.err.trim().slice(-200) || `exit ${said.code}`}`);
-    // AIFF is not reliably playable on phones; AAC/M4A is.
-    const conv = await runCommand('afconvert', ['-f', 'm4af', '-d', 'aac', '-b', '64000', aiff, out]);
-    rmSync(aiff, { force: true });
-    if (conv.code !== 0) throw new Error(`afconvert failed: ${conv.err.trim().slice(-200) || `exit ${conv.code}`}`);
-  } else if (target.kind === 'cmd') {
-    const hasOut = target.args.some((a) => a.includes('{out}'));
-    const hasText = target.args.some((a) => a.includes('{text}'));
-    const args = target.args.map((a) => a.replaceAll('{out}', out).replaceAll('{text}', spokenText));
-    if (!hasOut) args.push(out);
-    const ran = await runCommand(target.cmd, args, hasText ? '' : spokenText);
-    if (ran.code !== 0) throw new Error(`TTS command failed: ${ran.err.trim().slice(-200) || `exit ${ran.code}`}`);
-  } else {
-    const res = await fetch(target.url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', ...(target.key ? { authorization: `Bearer ${target.key}` } : {}) },
-      body: JSON.stringify({ model: target.model, voice: target.voice, input: spokenText, response_format: 'mp3' }),
-      signal: AbortSignal.timeout(STT_TIMEOUT_MS),
-    });
-    if (!res.ok) throw new Error(`TTS failed (${res.status}): ${(await res.text()).slice(0, 200)}`);
-    writeFileSync(out, new Uint8Array(await res.arrayBuffer()), { mode: 0o600 });
+  const synth = (async () => {
+    const nonce = `${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`;
+    const tmpOut = join(dir, `.${key}.${nonce}${ext}.tmp`);
+    const tmpAiff = join(dir, `.${key}.${nonce}.aiff.tmp`);
+    try {
+      if (target.kind === 'say') {
+        const said = await runCommand('say', ['-o', tmpAiff, spokenText]);
+        if (said.code !== 0) throw new Error(`say failed: ${said.err.trim().slice(-200) || `exit ${said.code}`}`);
+        // AIFF is not reliably playable on phones; AAC/M4A is.
+        const conv = await runCommand('afconvert', ['-f', 'm4af', '-d', 'aac', '-b', '64000', tmpAiff, tmpOut]);
+        if (conv.code !== 0) throw new Error(`afconvert failed: ${conv.err.trim().slice(-200) || `exit ${conv.code}`}`);
+      } else if (target.kind === 'cmd') {
+        const hasOut = target.args.some((a) => a.includes('{out}'));
+        const hasText = target.args.some((a) => a.includes('{text}'));
+        const args = target.args.map((a) => a.replaceAll('{out}', tmpOut).replaceAll('{text}', spokenText));
+        if (!hasOut) args.push(tmpOut);
+        const ran = await runCommand(target.cmd, args, hasText ? '' : spokenText);
+        if (ran.code !== 0) throw new Error(`TTS command failed: ${ran.err.trim().slice(-200) || `exit ${ran.code}`}`);
+      } else {
+        const res = await fetch(target.url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', ...(target.key ? { authorization: `Bearer ${target.key}` } : {}) },
+          body: JSON.stringify({ model: target.model, voice: target.voice, input: spokenText, response_format: 'mp3' }),
+          signal: AbortSignal.timeout(STT_TIMEOUT_MS),
+        });
+        if (!res.ok) throw new Error(`TTS failed (${res.status}): ${(await res.text()).slice(0, 200)}`);
+        writeFileSync(tmpOut, new Uint8Array(await res.arrayBuffer()), { mode: 0o600 });
+      }
+      if (!existsSync(tmpOut)) throw new Error('TTS produced no output file');
+      chmodSync(tmpOut, 0o600);
+      renameSync(tmpOut, out);
+      chmodSync(out, 0o600);
+      return { path: out, mime };
+    } finally {
+      rmSync(tmpAiff, { force: true });
+      rmSync(tmpOut, { force: true });
+    }
+  })();
+
+  inFlightSpeak.set(out, synth);
+  try {
+    return await synth;
+  } finally {
+    if (inFlightSpeak.get(out) === synth) inFlightSpeak.delete(out);
   }
-  chmodSync(out, 0o600);
-  return { path: out, mime };
 }

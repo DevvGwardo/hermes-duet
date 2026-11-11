@@ -138,6 +138,14 @@ describe('paymentPrompt', () => {
     expect(p).toContain('authorized spending up to $31.50');
     expect(p).toContain('request_payment for the difference');
   });
+
+  test('approval with issued card when browser fill failed tells agent not to proceed without digits', () => {
+    const p = paymentPrompt(card, 'card-1', { approved: true }, { cardFilled: false, last4: '4242' });
+    expect(p).toContain('ending 4242');
+    expect(p).toContain('could not be typed into the browser automatically');
+    expect(p).toContain('do not proceed with checkout without card details');
+    expect(p).not.toContain('is now typed into the checkout');
+  });
 });
 
 describe('providerFromEnv', () => {
@@ -229,6 +237,8 @@ describe('issueCard payloads', () => {
       expect(card.last4).toBe('1111');
       expect(s.calls[0]!.url).toBe('https://api.privacy.com/v1/card');
       expect(s.calls[0]!.init.headers.authorization).toBe('Bearer k');
+      expect(typeof s.calls[0]!.init.headers['idempotency-key']).toBe('string');
+      expect(s.calls[0]!.init.headers['idempotency-key'].length).toBeGreaterThan(8);
       expect(JSON.parse(s.calls[0]!.init.body)).toEqual({
         type: 'SINGLE_USE',
         memo: 'Hermes Duet: Health permit',

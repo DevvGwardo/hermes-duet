@@ -110,31 +110,111 @@ function redactEnds(value: string, first: number, last: number): string {
  * Card numbers (13-19 digits, spaces/dashes ignored) that pass Luhn. The checksum is what separates a real
  * number from order ids, dates and phone numbers, which almost never validate; digit-count (13+) plus
  * letter-adjacency rejection keeps phone numbers and alnum order ids out before that.
+ *
+ * Groups of digits are scanned rather than matching a fixed `{13,19}` run so a preceding number separated by
+ * a space (e.g. `"ZIP 90210 4111-1111-1111-1111"` or `"qty 12 4111 1111 1111 1111"`) cannot swallow and hide
+ * the real card number after it, while still rejecting >19-digit single numbers and alnum-glued IDs.
  */
 function findCards(text: string, out: ScanFinding[]) {
-  const re = /(?:\d[ \-]*){13,19}/g;
+  const groups: { start: number; end: number; digits: string }[] = [];
+  const groupRe = /\d+/g;
+  for (let gm = groupRe.exec(text); gm; gm = groupRe.exec(text)) {
+    groups.push({ start: gm.index, end: gm.index + gm[0].length, digits: gm[0] });
+  }
+  if (groups.length === 0) return;
+
+  // Partition digit groups into maximal runs connected only by single-line spaces or hyphens.
+  let runStart = 0;
   const seen = new Set<string>();
-  for (let m = re.exec(text); m && out.length < FINDINGS_MAX; ) {
-    const start = m.index;
-    // The pattern eats trailing separators ("4111…1111 " with the space): trim them back so the
-    // adjacency check looks at the real boundary instead of the word after it.
-    const raw = m[0].replace(/[ \-]+$/, '');
-    const end = start + raw.length;
-    // A longer digit run, or letters glued to either end ("ORD4111111111111111"), is an id, not a number.
-    const before = start > 0 ? text[start - 1] : '';
-    const after = end < text.length ? text[end] : '';
-    const digits = raw.replace(/[^0-9]/g, '');
-    const adjacent = /[0-9A-Za-z]/.test(before ?? '') || /[0-9A-Za-z]/.test(after ?? '');
-    if (!adjacent && digits.length >= 13 && digits.length <= 19 && !/^(\d)\1+$/.test(digits) && luhnOk(digits)) {
-      const redacted = redactEnds(digits, 4, 4);
-      if (!seen.has(redacted)) {
-        seen.add(redacted);
-        out.push({ tier: 'never_share', label: 'card number', redacted });
+  while (runStart < groups.length && out.length < FINDINGS_MAX) {
+    let runEnd = runStart;
+    while (runEnd + 1 < groups.length && /^[ \-]+$/.test(text.slice(groups[runEnd]!.end, groups[runEnd + 1]!.start))) {
+      runEnd++;
+    }
+
+    const totalDigits = groups.slice(runStart, runEnd + 1).reduce((n, g) => n + g.digits.length, 0);
+    if (runStart === runEnd) {
+      // Single contiguous digit token: never slice substrings out of an oversized digit run (>19 digits).
+      const g = groups[runStart]!;
+      const before = g.start > 0 ? text[g.start - 1]! : '';
+      const after = g.end < text.length ? text[g.end]! : '';
+      const adjacent = /[0-9A-Za-z]/.test(before) || /[0-9A-Za-z]/.test(after);
+      if (!adjacent && g.digits.length >= 13 && g.digits.length <= 19 && !/^(\d)\1+$/.test(g.digits) && luhnOk(g.digits)) {
+        const redacted = redactEnds(g.digits, 4, 4);
+        if (!seen.has(redacted)) {
+          seen.add(redacted);
+          out.push({ tier: 'never_share', label: 'card number', redacted });
+        }
+      }
+    } else if (totalDigits >= 13) {
+      // Multi-group run (e.g. "4111-1111-1111-1111" or "ZIP 90210 4111-1111-1111-1111").
+      // Score all Luhn-valid group spans 13..19 digits so genuine PAN spans win cleanly over accidental overlaps.
+      type Candidate = { i: number; j: number; digits: string; score: number };
+      const candidates: Candidate[] = [];
+      for (let i = runStart; i <= runEnd; i++) {
+        const gStart = groups[i]!;
+        const before = gStart.start > 0 ? text[gStart.start - 1]! : '';
+        if (/[0-9A-Za-z]/.test(before)) continue;
+        // Do not start inside the middle of a hyphenated chain ("...-1111-1111").
+        const sepBefore = i > runStart ? text.slice(groups[i - 1]!.end, gStart.start) : '';
+        if (i > runStart && sepBefore.includes('-')) continue;
+
+        let digits = '';
+        for (let j = i; j <= runEnd; j++) {
+          const gEnd = groups[j]!;
+          digits += gEnd.digits;
+          if (digits.length > 19) break;
+          if (digits.length < 13) continue;
+          const after = gEnd.end < text.length ? text[gEnd.end]! : '';
+          if (/[0-9A-Za-z]/.test(after)) continue;
+          // Do not truncate before a trailing hyphenated group unless no longer span includes it.
+          const sepAfter = j < runEnd ? text.slice(gEnd.end, groups[j + 1]!.start) : '';
+          if (j < runEnd && sepAfter.includes('-')) continue;
+          if (/^(\d)\1+$/.test(digits) || !luhnOk(digits)) continue;
+
+          // Compute uniformity / boundary score to prefer real PANs over accidental surrounding numbers.
+          let sameSep = true;
+          const firstSep = j > i ? text.slice(groups[i]!.end, groups[i + 1]!.start) : '';
+          for (let k = i + 1; k < j; k++) {
+            if (text.slice(groups[k]!.end, groups[k + 1]!.start) !== firstSep) {
+              sameSep = false;
+              break;
+            }
+          }
+          let score = 0;
+          if (i === runStart) score += 1;
+          if (j === runEnd) score += 2;
+          if (sepBefore && !firstSep.includes(sepBefore.trim() || ' ')) score += 3;
+          if (sepAfter && !firstSep.includes(sepAfter.trim() || ' ')) score += 3;
+          if (sameSep) score += 2;
+          if (digits.length === 15 || digits.length === 16) score += 2;
+          if (/^[23456]/.test(digits)) score += 2;
+          score += digits.length / 100;
+          candidates.push({ i, j, digits, score });
+        }
+      }
+      candidates.sort((a, b) => b.score - a.score);
+      const used = new Array<boolean>(runEnd - runStart + 1).fill(false);
+      for (const c of candidates) {
+        if (out.length >= FINDINGS_MAX) break;
+        let overlaps = false;
+        for (let k = c.i; k <= c.j; k++) {
+          if (used[k - runStart]) {
+            overlaps = true;
+            break;
+          }
+        }
+        if (overlaps) continue;
+        for (let k = c.i; k <= c.j; k++) used[k - runStart] = true;
+        const redacted = redactEnds(c.digits, 4, 4);
+        if (!seen.has(redacted)) {
+          seen.add(redacted);
+          out.push({ tier: 'never_share', label: 'card number', redacted });
+        }
       }
     }
-    // Guard against zero-length progress: the pattern always consumes, but never loop forever on pathological input.
-    re.lastIndex = end > start ? end : start + 1;
-    m = re.exec(text);
+
+    runStart = runEnd + 1;
   }
 }
 
@@ -145,12 +225,12 @@ const SSN_RE = /\b(?!000|666|9\d{2})([0-8]\d{2})-(?!00)(\d{2})-(?!0000)(\d{4})\b
  * group can be short (a DE IBAN ends "...0130 00"), so it allows a short tail after the full groups. */
 const IBAN_RE = /\b[A-Z]{2}[0-9]{2}(?: ?[A-Z0-9]{4})+(?: ?[A-Z0-9]{1,4})?\b/gi;
 
-const PEM_RE = /-----BEGIN (?:[A-Z0-9 ]* )?PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z0-9 ]* )?PRIVATE KEY-----/g;
-const AWS_RE = /\bAKIA[0-9A-Z]{16}\b/g;
-// Distinctive prefixes only: a bare "sk-" never appears in prose, and 16+ trailing chars rules out typos.
-const SK_RE = /\bsk-[A-Za-z0-9_-]{16,}\b/g;
-const GITHUB_RE = /\bgh[opu]_[A-Za-z0-9]{20,}\b/g;
-const GITHUB_CLASSIC_RE = /\bghs_[A-Za-z0-9]{20,}\b/g;
+const PEM_RE = /-----BEGIN (?:[A-Z0-9 ]* )?PRIVATE KEY-----(?:[\s\S]*?-----END (?:[A-Z0-9 ]* )?PRIVATE KEY-----)?/g;
+const AWS_RE = /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g;
+// Distinctive prefixes only: never appear in prose, and long trailing bodies rule out typos.
+const SK_RE = /\b(?:sk-[A-Za-z0-9_-]{16,}|(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}|xox[baprs]-[A-Za-z0-9-]{10,})\b/g;
+const GITHUB_RE = /\bgh[opusr]_[A-Za-z0-9]{20,}\b/g;
+const GITHUB_PAT_RE = /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g;
 
 /**
  * Scan outbound text for secrets and sensitive identifiers. Never returns a full secret: every finding carries
@@ -186,7 +266,14 @@ export function scanOutbound(text: unknown): ScanFinding[] {
   }
 
   PEM_RE.lastIndex = 0;
-  if (PEM_RE.test(src)) push({ tier: 'never_share', label: 'private key', redacted: '-----BEGIN PRIVATE KEY…END PRIVATE KEY-----' });
+  const pemMatch = PEM_RE.exec(src);
+  if (pemMatch) {
+    push({
+      tier: 'never_share',
+      label: 'private key',
+      redacted: pemMatch[0].includes('-----END ') ? '-----BEGIN PRIVATE KEY…END PRIVATE KEY-----' : '-----BEGIN PRIVATE KEY…',
+    });
+  }
 
   AWS_RE.lastIndex = 0;
   for (let m = AWS_RE.exec(src); m && out.length < FINDINGS_MAX; m = AWS_RE.exec(src)) {
@@ -198,7 +285,7 @@ export function scanOutbound(text: unknown): ScanFinding[] {
     push({ tier: 'never_share', label: 'API key', redacted: redactEnds(m[0], 3, 4) });
   }
 
-  for (const re of [GITHUB_RE, GITHUB_CLASSIC_RE]) {
+  for (const re of [GITHUB_RE, GITHUB_PAT_RE]) {
     re.lastIndex = 0;
     for (let m = re.exec(src); m && out.length < FINDINGS_MAX; m = re.exec(src)) {
       push({ tier: 'never_share', label: 'GitHub token', redacted: redactEnds(m[0], 4, 4) });
@@ -276,7 +363,11 @@ const BLOCK_BY_ID = new Map(HARD_BLOCKS.map((b) => [b.id, b]));
  * posts that request_approval exists for.
  */
 export function approvalPolicyRefusal(input: PolicyInput): string | null {
-  const hay = [input.title, input.summary, input.destination, input.content, input.draft].filter(Boolean).join('\n').toLowerCase();
+  const hay = [input.title, input.summary, input.destination, input.content, input.draft]
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
   if (!hay.trim()) return null;
   for (const { id, res } of POLICY_PATTERNS) {
     if (res.some((re) => re.test(hay))) {
@@ -340,6 +431,7 @@ export function validateApprovalFields(raw: unknown): ValidatedApproval {
   let url: string | undefined;
   const urlRaw = cleanStr(r.url, MAX_URL_LEN);
   if (urlRaw) {
+    if (CONTROL_CHARS.test(urlRaw)) throw new Error('url must not contain control characters');
     let parsed: URL | null = null;
     try {
       parsed = new URL(urlRaw);
@@ -349,7 +441,7 @@ export function validateApprovalFields(raw: unknown): ValidatedApproval {
     if (!parsed || (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')) {
       throw new Error('url must be an http(s) URL');
     }
-    url = urlRaw;
+    url = parsed.href;
   }
 
   return { action, destination, recipients, content, url };

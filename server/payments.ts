@@ -134,6 +134,10 @@ export function paymentPrompt(card: CardData, cardId: string, decision: { approv
   if (opts.cardFilled && opts.last4) {
     return `[payment ${cardId}] APPROVED: ${total} at ${merchant}. A single-use card ending ${opts.last4} is now typed into the checkout in your live browser; it is good for one transaction, for the next hour, and only up to ${total}. Finish the checkout, confirm the charged amount is exactly ${total}, and report the order. Never repeat the card number.`;
   }
+  if (opts.last4) {
+    const where = card.merchant_host ?? merchant;
+    return `[payment ${cardId}] APPROVED: ${total} at ${merchant}. A single-use card ending ${opts.last4} was issued (good for one transaction, for the next hour, and only up to ${total}), but could not be typed into the browser automatically because the checkout payment fields were missing or the tab was not on ${where}. Navigate to the payment form on ${where} or ask the user to retry or enter the card — do not proceed with checkout without card details or exceed ${total}.`;
+  }
   return `[payment ${cardId}] APPROVED: ${total} at ${merchant}. The user authorized spending up to ${total}; this is their approval for a purchase at exactly that total. Go ahead with the checkout they asked for, confirm the final amount is exactly ${total}, and if the site asks for more, stop and send a new request_payment for the difference.`;
 }
 
@@ -216,7 +220,11 @@ export async function issueCard(
   const call = async (path: string, body?: BodyInit, headers: Record<string, string> = {}, method: 'GET' | 'POST' = 'POST') => {
     const res = await fetch(`${cfg.baseUrl}${path}`, {
       method,
-      headers: { authorization: `Bearer ${cfg.key}`, ...headers },
+      headers: {
+        authorization: `Bearer ${cfg.key}`,
+        ...(method === 'POST' ? { 'idempotency-key': crypto.randomUUID() } : {}),
+        ...headers,
+      },
       ...(body === undefined ? {} : { body }),
       signal: AbortSignal.timeout(20_000),
     });

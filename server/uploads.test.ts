@@ -89,7 +89,12 @@ describe('saveUpload', () => {
 
   test('stored uploads are owner-read-only', () => {
     const att = saveUpload({ bytes: new Uint8Array([9]), mime: 'application/pdf', filename: 's.pdf' });
-    expect(statSync(attachments.get(att.id)!.path).mode & 0o777).toBe(0o600);
+    const p = attachments.get(att.id)!.path;
+    if (process.platform !== 'win32') {
+      expect(statSync(p).mode & 0o777).toBe(0o600);
+    } else {
+      expect(Array.from(readFileSync(p))).toEqual([9]);
+    }
   });
 
   test('refuses what checkUpload refuses', () => {
