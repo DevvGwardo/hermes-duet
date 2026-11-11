@@ -75,12 +75,21 @@ function seedLongDraft() {
   const item = { id: "dialogs-draft", kind: "card", created_at: now, updated_at: now, run_id: null, task_id: null, card: { type: "approval", status: "pending", title: "Polish: long draft review", action_label: "Send", body: "The exact text below is what will be sent.", draft } };
   const dbPath = join(DEMO_DIR, "duet.db");
   const sql = `INSERT OR REPLACE INTO items(id,kind,created_at,updated_at,run_id,task_id,json,channel_id) VALUES('dialogs-draft','card',${now},${now},NULL,NULL,'${JSON.stringify(item).replace(/'/g, "''")}','chan-general')`;
-  execFileSync("python3", [
-    "-c",
-    "import sqlite3, sys; con = sqlite3.connect(sys.argv[1], timeout=15); con.execute(sys.argv[2]); con.commit()",
-    dbPath,
-    sql,
-  ]);
+  const seedScript =
+    "import('bun:sqlite').then(async({Database})=>{const db=new Database(process.env.DUET_SEED_DB);db.exec('PRAGMA busy_timeout = 15000');db.run(process.env.DUET_SEED_SQL);db.close()})";
+  const bunBin = process.env.BUN ?? "bun";
+  const bunArgs = ["-e", "eval(atob(process.env.DUET_SEED_B64))"];
+  const env = {
+    ...process.env,
+    DUET_SEED_B64: Buffer.from(seedScript).toString("base64"),
+    DUET_SEED_DB: dbPath,
+    DUET_SEED_SQL: sql,
+  };
+  if (process.platform === "win32" && !process.env.BUN) {
+    execFileSync("cmd.exe", ["/d", "/s", "/c", bunBin, ...bunArgs], { env });
+  } else {
+    execFileSync(bunBin, bunArgs, { env });
+  }
 }
 
 const CHROME = process.env.CHROME_PATH ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";

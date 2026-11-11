@@ -2052,6 +2052,10 @@ li.done .tick {
   justify-content: center;
   animation: fade 0.15s ease-out;
 }
+/* TaskSheet portals to document.body above .sidebar/.rail (z-index: 2) while yielding to Viewer/Settings overlays (z-index: 30). */
+.sheet-backdrop.task-sheet-backdrop {
+  z-index: 29;
+}
 @keyframes fade {
   from {
     opacity: 0;
@@ -2624,8 +2628,14 @@ li.done .tick {
     }
   }
   .sheet.settings,
-  .sheet.channels-sheet {
+  .sheet.channels-sheet,
+  .sheet.connectors-sheet,
+  .sheet.routines-sheet {
     max-width: 520px;
+  }
+  .sheet.task-sheet {
+    max-width: 680px;
+    height: min(88dvh, 860px);
   }
   .sheet.search-sheet {
     width: min(700px, calc(100vw - 96px));

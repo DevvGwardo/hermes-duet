@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { Item, Task } from '../../../shared/types';
 import { api } from '../api';
 import { visibleFiles } from '../edit';
@@ -195,8 +196,8 @@ function TaskSheet({ task, onClose, onOpenFile }: { task: Task; onClose: () => v
     }
   }
 
-  return (
-    <div className="sheet-backdrop" onClick={onClose}>
+  const sheet = (
+    <div className="sheet-backdrop task-sheet-backdrop" onClick={onClose}>
       <div className="sheet task-sheet" role="dialog" aria-modal="true" aria-label={task.title} ref={dialog} onClick={(e) => e.stopPropagation()}>
         <div className="sheet-head">
           <button className="icon-btn" onClick={onClose} aria-label="Back to tasks">
@@ -307,6 +308,7 @@ function TaskSheet({ task, onClose, onOpenFile }: { task: Task; onClose: () => v
       </div>
     </div>
   );
+  return typeof document !== 'undefined' ? createPortal(sheet, document.body) : sheet;
 }
 
 /** Steer the task while it runs. The server refuses with a 409 when there is no live run, and that refusal is shown. */
