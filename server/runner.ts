@@ -116,12 +116,18 @@ export function mainSessionId(): string {
   return channels.general().session_id;
 }
 
+/** Return `channelId` if it refers to an existing, unarchived channel; otherwise fall back to #general. */
+function liveChannelId(channelId?: string | null): string {
+  const ch = channelId ? channels.get(channelId) : null;
+  return ch && ch.archived_at == null ? ch.id : channels.general().id;
+}
+
 /**
  * The channel a run's items belong to. A background task's session is not a channel, so its result lands in the
  * channel it was started from; everything else (briefs, check-ins, chat) says which channel it is.
  */
 function channelOfSpec(spec: RunSpec): string {
-  return spec.channelId ?? channels.forTask(spec.taskId ? tasks.get(spec.taskId) : null);
+  return liveChannelId(spec.channelId ?? channels.forTask(spec.taskId ? tasks.get(spec.taskId) : null));
 }
 
 function lane(sessionId: string): Lane {
@@ -1215,9 +1221,7 @@ function liveChannel(channelId?: string | null): ChannelRow {
 }
 
 function channelForFile(file: FileEntry): string {
-  const cid = file.task_id ? channels.forTask(tasks.get(file.task_id)) : GENERAL_CHANNEL;
-  const ch = channels.get(cid);
-  return ch && ch.archived_at == null ? ch.id : GENERAL_CHANNEL;
+  return liveChannelId(file.task_id ? channels.forTask(tasks.get(file.task_id)) : GENERAL_CHANNEL);
 }
 
 /**
@@ -1401,9 +1405,8 @@ export async function actOnCard(id: string, action: string, value?: string): Pro
   }
   if (c.type === 'handover' && action === 'follow_up') {
     const d = useFollowUp(c, value);
-    const updated = put({ ...item, card: { ...c, follow_ups: d.follow_ups } });
     submitUser(d.message, undefined, c.channel_id ?? channels.forTask(c.task_id ? tasks.get(c.task_id) : null));
-    return updated;
+    return put({ ...item, card: { ...c, follow_ups: d.follow_ups } });
   }
   if (c.status !== 'pending') throw new Error(`already ${c.status}`);
   // A card left over from before its run ended (or from before this check existed) must not show as decided.
@@ -1479,7 +1482,7 @@ export async function actOnCard(id: string, action: string, value?: string): Pro
     enqueue({
       kind: c.task_id ? 'task' : 'decision',
       sessionId,
-      channelId: c.channel_id ?? channels.forTask(c.task_id ? tasks.get(c.task_id) : null),
+      channelId: liveChannelId(c.channel_id ?? channels.forTask(c.task_id ? tasks.get(c.task_id) : null)),
       taskId: c.task_id ?? null,
       input: decisionPrompt(item, { approved, answer }, age),
     });
@@ -1495,7 +1498,7 @@ export async function actOnCard(id: string, action: string, value?: string): Pro
  */
 async function settlePayment(item: Item, approved: boolean): Promise<void> {
   const c = item.card!;
-  const channel = c.channel_id ?? channels.forTask(c.task_id ? tasks.get(c.task_id) : null);
+  const channel = liveChannelId(c.channel_id ?? channels.forTask(c.task_id ? tasks.get(c.task_id) : null));
   let cardFilled = false;
   let last4: string | undefined;
   let failure: string | undefined;
@@ -1552,12 +1555,7 @@ async function settlePayment(item: Item, approved: boolean): Promise<void> {
     systemNote(`I can't finish that payment: ${failure}. The approval stands for ${money(c.amount_cents ?? 0, c.currency ?? 'USD')}.`, c.task_id, channel);
   }
   const sessionId = c.session_id ?? (c.task_id ? tasks.sessionOf(c.task_id) : null) ?? mainSessionId();
-  let prompt = paymentPrompt(c, item.id, { approved }, { cardFilled, last4 });
-  if (approved && !cardFilled && last4 && !prompt.includes(last4)) {
-    const total = money(c.amount_cents ?? 0, c.currency ?? 'USD');
-    const merchant = c.merchant ?? 'the merchant';
-    prompt = `[payment ${item.id}] APPROVED: ${total} at ${merchant}. A single-use card ending ${last4} was issued, but it could not be filled into your live browser; the full card digits are never stored or shared here, so do not submit checkout or guess the numbers. Open the exact checkout form and ask how to proceed.`;
-  }
+  const prompt = paymentPrompt(c, item.id, { approved }, { cardFilled, last4 });
   enqueue({
     kind: c.task_id ? 'task' : 'decision',
     sessionId,

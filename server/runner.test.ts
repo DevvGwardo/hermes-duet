@@ -1116,7 +1116,7 @@ test('settlePayment passes merchant_url to browser.fillCard and handles issued-b
     expect(after1.card!.card_summary).toContain('not filled');
     await until(() => startedInputs.length >= 1);
     expect(startedInputs[0]).toContain('4242');
-    expect(startedInputs[0]).toContain('could not be filled');
+    expect(startedInputs[0]).toContain('could not be typed into the browser automatically');
     expect(startedInputs[0]).not.toContain('authorized spending up to');
 
     // Case 2: fillCard throws (e.g. tab navigated away) -> still records card_summary & card_filled=false!
@@ -1369,5 +1369,173 @@ test('deliverFile removes created data/files/<id> directory if tx() throws', asy
   } finally {
     addSpy.mockRestore();
     rmSync(srcDir, { recursive: true, force: true });
+  }
+});
+
+test('actOnCard preserves follow-up chip on rejected archived channel and falls back to #general on card/payment settlement', async () => {
+  const prevEnv = {
+    DUET_CARD_KEY: process.env.DUET_CARD_KEY,
+    DUET_CARD_URL: process.env.DUET_CARD_URL,
+    DUET_CARD_PROVIDER: process.env.DUET_CARD_PROVIDER,
+  };
+  process.env.DUET_CARD_KEY = 'secret-test-key';
+  process.env.DUET_CARD_URL = 'https://cards.test';
+  process.env.DUET_CARD_PROVIDER = 'generic';
+
+  const startedRuns: { id: string; input: string }[] = [];
+  let seq = 0;
+  const restore = stubHermes({
+    hasKey: () => true,
+    startRun: async (a: any) => {
+      const id = `r-arch-card-${++seq}`;
+      startedRuns.push({ id, input: String(a.input) });
+      return { run_id: id, status: 'running' };
+    },
+    events: async (_id: string, _seq: number, on: any) => {
+      on({ event: 'run.completed', seq: 1 });
+    },
+    stop: async () => ({}),
+  });
+
+  const liveCh = channels.create({ name: `live-fu-${newId().slice(-4)}` });
+  const deadCh = channels.create({ name: `dead-fu-${newId().slice(-4)}` });
+
+  try {
+    const now = Date.now();
+    const deadTask: Task = {
+      id: newId(),
+      title: 'Archived channel task',
+      status: 'done',
+      steps: [],
+      created_at: now,
+      updated_at: now,
+      background: true,
+      channel_id: deadCh.id,
+    };
+    tasks.save(deadTask, `duet-task-${deadTask.id}`);
+
+    const deadHandover = items.save({
+      id: newId(),
+      kind: 'card',
+      created_at: now,
+      updated_at: now,
+      channel_id: deadCh.id,
+      task_id: deadTask.id,
+      card: {
+        type: 'handover',
+        title: deadTask.title,
+        status: 'info',
+        task_id: deadTask.id,
+        channel_id: deadCh.id,
+        follow_ups: [{ label: 'Dig deeper', message: 'Check Q4 numbers' }],
+      },
+    });
+    const liveHandover = items.save({
+      id: newId(),
+      kind: 'card',
+      created_at: now,
+      updated_at: now,
+      channel_id: liveCh.id,
+      card: {
+        type: 'handover',
+        title: 'Live handover',
+        status: 'info',
+        channel_id: liveCh.id,
+        follow_ups: [{ label: 'Follow up', message: 'Send live summary' }],
+      },
+    });
+
+    const appCard = items.save({
+      id: newId(),
+      kind: 'card',
+      created_at: now,
+      updated_at: now,
+      channel_id: deadCh.id,
+      card: {
+        type: 'approval',
+        title: 'Pending approval in dead channel',
+        status: 'pending',
+        channel_id: deadCh.id,
+        session_id: deadCh.session_id,
+      },
+    });
+    const taskChoiceCard = items.save({
+      id: newId(),
+      kind: 'card',
+      created_at: now,
+      updated_at: now,
+      channel_id: deadCh.id,
+      task_id: deadTask.id,
+      card: {
+        type: 'choice',
+        title: 'Pending task choice without card.channel_id',
+        options: ['Yes', 'No'],
+        status: 'pending',
+        task_id: deadTask.id,
+      },
+    });
+    const payCard = items.save({
+      id: newId(),
+      kind: 'card',
+      created_at: now,
+      updated_at: now,
+      channel_id: deadCh.id,
+      card: {
+        type: 'payment',
+        title: 'Pay $20.00 to Acme',
+        merchant: 'Acme',
+        amount_cents: 2000,
+        currency: 'USD',
+        status: 'pending',
+        channel_id: deadCh.id,
+        session_id: deadCh.session_id,
+      },
+    });
+
+    channels.archive(deadCh.id);
+
+    // 1) Archived handover follow-up must fail WITHOUT burning the chip.
+    await expect(actOnCard(deadHandover.id, 'follow_up', '0')).rejects.toThrow('no such channel');
+    expect(items.get(deadHandover.id)!.card!.follow_ups![0]!.used).toBeUndefined();
+
+    // Live handover follow-up succeeds and marks chip used.
+    const usedLive = await actOnCard(liveHandover.id, 'follow_up', '0');
+    expect(usedLive.card!.follow_ups![0]!.used).toBe(true);
+
+    // 2) Pending approval, choice (via task_id), and payment cards in an archived channel fall back to #general.
+    await actOnCard(appCard.id, 'approve');
+    await actOnCard(taskChoiceCard.id, 'choose', 'Yes');
+    await actOnCard(payCard.id, 'approve');
+
+    await until(() => startedRuns.length >= 4 && !agentState().busy && agentState().background_running === 0);
+
+    // Archived channel must receive no system notes or new activity runs.
+    const deadItems = items.latest(50, deadCh.id).items;
+    expect(deadItems.some((i) => i.kind === 'activity' || i.kind === 'system' || i.kind === 'assistant')).toBe(false);
+
+    // #general receives the payment failure system note and all archived-channel fallback runs route to #general.
+    const generalItems = items.latest(50, GENERAL_CHANNEL).items;
+    expect(generalItems.some((i) => i.kind === 'system' && (i.text ?? '').includes('without a bound merchant site'))).toBe(true);
+    const generalRunIds = new Set(generalItems.filter((i) => i.kind === 'activity').map((i) => i.run_id));
+    const fallbackRuns = startedRuns.filter(
+      (r) => r.input.includes('Pending approval in dead channel') || r.input.includes('Pending task choice without card.channel_id') || r.input.includes('[payment '),
+    );
+    expect(fallbackRuns).toHaveLength(3);
+    for (const r of fallbackRuns) {
+      const row = db.query<{ meta: string }, [string]>('SELECT meta FROM runs WHERE id = ?').get(r.id)!;
+      expect(JSON.parse(row.meta).spec.channelId).toBe(GENERAL_CHANNEL);
+    }
+    expect(fallbackRuns.filter((r) => generalRunIds.has(r.id)).length).toBe(2);
+    expect(startedRuns.some((r) => r.input.includes('Send live summary'))).toBe(true);
+  } finally {
+    if (prevEnv.DUET_CARD_KEY === undefined) delete process.env.DUET_CARD_KEY;
+    else process.env.DUET_CARD_KEY = prevEnv.DUET_CARD_KEY;
+    if (prevEnv.DUET_CARD_URL === undefined) delete process.env.DUET_CARD_URL;
+    else process.env.DUET_CARD_URL = prevEnv.DUET_CARD_URL;
+    if (prevEnv.DUET_CARD_PROVIDER === undefined) delete process.env.DUET_CARD_PROVIDER;
+    else process.env.DUET_CARD_PROVIDER = prevEnv.DUET_CARD_PROVIDER;
+    await until(() => !agentState().busy && agentState().background_running === 0 && !runs.orphaned().some((r) => r.session_id === liveCh.session_id || r.session_id === deadCh.session_id));
+    await stopMain().catch(() => {});
+    restore();
   }
 });
