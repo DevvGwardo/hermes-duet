@@ -4,6 +4,7 @@
 // This module is pure: what counts as an event, what the agent is told, and when to stay quiet. The loops, the token
 // and the rate limits live in triggers-runtime.ts, so the rules here can be tested without a database or a folder.
 import { existsSync, readdirSync, statSync } from 'node:fs';
+import { isIP } from 'node:net';
 import { basename, join } from 'node:path';
 import { config } from './config';
 import type { CalendarEvent } from './connectors';
@@ -164,12 +165,14 @@ export const WEBHOOK_MAX = 60;
 export const WEBHOOK_IP_WINDOW_MS = 60_000;
 export const WEBHOOK_IP_MAX = 30;
 
-/** Client for a request: X-Forwarded-For is only trusted from loopback proxies, so the socket IP wins. */
+/** Client for a request: X-Forwarded-For is only trusted when the direct socket peer is loopback. */
 export function inboundIp(req: Request, fallback = 'unknown'): string {
-  const raw = String(req.headers.get('x-forwarded-for') ?? '').split(',')[0]?.trim() ?? '';
-  const privateNet = /^(127\.0\.0\.1|::1|192\.168\.|10\.|100\.(6[4-9]|7[0-9]|8[0-9]|9[0-9]|10[0-9]|11[0-9]|12[0-7])\.).*/.test(raw);
-  if (privateNet) return raw;
-  return fallback;
+  const isLoopback = fallback === '127.0.0.1' || fallback === '::1' || fallback.toLowerCase() === '::ffff:127.0.0.1';
+  if (!isLoopback) return fallback;
+  const raw = String(req.headers.get('x-forwarded-for') ?? '')
+    .split(',')[0]
+    ?.trim();
+  return raw && isIP(raw) !== 0 ? raw : fallback;
 }
 
 export function folderDue(lastAt: number, now: number, gap = FOLDER_GAP_MS): boolean {

@@ -1,6 +1,8 @@
 // Native connectors: the local apps Duet can actually reach from this Mac, what state each is in, and the one command
 // the agent can use for each. Nothing here talks to a cloud account: every connector is a CLI or an AppleScript the
 // user already has, so "connected" means "installed and willing to answer".
+import { existsSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
 import type { Connector } from '../shared/types';
 import { config } from './config';
 
@@ -149,6 +151,15 @@ export async function remindersToday(): Promise<string[]> {
   return parseReminders(r.out);
 }
 
+function shortHome(dir: string): string {
+  const home = homedir();
+  if (!home) return dir;
+  if (dir === home) return '~';
+  if (dir.startsWith(`${home}/`) || dir.startsWith(`${home}\\`)) return `~${dir.slice(home.length)}`;
+  if (process.platform === 'win32' && dir.toLowerCase().startsWith(`${home.toLowerCase()}\\`)) return `~${dir.slice(home.length)}`;
+  return dir;
+}
+
 async function probe(id: string): Promise<Connector> {
   const unsupported = (name: string, kind: Connector['kind']): Connector => ({
     id,
@@ -164,11 +175,14 @@ async function probe(id: string): Promise<Connector> {
   }
   if (id === 'folder') {
     if (!config.watchDir) return { id, name: 'Watched folder', kind: 'folder', status: 'missing', detail: 'Turned off', hint: 'Set DUET_WATCH_DOWNLOADS=1 or DUET_WATCH_DIR to watch a folder.' };
-    const ok = await Bun.file(config.watchDir)
-      .exists()
-      .catch(() => false);
+    let ok = false;
+    try {
+      ok = existsSync(config.watchDir) && statSync(config.watchDir).isDirectory();
+    } catch {
+      ok = false;
+    }
     return ok
-      ? { id, name: 'Watched folder', kind: 'folder', status: 'active', detail: config.watchDir.replace(/^\/Users\/[^/]+/, '~') }
+      ? { id, name: 'Watched folder', kind: 'folder', status: 'active', detail: shortHome(config.watchDir) }
       : { id, name: 'Watched folder', kind: 'folder', status: 'missing', detail: `${config.watchDir} does not exist`, hint: 'Point DUET_WATCH_DIR at a folder that exists.' };
   }
   if (process.platform !== 'darwin') return unsupported(id === 'reminders' ? 'Reminders' : id === 'calendar' ? 'Calendar' : 'Mail', id as Connector['kind']);

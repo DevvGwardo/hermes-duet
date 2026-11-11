@@ -4,9 +4,10 @@
 import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { isEditableMime, MAX_EDIT_BYTES } from '../shared/edit';
-import type { FileEntry } from '../shared/types';
+import type { FileEntry, Page } from '../shared/types';
+import { broadcast } from './bus';
 import { config } from './config';
-import { files, newId } from './db';
+import { files, newId, pages, searchIndex, tx } from './db';
 import { UserError } from './errors';
 
 /**
@@ -46,5 +47,23 @@ export function saveFileVersion(original: FileEntry, text: string): FileEntry {
   // Same task and standing page as the file it came from, when it had them.
   if (original.task_id != null) entry.task_id = original.task_id;
   if (original.page_id) entry.page_id = original.page_id;
-  return files.add(entry, dest);
+  let updatedPage: Page | null = null;
+  try {
+    tx(() => {
+      files.add(entry, dest);
+      // Remove the superseded version from Search so edits do not duplicate results while keeping it in files for Compare.
+      searchIndex.remove(original.id);
+      if (original.page_id) {
+        const page = pages.get(original.page_id);
+        if (page && page.file_id === original.id) {
+          updatedPage = pages.save({ ...page, file_id: entry.id });
+        }
+      }
+    });
+  } catch (e) {
+    rmSync(dir, { recursive: true, force: true });
+    throw e;
+  }
+  if (updatedPage) broadcast({ type: 'page', page: updatedPage });
+  return entry;
 }

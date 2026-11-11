@@ -1,6 +1,17 @@
-import { describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, test } from 'bun:test';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { Connector } from '../shared/types';
-import { connectorBrief, parseCalendarOutput, parseMail, parseReminders } from './connectors';
+import { config } from './config';
+import { connectorBrief, listConnectors, parseCalendarOutput, parseMail, parseReminders, testConnector } from './connectors';
+
+const ORIGINAL_WATCH_DIR = config.watchDir;
+const temps: string[] = [];
+afterEach(() => {
+  config.watchDir = ORIGINAL_WATCH_DIR;
+  while (temps.length) rmSync(temps.pop()!, { recursive: true, force: true });
+});
 
 describe('parseCalendarOutput', () => {
   test('reads tab-separated AppleScript lines', () => {
@@ -82,5 +93,48 @@ describe('connectorBrief', () => {
 
   test('nothing active means nothing to say', () => {
     expect(connectorBrief([conn('calendar', 'unsupported')])).toBe('');
+  });
+});
+
+describe('probe folder and connector listing', () => {
+  test('reports an existing watch directory as active instead of missing', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'duet-watch-'));
+    temps.push(dir);
+    config.watchDir = dir;
+    const res = await testConnector('folder');
+    const home = homedir();
+    const expectedDetail = home && dir.toLowerCase().startsWith(home.toLowerCase()) ? `~${dir.slice(home.length)}` : dir;
+    expect(res).toMatchObject({ id: 'folder', kind: 'folder', status: 'active', detail: expectedDetail });
+    const all = await listConnectors();
+    expect(all.find((c) => c.id === 'folder')?.status).toBe('active');
+    expect(all.find((c) => c.id === 'webhook')?.status).toBe('active');
+  });
+
+  test('shortens the home prefix with homedir() across platforms', async () => {
+    const home = homedir();
+    config.watchDir = home;
+    expect(await testConnector('folder')).toMatchObject({ id: 'folder', status: 'active', detail: '~' });
+    const sub = mkdtempSync(join(home, '.duet-conn-test-'));
+    temps.push(sub);
+    config.watchDir = sub;
+    const c = await testConnector('folder');
+    expect(c.status).toBe('active');
+    expect(c.detail).toStartWith('~');
+    expect(c.detail).not.toContain(home);
+  });
+
+  test('reports missing when watchDir is turned off, absent, or a regular file', async () => {
+    config.watchDir = '';
+    expect(await testConnector('folder')).toMatchObject({ id: 'folder', status: 'missing', detail: 'Turned off' });
+
+    const dir = mkdtempSync(join(tmpdir(), 'duet-watch-missing-'));
+    temps.push(dir);
+    config.watchDir = join(dir, 'nope');
+    expect((await testConnector('folder')).status).toBe('missing');
+
+    const regularFile = join(dir, 'not-a-dir.txt');
+    writeFileSync(regularFile, 'hi');
+    config.watchDir = regularFile;
+    expect((await testConnector('folder')).status).toBe('missing');
   });
 });

@@ -61,7 +61,9 @@ export const OPEN_ASKS_MAX = 30;
  * many open asks to fit, `open` is omitted and the worker leaves every banner alone.
  */
 export function askMarks(p: Pick<PushPayload, 'card_id'>, pending: Item[], now: number): Pick<PushPayload, 'ask' | 'open' | 'sent_at'> {
-  const open = pending.filter((i) => i.card?.status === 'pending' && (i.card.type === 'approval' || i.card.type === 'choice')).map((i) => i.id);
+  const open = pending
+    .filter((i) => i.card?.status === 'pending' && (i.card.type === 'approval' || i.card.type === 'choice' || i.card.type === 'payment'))
+    .map((i) => i.id);
   return {
     ...(p.card_id && open.includes(p.card_id) && { ask: true }),
     ...(open.length <= OPEN_ASKS_MAX && { open }),

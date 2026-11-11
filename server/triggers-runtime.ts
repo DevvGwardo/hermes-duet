@@ -51,11 +51,18 @@ export function webhookIpReady(ip: string, now = Date.now()): boolean {
 }
 export function recordWebhookIp(ip: string, now = Date.now()) {
   const all = kv.get<Record<string, number[]>>(WEBHOOK_IP_RECORD, {});
-  const mine = recentHits(all[ip] ?? [], now, WEBHOOK_IP_WINDOW_MS);
-  all[ip] = [...mine, now];
-  // Bound the map so a scanner cannot grow it forever.
-  const keys = Object.keys(all).slice(-64);
-  kv.set(WEBHOOK_IP_RECORD, Object.fromEntries(keys.map((k) => [k, all[k]])));
+  const active: Record<string, number[]> = {};
+  // Prune expired IP buckets before capping at 64 so stale scanner entries do not evict live clients.
+  for (const [k, hits] of Object.entries(all)) {
+    if (k === ip || !Array.isArray(hits)) continue;
+    const fresh = recentHits(hits, now, WEBHOOK_IP_WINDOW_MS);
+    if (fresh.length) active[k] = fresh;
+  }
+  const mine = recentHits(Array.isArray(all[ip]) ? all[ip] : [], now, WEBHOOK_IP_WINDOW_MS);
+  active[ip] = [...mine, now];
+  // Bound the map so a scanner cannot grow it forever, keeping the newest entries at the tail.
+  const keys = Object.keys(active).slice(-64);
+  kv.set(WEBHOOK_IP_RECORD, Object.fromEntries(keys.map((k) => [k, active[k]])));
 }
 
 /**

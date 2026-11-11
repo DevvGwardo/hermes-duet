@@ -7,10 +7,10 @@ export function cardOf(p: { card_id?: string | null; url?: string | null }): str
   return p.card_id || p.url?.match(/[?&]card=([^&#]+)/)?.[1] || null;
 }
 
-/** A question or approval that no longer waits on the user: approved, declined, answered or expired. */
+/** A question, approval or payment approval that no longer waits on the user: approved, declined, answered or expired. */
 export function isSettledAsk(item: Item | undefined): boolean {
   const c = item?.kind === 'card' ? item.card : undefined;
-  return !!c && (c.type === 'approval' || c.type === 'choice') && c.status !== 'pending';
+  return !!c && (c.type === 'approval' || c.type === 'choice' || c.type === 'payment') && c.status !== 'pending';
 }
 
 /**

@@ -4,6 +4,7 @@ import {
   downloadsPrompt,
   folderDue,
   folderPass,
+  inboundIp,
   meetingKey,
   meetingPrompt,
   meetingsSoon,
@@ -214,5 +215,29 @@ describe("webhookIpAllowed", () => {
     const now = 5_000_000;
     const hits = Array.from({ length: 31 }, () => now - 61_000);
     expect(webhookIpAllowed(hits, now)).toBe(true);
+  });
+});
+
+describe('inboundIp', () => {
+  const req = (xff?: string) => new Request('https://duet.example/api/webhooks/tok', xff !== undefined ? { headers: { 'x-forwarded-for': xff } } : {});
+
+  test('trusts X-Forwarded-For only when the direct peer is loopback', () => {
+    expect(inboundIp(req('203.0.113.5'), '127.0.0.1')).toBe('203.0.113.5');
+    expect(inboundIp(req('2001:db8::7, 127.0.0.1'), '::1')).toBe('2001:db8::7');
+    expect(inboundIp(req('198.51.100.42'), '::ffff:127.0.0.1')).toBe('198.51.100.42');
+    expect(inboundIp(req('198.51.100.42'), '::FFFF:127.0.0.1')).toBe('198.51.100.42');
+  });
+
+  test('falls back to loopback when X-Forwarded-For is absent or malformed', () => {
+    expect(inboundIp(req(), '127.0.0.1')).toBe('127.0.0.1');
+    expect(inboundIp(req(''), '::1')).toBe('::1');
+    expect(inboundIp(req('not-an-ip'), '127.0.0.1')).toBe('127.0.0.1');
+  });
+
+  test('ignores spoofed X-Forwarded-For when the direct peer is not loopback', () => {
+    expect(inboundIp(req('127.0.0.1'), '198.51.100.9')).toBe('198.51.100.9');
+    expect(inboundIp(req('10.0.0.5'), '198.51.100.9')).toBe('198.51.100.9');
+    expect(inboundIp(req('192.168.1.10'))).toBe('unknown');
+    expect(inboundIp(req('127.0.0.1'))).toBe('unknown');
   });
 });

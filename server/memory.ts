@@ -19,13 +19,14 @@ function checkTarget(path: string) {
   if (existsSync(path) && statSync(path).isDirectory()) throw new UserError('the context file is a directory', 400);
 }
 
-export function readMemory(): MemoryState {
+export function readMemory(read: (path: string, encoding: 'utf8') => string = readFileSync): MemoryState {
   checkTarget(config.contextFile);
   let text = '';
   try {
-    text = readFileSync(config.contextFile, 'utf8');
-  } catch {
-    // A missing or unreadable file is an empty memory, not an error: the agent starts with the default context.
+    text = read(config.contextFile, 'utf8');
+  } catch (e: any) {
+    // A missing file is an empty memory, not an error: the agent starts with the default context.
+    if (e?.code !== 'ENOENT') throw e;
   }
   return state(text);
 }

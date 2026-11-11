@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Capabilities } from '../shared/types';
 import { config } from './config';
@@ -86,28 +86,61 @@ export function mcpServerNames(yaml: string): string[] {
 /** Fallback when Hermes can't list skills: every SKILL.md under ~/.hermes/skills (read-only), category = top folder. */
 export function skillsFromFiles(root: string, maxDepth = 4): (string | null)[] {
   const out: (string | null)[] = [];
-  const walk = (dir: string, depth: number, top: string | null) => {
-    let entries;
+  const visited = new Set<string>();
+  const statAt = (p: string) => {
     try {
-      entries = readdirSync(dir, { withFileTypes: true });
+      return statSync(p);
     } catch {
-      return;
+      return null;
     }
-    if (depth > 0 && entries.some((e) => e.isFile() && e.name === 'SKILL.md')) {
-      out.push(depth > 1 ? top : null);
-      return;
-    }
-    if (depth >= maxDepth) return;
-    for (const e of entries) {
-      if (!e.isDirectory() || e.name.startsWith('.') || e.name === 'node_modules') continue;
-      walk(join(dir, e.name), depth + 1, top ?? e.name);
+  };
+  const walk = (dir: string, depth: number, top: string | null) => {
+    let real = dir;
+    try {
+      real = realpathSync(dir);
+    } catch {}
+    if (visited.has(real)) return;
+    visited.add(real);
+    try {
+      let entries;
+      try {
+        entries = readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      const hasSkill = entries.some(
+        (e) => e.name === 'SKILL.md' && (e.isFile() || (e.isSymbolicLink() && !!statAt(join(dir, e.name))?.isFile())),
+      );
+      if (depth > 0 && hasSkill) {
+        out.push(depth > 1 ? top : null);
+        return;
+      }
+      if (depth >= maxDepth) return;
+      for (const e of entries) {
+        if (e.name.startsWith('.') || e.name === 'node_modules') continue;
+        const isDir = e.isDirectory() || (e.isSymbolicLink() && !!statAt(join(dir, e.name))?.isDirectory());
+        if (!isDir) continue;
+        walk(join(dir, e.name), depth + 1, top ?? e.name);
+      }
+    } finally {
+      visited.delete(real);
     }
   };
   walk(root, 0, null);
   return out;
 }
 
-async function gather(): Promise<Capabilities> {
+function contextStamp(): string {
+  try {
+    const st = statSync(config.contextFile);
+    return `${config.contextFile}:${st.mtimeMs}:${st.size}`;
+  } catch {
+    return `${config.contextFile}:missing`;
+  }
+}
+
+async function gather(): Promise<{ cap: Capabilities; stamp: string; shortTtl: boolean }> {
+  const stamp = contextStamp();
   let context: string[] = [];
   try {
     if (existsSync(config.contextFile)) context = contextLabels(readFileSync(config.contextFile, 'utf8'));
@@ -133,19 +166,36 @@ async function gather(): Promise<Capabilities> {
     }
   }
   const toolsets = toolRes.status === 'fulfilled' ? enabledToolsets(toolRes.value?.data) : null;
+  const shortTtl = skillRes.status === 'rejected' || !Array.isArray(listed) || toolRes.status === 'rejected' || toolsets === null;
 
-  return { context, skills, skills_from, toolsets, apps, checked_at: Date.now() };
+  return {
+    cap: { context, skills, skills_from, toolsets, apps, checked_at: Date.now() },
+    stamp,
+    shortTtl,
+  };
 }
 
 const TTL_MS = 5 * 60_000;
-let cached: Capabilities | null = null;
+const FAILURE_TTL_MS = 15_000;
+let cached: { cap: Capabilities; stamp: string; shortTtl: boolean } | null = null;
 let inflight: Promise<Capabilities> | null = null;
 
-/** Cached for a few minutes so opening Settings or an empty thread doesn't hit Hermes every time. */
+export function invalidateCapabilities() {
+  cached = null;
+}
+
+/** Cached for a few minutes (or 15 s after a Hermes error) and auto-invalidated when the memory file changes. */
 export function capabilities(): Promise<Capabilities> {
-  if (cached && Date.now() - cached.checked_at < TTL_MS) return Promise.resolve(cached);
+  const stamp = contextStamp();
+  if (cached && cached.stamp === stamp) {
+    const ttl = cached.shortTtl ? FAILURE_TTL_MS : TTL_MS;
+    if (Date.now() - cached.cap.checked_at < ttl) return Promise.resolve(cached.cap);
+  }
   inflight ??= gather()
-    .then((c) => (cached = c))
+    .then((entry) => {
+      cached = entry;
+      return entry.cap;
+    })
     .finally(() => (inflight = null));
   return inflight;
 }

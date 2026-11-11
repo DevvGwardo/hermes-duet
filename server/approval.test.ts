@@ -132,18 +132,21 @@ test('the waiting-cards note goes on chat turns and steers into them, not on bri
   expect(turnNote(pending, { kind: 'chat', sessionId: 'duet-task-1' })).toBe('');
 });
 
-test('every push lists the open asks, and marks itself an ask only for a pending approval or question', () => {
+test('every push lists the open asks, and marks itself an ask only for a pending approval, payment or question', () => {
   const at = (id: string, c: CardData): Item => ({ ...item(c), id });
   const pending = [
     at('a1', card()),
+    at('p1', card({ type: 'payment', title: 'Buy parts' })),
     at('q1', card({ type: 'choice' })),
+    at('p-done', card({ type: 'payment', status: 'approved' })),
     // A note never waits on anyone, so it is neither listed nor marked.
     at('n1', card({ type: 'note', status: 'info' })),
   ];
-  expect(askMarks({ card_id: 'a1' }, pending, 5)).toEqual({ ask: true, open: ['a1', 'q1'], sent_at: 5 });
+  expect(askMarks({ card_id: 'a1' }, pending, 5)).toEqual({ ask: true, open: ['a1', 'p1', 'q1'], sent_at: 5 });
+  expect(askMarks({ card_id: 'p1' }, pending, 5)).toEqual({ ask: true, open: ['a1', 'p1', 'q1'], sent_at: 5 });
   // A brief, handover or "While you were away" push still carries the list, so it can clear stale asks.
-  expect(askMarks({}, pending, 5)).toEqual({ open: ['a1', 'q1'], sent_at: 5 });
-  expect(askMarks({ card_id: 'n1' }, pending, 5)).toEqual({ open: ['a1', 'q1'], sent_at: 5 });
+  expect(askMarks({}, pending, 5)).toEqual({ open: ['a1', 'p1', 'q1'], sent_at: 5 });
+  expect(askMarks({ card_id: 'n1' }, pending, 5)).toEqual({ open: ['a1', 'p1', 'q1'], sent_at: 5 });
   // Too many to fit in a push: no list, so the service worker closes nothing.
   const many = Array.from({ length: OPEN_ASKS_MAX + 1 }, (_, i) => at(`a${i}`, card()));
   expect(askMarks({ card_id: 'a0' }, many, 5)).toEqual({ ask: true, sent_at: 5 });

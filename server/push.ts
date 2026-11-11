@@ -79,12 +79,19 @@ function sentDay(s: Settings): SentDay {
   return stored && stored.date === date ? stored : { date, count: 0 };
 }
 
+function releaseSentDay(date: string) {
+  const stored = kv.get<SentDay | null>(SENT_DAY_KEY, null);
+  if (!stored || stored.date !== date || stored.count <= 0) return;
+  kv.set(SENT_DAY_KEY, { date, count: stored.count - 1 });
+}
+
 export async function notify(p: PushPayload, opts: { ignoreQuiet?: boolean; ignorePrefs?: boolean } = {}): Promise<number> {
   const s = settings.get();
   const category = p.category ?? 'system';
   const exempt = isExempt(category);
+  const day = sentDay(s);
   if (!opts.ignorePrefs) {
-    const decision = shouldPush({ category, settings: s, channelId: p.channel_id, todayCount: sentDay(s).count });
+    const decision = shouldPush({ category, settings: s, channelId: p.channel_id, todayCount: day.count });
     if (!decision.send) {
       // Dropped here, before quiet hours would hold it: a muted or capped push must never come back later as a
       // "While you were away" surprise, and it is not recorded as sent.
@@ -104,26 +111,30 @@ export async function notify(p: PushPayload, opts: { ignoreQuiet?: boolean; igno
     .query<{ endpoint: string; json: string; device_id: string | null }, []>('SELECT endpoint, json, device_id FROM push_subs')
     .all()
     .filter((s) => p.always || !s.device_id || !presence.visible(s.device_id));
+  if (!subs.length) return 0;
   // Computed here, after the quiet-hours hold, so a held push released later carries the list as of its sending.
   const pending = items.pendingCards();
   p = { ...p, badge: p.badge ?? pending.length, ...askMarks(p, pending, Date.now()) };
+  // Reserve a daily slot synchronously before awaiting network I/O so concurrent calls cannot race past the cap.
+  const reservedDate = !opts.ignorePrefs && !exempt ? day.date : null;
+  if (reservedDate) kv.set(SENT_DAY_KEY, bumpSentDay(day, reservedDate));
   let sent = 0;
-  await Promise.all(
-    subs.map(async (s) => {
-      try {
-        await webpush.sendNotification(JSON.parse(s.json), JSON.stringify(p), { TTL: 6 * 3600, urgency: p.approval ? 'high' : 'normal' });
-        sent++;
-      } catch (e: any) {
-        if (e?.statusCode === 404 || e?.statusCode === 410) db.query('DELETE FROM push_subs WHERE endpoint = ?').run(s.endpoint);
-        else console.warn('[push] send failed', e?.statusCode ?? '', e?.body ?? e?.message);
-      }
-    }),
-  );
-  // Only a push that actually reached a device spends the daily budget; suppressed and held pushes never get here,
-  // and approvals/questions are exempt from the cap.
-  if (sent > 0 && !opts.ignorePrefs && !exempt) {
-    const day = sentDay(s);
-    kv.set(SENT_DAY_KEY, bumpSentDay(day, day.date));
+  try {
+    await Promise.all(
+      subs.map(async (s) => {
+        try {
+          await webpush.sendNotification(JSON.parse(s.json), JSON.stringify(p), { TTL: 6 * 3600, urgency: p.approval ? 'high' : 'normal' });
+          sent++;
+        } catch (e: any) {
+          if (e?.statusCode === 404 || e?.statusCode === 410) db.query('DELETE FROM push_subs WHERE endpoint = ?').run(s.endpoint);
+          else console.warn('[push] send failed', e?.statusCode ?? '', e?.body ?? e?.message);
+        }
+      }),
+    );
+  } finally {
+    // Only a push that actually reached a device spends the daily budget; suppressed and held pushes never get here,
+    // and approvals/questions are exempt from the cap.
+    if (reservedDate && sent === 0) releaseSentDay(reservedDate);
   }
   return sent;
 }

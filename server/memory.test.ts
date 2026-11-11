@@ -49,4 +49,22 @@ describe('memory', () => {
     expect(existsSync(path)).toBe(false);
     expect(readMemory().text).toBe('');
   });
+
+  test('rethrows real read errors instead of treating them as an empty memory file', () => {
+    config.contextFile = tempFile();
+    expect(() =>
+      readMemory(() => {
+        const err: NodeJS.ErrnoException = new Error('permission denied');
+        err.code = 'EACCES';
+        throw err;
+      }),
+    ).toThrow('permission denied');
+    expect(() =>
+      readMemory(() => {
+        const err: NodeJS.ErrnoException = new Error('i/o failure');
+        err.code = 'EIO';
+        throw err;
+      }),
+    ).toThrow('i/o failure');
+  });
 });

@@ -95,6 +95,26 @@ describe('searchText', () => {
     }
   });
 
+  test('attachment filenames, card urls and merchant hosts are searchable', () => {
+    const text = searchText({
+      id: 'att-item',
+      kind: 'card',
+      created_at: 1,
+      updated_at: 1,
+      attachments: [{ id: 'a1', name: 'quarterly-receipt-scan.pdf', mime: 'application/pdf', size: 120, kind: 'file', created_at: 1 }],
+      card: {
+        type: 'payment',
+        title: 'Hardware order',
+        status: 'pending',
+        url: 'https://portal.taxboard.example/filings/9921',
+        merchant_host: 'shop.hardwarehub.example',
+      },
+    }).toLowerCase();
+    for (const word of ['quarterly', 'receipt', 'taxboard', '9921', 'hardwarehub']) {
+      expect(text).toContain(word);
+    }
+  });
+
   test('payment and approval fields are searchable too', () => {
     const text = searchText({
       id: 'y',
@@ -115,12 +135,13 @@ describe('searchText', () => {
     for (const word of ['acme', 'checkout', 'dana', 'galvanized', 'nails']) expect(text).toContain(word);
   });
 
-  test('task text carries the result, follow-ups and source quotes', () => {
+  test('task text carries the result, steps, change note, follow-ups and source quotes', () => {
     const text = taskSearchText({
       id: 't1',
       title: 'Permit research',
       status: 'done',
-      steps: [],
+      steps: [{ text: 'Call the municipal inspector desk', done: true }],
+      changed: 'Fee schedule revised from $45 to $60',
       created_at: 1,
       updated_at: 1,
       background: true,
@@ -128,7 +149,7 @@ describe('searchText', () => {
       follow_ups: [{ label: 'Email the permit', message: 'Send permit #4471 to Dana' }],
       sources: [{ kind: 'url', label: 'City permit office', quote: 'Permit #4471 was issued' }],
     }).toLowerCase();
-    for (const word of ['4471', 'permit', 'dana', 'city permit office']) expect(text).toContain(word);
+    for (const word of ['4471', 'permit', 'dana', 'city permit office', 'inspector', 'schedule', 'revised']) expect(text).toContain(word);
   });
 });
 
@@ -302,5 +323,121 @@ describe('search', () => {
     const hits = search(db, 'deposit');
     expect(hits.map((h) => h.id)).toContain('old-card');
     expect(hits.find((h) => h.id === 'old-card')!.snippet.toLowerCase()).toContain('deposit');
+  });
+
+  test('asset hits carry the real created_at from tasks, files and pages (0 only for orphaned index rows)', () => {
+    const db = new Database(':memory:');
+    applySchema(db);
+    db.query('INSERT INTO tasks(id, status, session_id, created_at, updated_at, json) VALUES (?, ?, ?, ?, ?, ?)').run(
+      'task-real',
+      'done',
+      's1',
+      1700000100000,
+      1700000100000,
+      JSON.stringify({ id: 'task-real', title: 'Zeppelin audit', status: 'done', steps: [], created_at: 1700000100000, updated_at: 1700000100000, background: true }),
+    );
+    db.query('INSERT INTO fts_assets(ref_id, kind, title, body) VALUES (?, ?, ?, ?)').run('task-real', 'task', 'Zeppelin audit', 'zeppelin task');
+
+    db.query('INSERT INTO files(id, path, created_at, json) VALUES (?, ?, ?, ?)').run(
+      'file-real',
+      '/tmp/zeppelin.md',
+      1700000200000,
+      JSON.stringify({ id: 'file-real', title: 'Zeppelin file', name: 'zeppelin.md', mime: 'text/markdown', size: 5, created_at: 1700000200000 }),
+    );
+    db.query('INSERT INTO fts_assets(ref_id, kind, title, body) VALUES (?, ?, ?, ?)').run('file-real', 'file', 'Zeppelin file', 'zeppelin.md');
+
+    db.query('INSERT INTO pages(id, created_at, json) VALUES (?, ?, ?)').run(
+      'page-real',
+      1700000300000,
+      JSON.stringify({ id: 'page-real', title: 'Zeppelin brief', instructions: 'track zeppelin', file_id: 'file-real', created_at: 1700000300000, updated_at: 1700000300000 }),
+    );
+    db.query('INSERT INTO fts_assets(ref_id, kind, title, body) VALUES (?, ?, ?, ?)').run('page-real', 'page', 'Zeppelin brief', 'track zeppelin');
+
+    db.query('INSERT INTO fts_assets(ref_id, kind, title, body) VALUES (?, ?, ?, ?)').run('ghost-task', 'task', 'Zeppelin ghost', 'orphaned');
+
+    const hits = search(db, 'zeppelin');
+    expect(hits.find((h) => h.id === 'task-real')?.created_at).toBe(1700000100000);
+    expect(hits.find((h) => h.id === 'file-real')?.created_at).toBe(1700000200000);
+    expect(hits.find((h) => h.id === 'page-real')?.created_at).toBe(1700000300000);
+    expect(hits.find((h) => h.id === 'ghost-task')?.created_at).toBe(0);
+  });
+
+  test('upgrading from v3 rebuilds fts_items and fts_assets with new subfields and drops superseded file versions', () => {
+    const db = new Database(':memory:');
+    // Simulate a v3 database before migration 004.
+    db.exec(`
+      CREATE TABLE items (id TEXT PRIMARY KEY, kind TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, run_id TEXT, task_id TEXT, channel_id TEXT DEFAULT 'chan-general', json TEXT NOT NULL);
+      CREATE TABLE tasks (id TEXT PRIMARY KEY, status TEXT NOT NULL, session_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, json TEXT NOT NULL);
+      CREATE TABLE files (id TEXT PRIMARY KEY, path TEXT NOT NULL, created_at INTEGER NOT NULL, json TEXT NOT NULL);
+      CREATE TABLE pages (id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, json TEXT NOT NULL);
+      CREATE VIRTUAL TABLE fts_items USING fts5(item_id UNINDEXED, channel_id UNINDEXED, kind UNINDEXED, text, tokenize = 'porter unicode61');
+      CREATE VIRTUAL TABLE fts_assets USING fts5(ref_id UNINDEXED, kind UNINDEXED, title, body, tokenize = 'porter unicode61');
+      PRAGMA user_version = 3;
+    `);
+    db.query('INSERT INTO items(id, kind, created_at, updated_at, channel_id, json) VALUES (?, ?, ?, ?, ?, ?)').run(
+      'item-v3',
+      'card',
+      100,
+      100,
+      'chan-general',
+      JSON.stringify({
+        id: 'item-v3',
+        kind: 'card',
+        created_at: 100,
+        updated_at: 100,
+        attachments: [{ id: 'at1', name: 'kestrel-invoice-april.pdf', mime: 'application/pdf', size: 10, kind: 'file', created_at: 100 }],
+        card: { type: 'payment', title: 'Vendor', status: 'pending', url: 'https://billing.kestrelpay.example/pay/1', merchant_host: 'checkout.kestrelpay.example' },
+      }),
+    );
+    db.query('INSERT INTO fts_items(item_id, channel_id, kind, text) VALUES (?, ?, ?, ?)').run('item-v3', 'chan-general', 'card', 'Vendor');
+
+    db.query('INSERT INTO tasks(id, status, session_id, created_at, updated_at, json) VALUES (?, ?, ?, ?, ?, ?)').run(
+      'task-v3',
+      'done',
+      's1',
+      200,
+      200,
+      JSON.stringify({
+        id: 'task-v3',
+        title: 'Research',
+        status: 'done',
+        steps: [{ text: 'Verify osprey clearance code', done: true }],
+        changed: 'Updated osprey tariff threshold',
+        created_at: 200,
+        updated_at: 200,
+        background: true,
+      }),
+    );
+    db.query('INSERT INTO fts_assets(ref_id, kind, title, body) VALUES (?, ?, ?, ?)').run('task-v3', 'task', 'Research', '');
+
+    db.query('INSERT INTO files(id, path, created_at, json) VALUES (?, ?, ?, ?)').run(
+      'file-v1',
+      '/tmp/v1.md',
+      300,
+      JSON.stringify({ id: 'file-v1', title: 'Peregrine Plan', name: 'plan.md', mime: 'text/markdown', size: 5, created_at: 300 }),
+    );
+    db.query('INSERT INTO files(id, path, created_at, json) VALUES (?, ?, ?, ?)').run(
+      'file-v2',
+      '/tmp/v2.md',
+      400,
+      JSON.stringify({ id: 'file-v2', title: 'Peregrine Plan', name: 'plan.md', mime: 'text/markdown', size: 8, version_of: 'file-v1', created_at: 400 }),
+    );
+    db.query('INSERT INTO fts_assets(ref_id, kind, title, body) VALUES (?, ?, ?, ?)').run('file-v1', 'file', 'Peregrine Plan', 'plan.md');
+    db.query('INSERT INTO fts_assets(ref_id, kind, title, body) VALUES (?, ?, ?, ?)').run('file-v2', 'file', 'Peregrine Plan', 'plan.md');
+
+    expect(search(db, 'kestrel')).toEqual([]);
+    expect(search(db, 'osprey')).toEqual([]);
+    expect(search(db, 'peregrine').map((h) => h.id).sort()).toEqual(['file-v1', 'file-v2']);
+
+    applySchema(db);
+
+    expect(search(db, 'kestrelpay').map((h) => h.id)).toEqual(['item-v3']);
+    expect(search(db, 'april').map((h) => h.id)).toEqual(['item-v3']);
+    const taskHits = search(db, 'osprey');
+    expect(taskHits.map((h) => h.id)).toEqual(['task-v3']);
+    expect(taskHits[0]!.created_at).toBe(200);
+    const fileHits = search(db, 'peregrine');
+    expect(fileHits.map((h) => h.id)).toEqual(['file-v2']);
+    expect(fileHits[0]!.created_at).toBe(400);
   });
 });

@@ -1,8 +1,8 @@
 // The database shape, kept out of db.ts so a test can build it in memory. Every statement is idempotent: a checkout
 // that has been running for months gets the new columns and indexes on its next boot, and nothing is dropped.
 import type { Database } from 'bun:sqlite';
-import type { Item } from '../shared/types';
-import { indexItem } from './search';
+import type { FileEntry, Item, Page, Task } from '../shared/types';
+import { indexItem, taskSearchText } from './search';
 
 /** The channel every existing row belongs to, and the one the brief, check-ins and tasks live in. */
 export const GENERAL_CHANNEL = 'chan-general';
@@ -26,7 +26,7 @@ function addColumn(db: Database, table: string, name: string, decl: string) {
  * Bumped whenever a shape change needs more than an idempotent CREATE. Kept in `PRAGMA user_version`, so a checkout
  * that has been running for months applies the step it is missing instead of guessing from the tables it can see.
  */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 export function applySchema(db: Database) {
   const from = db.query<{ user_version: number }, []>('PRAGMA user_version').get()?.user_version ?? 0;
@@ -171,9 +171,15 @@ CREATE TRIGGER items_fts_delete AFTER DELETE ON items BEGIN
 END;
 `);
 
-  // One reconcile per schema version rather than an anti-join over the whole thread on every boot. The rewrite is
-  // also NOT EXISTS, which stops at the first index hit instead of materialising the subquery.
-  if (from < SCHEMA_VERSION) backfillItems(db);
+  // One reconcile per schema version rather than an anti-join over the whole thread on every boot.
+  // Migration 004: searchText/taskSearchText gained attachments, URLs/hosts, task steps/changed, and edited
+  // file versions drop superseded rows from fts_assets.
+  if (from < SCHEMA_VERSION) {
+    if (from >= 3 && from < 4) db.exec('DELETE FROM fts_items');
+    if (from < 4) db.exec('DELETE FROM fts_assets');
+    backfillItems(db);
+    backfillAssets(db);
+  }
   db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
 }
 
@@ -195,5 +201,42 @@ export function backfillItems(db: Database) {
     // The stored JSON is the full item in production, but a row written by an older version (or a test) may not
     // carry its own id; the column is the truth the index is keyed on.
     indexItem(db, { ...item, id: r.id }, r.channel_id ?? GENERAL_CHANNEL);
+  }
+}
+
+/**
+ * Rebuild missing asset search rows (tasks, current file versions, pages). Superseded files named by a newer
+ * entry's `version_of` stay in `files` for Version Compare but stay out of Search so edits don't create duplicates.
+ */
+export function backfillAssets(db: Database) {
+  const indexed = new Set(db.query<{ ref_id: string }, []>('SELECT ref_id FROM fts_assets').all().map((r) => r.ref_id));
+  const put = db.query('INSERT INTO fts_assets(ref_id, kind, title, body) VALUES (?, ?, ?, ?)');
+  for (const r of db.query<{ id: string; json: string }, []>('SELECT id, json FROM tasks').all()) {
+    if (indexed.has(r.id)) continue;
+    try {
+      const task = JSON.parse(r.json) as Task;
+      put.run(r.id, 'task', task.title, taskSearchText({ ...task, id: r.id }));
+    } catch {}
+  }
+  const fileRows = db.query<{ id: string; json: string }, []>('SELECT id, json FROM files').all();
+  const parsedFiles: { id: string; entry: FileEntry }[] = [];
+  const superseded = new Set<string>();
+  for (const r of fileRows) {
+    try {
+      const entry = JSON.parse(r.json) as FileEntry;
+      parsedFiles.push({ id: r.id, entry });
+      if (entry.version_of) superseded.add(entry.version_of);
+    } catch {}
+  }
+  for (const { id, entry } of parsedFiles) {
+    if (indexed.has(id) || superseded.has(id)) continue;
+    put.run(id, 'file', entry.title, entry.name);
+  }
+  for (const r of db.query<{ id: string; json: string }, []>('SELECT id, json FROM pages').all()) {
+    if (indexed.has(r.id)) continue;
+    try {
+      const page = JSON.parse(r.json) as Page;
+      put.run(r.id, 'page', page.title, page.instructions);
+    } catch {}
   }
 }

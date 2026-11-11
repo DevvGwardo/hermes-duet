@@ -92,7 +92,7 @@ export const kv = {
 
 // ---------- channels ----------
 export interface ChannelRow extends Channel {
-  seen_at?: number;
+  seen_at?: number | null;
   archived_at?: number | null;
 }
 
@@ -280,7 +280,6 @@ const itemsPendingIn = db.query<{ json: string }, [string]>(
 const itemsBriefsSince = db.query<{ json: string }, [number]>(
   `SELECT json FROM items WHERE kind = 'card' AND json_extract(json, '$.card.type') = 'brief' AND created_at >= ? ORDER BY created_at`,
 );
-const itemsChannel = db.query('UPDATE items SET channel_id = ? WHERE id = ?');
 
 export const items = {
   save(item: Item) {
@@ -545,7 +544,7 @@ export const runs = {
   },
   /** Runs left 'running' by a crash or restart. */
   orphaned(): RunRow[] {
-    return db.query<RunRow, []>(`SELECT id, kind, session_id, task_id, status, started_at, meta FROM runs WHERE status = 'running'`).all();
+    return db.query<RunRow, []>(`SELECT id, kind, session_id, task_id, status, started_at, meta FROM runs WHERE status = 'running' ORDER BY started_at DESC`).all();
   },
 };
 
@@ -623,13 +622,30 @@ export const triggers = {
 // ---------- settings ----------
 const NOTIFY_TASKS = ['all', 'failures', 'off'] as const;
 export const MAX_PUSHES_PER_DAY = 100;
+function validTimezone(tz: unknown): string {
+  if (typeof tz === 'string' && tz.trim()) {
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone: tz });
+      return tz;
+    } catch {}
+  }
+  const host = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  try {
+    if (host) {
+      new Intl.DateTimeFormat('en-US', { timeZone: host });
+      return host;
+    }
+  } catch {}
+  return 'UTC';
+}
+
 const DEFAULT_SETTINGS: Settings = {
   brief_enabled: true,
   brief_time: '07:30',
   checkins: 'off',
   quiet_start: '21:30',
   quiet_end: '07:00',
-  timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+  timezone: validTimezone(Intl.DateTimeFormat().resolvedOptions().timeZone),
   // An install saved before these existed behaved as "everything pushes": keep that until the user says otherwise.
   notify_tasks: 'all',
   notify_agent: true,
@@ -638,7 +654,9 @@ const DEFAULT_SETTINGS: Settings = {
 };
 export const settings = {
   get(): Settings {
-    return { ...DEFAULT_SETTINGS, ...kv.get<Partial<Settings>>('settings', {}) };
+    const s = { ...DEFAULT_SETTINGS, ...kv.get<Partial<Settings>>('settings', {}) };
+    s.timezone = validTimezone(s.timezone);
+    return s;
   },
   update(patch: Partial<Settings>): Settings {
     const clean: Partial<Settings> = {};
@@ -648,11 +666,8 @@ export const settings = {
     if (patch.checkins && ['off', '3x', 'hourly'].includes(patch.checkins)) clean.checkins = patch.checkins;
     if (typeof patch.quiet_start === 'string' && hhmm.test(patch.quiet_start)) clean.quiet_start = patch.quiet_start;
     if (typeof patch.quiet_end === 'string' && hhmm.test(patch.quiet_end)) clean.quiet_end = patch.quiet_end;
-    if (typeof patch.timezone === 'string') {
-      try {
-        new Intl.DateTimeFormat('en-US', { timeZone: patch.timezone });
-        clean.timezone = patch.timezone;
-      } catch {}
+    if (patch.timezone !== undefined) {
+      clean.timezone = validTimezone(patch.timezone);
     }
     // Notification preferences are validated rather than ignored: a typo must not quietly turn the phone off.
     if (patch.notify_tasks !== undefined) {

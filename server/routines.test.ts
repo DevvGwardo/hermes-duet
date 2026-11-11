@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { Routine, RoutineSchedule } from '../shared/types';
+import { localParts } from './clock';
 import { createPairCode, deviceCookie, redeemPairCode } from './auth';
 import { routines, tasks, newId } from './db';
 import { hermes } from './hermes';
@@ -125,6 +126,55 @@ describe('nextRun', () => {
     // 2026-03-08: clocks jump at 2am. 9am is EDT (UTC-4) on both sides of the change.
     expect(nextRun({ kind: 'daily', time: '09:00' }, at('2026-03-08', 8 * 60), NY)).toBe(Date.UTC(2026, 2, 8, 13));
     expect(nextRun({ kind: 'daily', time: '09:00' }, at('2026-03-08', 10 * 60), NY)).toBe(Date.UTC(2026, 2, 9, 13));
+  });
+
+  test('DST spring-forward skipped midnight/2am times advance to the post-jump minute on the same day, never backward', () => {
+    // Asia/Beirut jumps 00:00 -> 01:00 on 2026-03-29 (Sunday). A 00:30 routine must run at 2026-03-29 01:00 Sun,
+    // NOT roll backward to 2026-03-28 23:30 Sat.
+    const beirut = zonedWallToUtc('Asia/Beirut', '2026-03-29', 30);
+    expect(beirut).toBe(Date.UTC(2026, 2, 28, 22, 0));
+    expect(localParts('Asia/Beirut', new Date(beirut))).toMatchObject({ date: '2026-03-29', hhmm: '01:00', weekday: 'Sun' });
+
+    const beirutDaily: RoutineSchedule = { kind: 'daily', time: '00:30' };
+    const satNight = zonedWallToUtc('Asia/Beirut', '2026-03-28', 23 * 60 + 30);
+    expect(nextRun(beirutDaily, satNight, 'Asia/Beirut')).toBe(beirut);
+    expect(localParts('Asia/Beirut', new Date(nextRun(beirutDaily, beirut, 'Asia/Beirut')))).toMatchObject({ date: '2026-03-30', hhmm: '00:30' });
+
+    // Europe/Berlin jumps 02:00 -> 03:00 on 2026-03-29. 02:30 resolves to 03:00 CEST (01:00Z), not 01:30 CET.
+    const berlin = zonedWallToUtc('Europe/Berlin', '2026-03-29', 150);
+    expect(berlin).toBe(Date.UTC(2026, 2, 29, 1, 0));
+    expect(localParts('Europe/Berlin', new Date(berlin))).toMatchObject({ date: '2026-03-29', hhmm: '03:00' });
+
+    // America/New_York jumps 02:00 -> 03:00 on 2026-03-08. 02:30 resolves to 03:00 EDT (07:00Z), not 01:30 EST.
+    const ny = zonedWallToUtc(NY, '2026-03-08', 150);
+    expect(ny).toBe(Date.UTC(2026, 2, 8, 7, 0));
+    expect(localParts(NY, new Date(ny))).toMatchObject({ date: '2026-03-08', hhmm: '03:00' });
+
+    // Australia/Lord_Howe shifts 30 minutes (02:00 -> 02:30) on 2026-10-04.
+    const lhiSpring = zonedWallToUtc('Australia/Lord_Howe', '2026-10-04', 135);
+    expect(localParts('Australia/Lord_Howe', new Date(lhiSpring))).toMatchObject({ date: '2026-10-04', hhmm: '02:30' });
+  });
+
+  test('DST fall-back ambiguous hours pick the first occurrence consistently for both UTC offset signs', () => {
+    // Europe/Berlin falls back 03:00 CEST (+2) -> 02:00 CET (+1) on 2026-10-25.
+    // First 02:30 CEST is 00:30Z; second 02:30 CET is 01:30Z.
+    const berlinFirst = Date.UTC(2026, 9, 25, 0, 30);
+    expect(zonedWallToUtc('Europe/Berlin', '2026-10-25', 150)).toBe(berlinFirst);
+    const berlinBeforeFirst = Date.UTC(2026, 9, 25, 0, 15); // 02:15 CEST
+    expect(nextRun({ kind: 'daily', time: '02:30' }, berlinBeforeFirst, 'Europe/Berlin')).toBe(berlinFirst);
+    // After firing at the first 02:30, nextRun moves to tomorrow instead of double-firing on 02:30 CET.
+    expect(localParts('Europe/Berlin', new Date(nextRun({ kind: 'daily', time: '02:30' }, berlinFirst, 'Europe/Berlin'))).date).toBe('2026-10-26');
+
+    // America/New_York falls back 02:00 EDT (-4) -> 01:00 EST (-5) on 2026-11-01.
+    // First 01:30 EDT is 05:30Z; second 01:30 EST is 06:30Z.
+    const nyFirst = Date.UTC(2026, 10, 1, 5, 30);
+    expect(zonedWallToUtc(NY, '2026-11-01', 90)).toBe(nyFirst);
+    const nyBeforeFirst = Date.UTC(2026, 10, 1, 5, 15); // 01:15 EDT
+    expect(nextRun({ kind: 'daily', time: '01:30' }, nyBeforeFirst, NY)).toBe(nyFirst);
+    expect(localParts(NY, new Date(nextRun({ kind: 'daily', time: '01:30' }, nyFirst, NY))).date).toBe('2026-11-02');
+
+    // Australia/Lord_Howe falls back 30 minutes at 02:00 LHDT (+11) -> 01:30 LHST (+10:30) on 2026-04-05.
+    expect(zonedWallToUtc('Australia/Lord_Howe', '2026-04-05', 90)).toBe(Date.UTC(2026, 3, 4, 14, 30));
   });
 });
 

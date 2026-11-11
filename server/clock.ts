@@ -64,10 +64,15 @@ export function friendlyNow(tz: string) {
 
 /** On-the-hour check-in slots from the end of quiet hours to the start of the next quiet period. */
 export function hourlySlots(from: string, to: string) {
-  const start = Math.ceil(toMinutes(from) / 60);
+  const fromMin = toMinutes(from);
+  const toMin = toMinutes(to);
+  const start = Math.ceil(fromMin / 60);
   // Include every hour that starts before quiet time (quiet at 21:30 still allows 21:00).
-  const end = Math.ceil(toMinutes(to) / 60);
+  const end = Math.ceil(toMin / 60);
+  // Wrap by 24h only when quiet ends at or after it starts (crossing midnight or disabled when from == to),
+  // not when both land in the same ceiling hour like 07:15-07:30.
+  const limit = fromMin >= toMin ? end + 24 : end;
   const out: string[] = [];
-  for (let h = start; h < (end <= start ? end + 24 : end); h++) out.push(`${String(h % 24).padStart(2, '0')}:00`);
+  for (let h = start; h < limit; h++) out.push(`${String(h % 24).padStart(2, '0')}:00`);
   return out.sort();
 }

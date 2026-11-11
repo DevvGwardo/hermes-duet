@@ -42,6 +42,14 @@ describe('clock', () => {
     expect(slots.at(-1)).toBe('21:00');
     expect(slots).toHaveLength(15);
     expect(hourlySlots('07:15', '09:00')).toEqual(['08:00']);
+    // Narrow awake windows in the same ceiling hour have no full hour; equal bounds disable quiet hours cleanly.
+    expect(hourlySlots('07:15', '07:30')).toEqual([]);
+    expect(hourlySlots('07:15', '08:00')).toEqual([]);
+    expect(hourlySlots('07:00', '07:30')).toEqual(['07:00']);
+    expect(hourlySlots('23:15', '23:45')).toEqual([]);
+    expect(hourlySlots('09:00', '09:00')).toHaveLength(24);
+    expect(hourlySlots('09:15', '09:15')).toHaveLength(24);
+    expect(hourlySlots('22:00', '07:00')).toEqual(['00:00', '01:00', '02:00', '03:00', '04:00', '05:00', '06:00', '22:00', '23:00']);
   });
   test('briefSlot: a brief too late to catch up is missed, not pending', () => {
     const d = '2026-10-22';

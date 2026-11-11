@@ -217,19 +217,21 @@ export interface Channel {
   id: string;
   name: string;
   slug: string;
-  topic?: string;
+  topic?: string | null;
   /** Standing instructions for this channel, injected into the agent's context before the topic line. */
-  instructions?: string;
-  /** Optional group name for the channel strip ("Work", "Home"); absent means ungrouped. */
-  group?: string;
+  instructions?: string | null;
+  /** Optional group name for the channel strip ("Work", "Home"); absent or null means ungrouped. */
+  group?: string | null;
   /** A repository this channel works in: "owner/name" or an http(s) GitHub URL. */
-  repo?: string;
+  repo?: string | null;
   /** The Hermes session this channel talks to. */
   session_id: string;
   /** Last time the user opened it here, for the unread dot. */
-  seen_at?: number;
+  seen_at?: number | null;
   /** Newest item in it, filled in when the channel list is read. */
-  last_at?: number;
+  last_at?: number | null;
+  /** Epoch ms when the channel was archived, or null while active. */
+  archived_at?: number | null;
   archived?: boolean;
   created_at: number;
   updated_at: number;

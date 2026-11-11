@@ -103,20 +103,43 @@ function weekdayOf(date: string): number {
 }
 
 /**
- * Local calendar date plus wall-clock minutes -> epoch ms in `tz`. The offset is solved by iteration, so a DST jump
- * keeps the time on the clock (a 9 AM routine fires at 9 AM on both sides of the change) instead of drifting an hour.
+ * Local calendar date plus wall-clock minutes -> epoch ms in `tz`. Solved iteratively, then normalized across DST
+ * transitions: skipped spring-forward wall times step to the first valid instant at or after the gap on `date`,
+ * and ambiguous fall-back wall times pick the first occurrence consistently across positive and negative UTC offsets.
  */
 export function zonedWallToUtc(tz: string, date: string, minutes: number): number {
   const target = dateToUtcMs(date, minutes);
   let guess = target;
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 4; i++) {
     const p = localParts(tz, new Date(guess));
     const offset = dateToUtcMs(p.date, p.minutes) - guess;
     const next = target - offset;
     if (next === guess) break;
     guess = next;
   }
-  return guess;
+  const wallMs = (t: number) => {
+    const p = localParts(tz, new Date(t));
+    return dateToUtcMs(p.date, p.minutes);
+  };
+  if (wallMs(guess) === target) {
+    // Fall-back overlap: pick the earliest UTC instant that formats to this wall time.
+    for (const deltaMin of [120, 90, 60, 45, 30, 20, 15]) {
+      const earlier = guess - deltaMin * 60_000;
+      if (wallMs(earlier) === target) return earlier;
+    }
+    return guess;
+  }
+  // Spring-forward gap: find the first whole minute whose local wall clock is at or past `target`.
+  let lo = Math.floor(guess / 60_000);
+  let hi = lo;
+  for (let i = 0; i < 48 && wallMs(lo * 60_000) >= target; i++) lo -= 60;
+  for (let i = 0; i < 48 && wallMs(hi * 60_000) < target; i++) hi += 60;
+  while (lo + 1 < hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (wallMs(mid * 60_000) >= target) hi = mid;
+    else lo = mid;
+  }
+  return hi * 60_000;
 }
 
 /**

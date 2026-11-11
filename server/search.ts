@@ -50,6 +50,7 @@ export function searchText(item: Item): string {
     if (typeof v === 'string' && v.trim()) parts.push(v.trim());
   };
   add(item.text);
+  for (const a of item.attachments ?? []) add(a.name);
   const card: CardData | undefined = item.card;
   if (card) {
     add(card.title);
@@ -57,9 +58,11 @@ export function searchText(item: Item): string {
     add(card.draft);
     add(card.content);
     add(card.destination);
+    add(card.url);
     add(card.action_label);
     add(card.scan_warning);
     add(card.merchant);
+    add(card.merchant_host);
     add(card.card_summary);
     for (const r of card.recipients ?? []) add(r);
     for (const o of card.options ?? []) add(o);
@@ -92,9 +95,10 @@ export function searchText(item: Item): string {
   return parts.join('\n');
 }
 
-/** The searchable body of a task: its result, progress, instructions, suggested follow-ups and sources. */
+/** The searchable body of a task: its result, progress, instructions, steps, change note, suggested follow-ups and sources. */
 export function taskSearchText(task: Task): string {
-  const parts = [task.result, task.progress, task.instructions, ...sourceText(task.sources)];
+  const parts = [task.result, task.progress, task.instructions, task.changed, ...sourceText(task.sources)];
+  for (const s of task.steps ?? []) parts.push(s.text);
   for (const f of task.follow_ups ?? []) parts.push(f.label, f.message);
   return parts.filter(Boolean).join('\n');
 }
@@ -133,11 +137,50 @@ LIMIT ?`;
 const ASSET_SQL = `
 SELECT fts_assets.ref_id AS id, fts_assets.kind AS kind, fts_assets.title AS title,
        coalesce(snippet(fts_assets, -1, '', '', ' … ', 14), '') AS snip,
-       0 AS created_at
+       coalesce(t.created_at, f.created_at, p.created_at, 0) AS created_at
 FROM fts_assets
+LEFT JOIN tasks t ON fts_assets.kind = 'task' AND t.id = fts_assets.ref_id
+LEFT JOIN files f ON fts_assets.kind = 'file' AND f.id = fts_assets.ref_id
+LEFT JOIN pages p ON fts_assets.kind = 'page' AND p.id = fts_assets.ref_id
 WHERE fts_assets MATCH ?
 ORDER BY bm25(fts_assets)
 LIMIT ?`;
+
+function assetRowsFor(database: Database, match: string, limit: number): Row[] {
+  // Partial/pre-migration test DBs may have `fts_assets` without all three asset tables yet; join only what exists.
+  const tables = new Set(
+    database
+      .query<{ name: string }, []>(`SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('tasks', 'files', 'pages')`)
+      .all()
+      .map((r) => r.name),
+  );
+  if (tables.size === 3) return database.query<Row, [string, number]>(ASSET_SQL).all(match, limit);
+  const cols: string[] = [];
+  const joins: string[] = [];
+  if (tables.has('tasks')) {
+    cols.push('t.created_at');
+    joins.push(`LEFT JOIN tasks t ON fts_assets.kind = 'task' AND t.id = fts_assets.ref_id`);
+  }
+  if (tables.has('files')) {
+    cols.push('f.created_at');
+    joins.push(`LEFT JOIN files f ON fts_assets.kind = 'file' AND f.id = fts_assets.ref_id`);
+  }
+  if (tables.has('pages')) {
+    cols.push('p.created_at');
+    joins.push(`LEFT JOIN pages p ON fts_assets.kind = 'page' AND p.id = fts_assets.ref_id`);
+  }
+  const createdExpr = cols.length ? `coalesce(${cols.join(', ')}, 0)` : '0';
+  const sql = `
+SELECT fts_assets.ref_id AS id, fts_assets.kind AS kind, fts_assets.title AS title,
+       coalesce(snippet(fts_assets, -1, '', '', ' … ', 14), '') AS snip,
+       ${createdExpr} AS created_at
+FROM fts_assets
+${joins.join('\n')}
+WHERE fts_assets MATCH ?
+ORDER BY bm25(fts_assets)
+LIMIT ?`;
+  return database.query<Row, [string, number]>(sql).all(match, limit);
+}
 
 /**
  * Ranked hits across the thread (messages and cards) and the agent's tasks, files and standing pages, newest first
@@ -148,7 +191,7 @@ export function search(database: Database, raw: string, limit = 20): SearchHit[]
   if (!q) return [];
   const n = Math.max(1, Math.min(50, limit));
   const itemRows = database.query<Row, [string, number]>(ITEM_SQL).all(q.match, n);
-  const assetRows = database.query<Row, [string, number]>(ASSET_SQL).all(q.match, n);
+  const assetRows = assetRowsFor(database, q.match, n);
   // The two indexes score on different corpora, so their bm25 numbers are not comparable. Interleaving keeps both in
   // the running without pretending one outranks the other, and `limit` stays the number of hits returned.
   const rows: Row[] = [];
