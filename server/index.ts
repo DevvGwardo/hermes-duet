@@ -1005,7 +1005,7 @@ async function doctor() {
   add('a device has notifications on', hasSubscriptions(), hasSubscriptions() ? 'yes' : 'open Settings → Notifications on your phone');
   add('context sources', existsSync(config.contextFile), existsSync(config.contextFile) ? config.contextFile : 'optional: copy context.example.md to context.local.md', true);
   const s = settings.get();
-  add('morning brief', s.brief_enabled, s.brief_enabled ? `daily at ${s.brief_time} (${s.timezone}); the Mac must be awake` : 'off', true);
+  add('morning brief', s.brief_enabled, s.brief_enabled ? `daily at ${s.brief_time} (${s.timezone}); the host must be awake` : 'off', true);
   return { ok: checks.every((c) => c.ok || c.info), checks };
 }
 

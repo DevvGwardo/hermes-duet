@@ -187,7 +187,7 @@ export async function vaults(): Promise<VaultStatus[]> {
     if (p.id === '1password') {
       const who = await runner(p.cmd, ['whoami']).catch(() => ({ out: '', err: '', code: 1 }));
       const ready = who.code === 0 && !!who.out.trim();
-      out.push({ id: p.id, name: p.name, installed: true, ready, detail: ready ? `Signed in as ${who.out.trim().slice(0, 60)}` : 'Installed, not signed in', hint: ready ? undefined : 'Run `op signin` on the Mac.' });
+      out.push({ id: p.id, name: p.name, installed: true, ready, detail: ready ? `Signed in as ${who.out.trim().slice(0, 60)}` : 'Installed, not signed in', hint: ready ? undefined : 'Run `op signin` on this host.' });
     } else {
       const st = await runner(p.cmd, ['status']).catch(() => ({ out: '', err: '', code: 1 }));
       let status = '';
@@ -201,7 +201,7 @@ export async function vaults(): Promise<VaultStatus[]> {
         installed: true,
         ready,
         detail: ready ? 'Unlocked' : status ? `Vault is ${status}` : 'Installed, not unlocked',
-        hint: ready ? undefined : 'Run `bw unlock` on the Mac and put the session key in BW_SESSION.',
+        hint: ready ? undefined : 'Run `bw unlock` on this host and put the session key in BW_SESSION.',
       });
     }
   }
@@ -216,7 +216,7 @@ export async function readLogin(domain: string, which?: VaultId): Promise<{ vaul
   const host = safeDomain(domain);
   if (!host) throw new Error('that page has no domain to look a login up by');
   const plan = vaultPlan(process.env, planHas).filter((p) => p.installed && (!which || p.id === which));
-  if (!plan.length) throw new Error(which ? `${which} is not installed on this Mac` : 'No password vault CLI is installed (1Password `op` or Bitwarden `bw`).');
+  if (!plan.length) throw new Error(which ? `${which} is not installed on this host` : 'No password vault CLI is installed (1Password `op` or Bitwarden `bw`).');
   const errors: string[] = [];
   for (const p of plan) {
     const template = p.id === '1password' ? (process.env.DUET_OP_CMD ?? 'op item get {domain} --format json') : (process.env.DUET_BW_CMD ?? 'bw get item {domain} --raw');

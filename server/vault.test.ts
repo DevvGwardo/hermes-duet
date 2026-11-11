@@ -184,4 +184,25 @@ describe('Windows quoted paths and custom vault binaries', () => {
       __setVaultHas(prevHas);
     }
   });
+
+  test('vault hints and errors use host-neutral wording', async () => {
+    const prevRunner = __setVaultRunner(async () => ({ out: '', err: '', code: 1 }));
+    const prevHas = __setVaultHas(() => true);
+    try {
+      const list = await vaults();
+      for (const item of list) {
+        expect(item.ready).toBe(false);
+        expect(item.hint ?? '').toContain('host');
+        expect(item.hint ?? '').not.toMatch(/\bMac\b/i);
+      }
+      __setVaultHas(() => false);
+      const err = await readLogin('example.com', '1password').catch((e: Error) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect(String(err)).toContain('this host');
+      expect(String(err)).not.toMatch(/\bMac\b/i);
+    } finally {
+      __setVaultRunner(prevRunner);
+      __setVaultHas(prevHas);
+    }
+  });
 });
