@@ -1,9 +1,11 @@
 # Blueprint harness
 
 Browser sweep that produces every screenshot and number in the blueprint
-(`docs/blueprint/hermes-duet-blueprint.html`). Latest full evidence run (2026-11-04):
+(`docs/blueprint/hermes-duet-blueprint.html`). Historic full-green baseline (2026-11-04):
 `sweep-974e7af5` / `live-2b399536` — 24/24 and 6/6; all ten scripts 99/99, 37 screenshots, reviewed.
-The suite was re-run after the compression, attachment, request-cap and code-splitting changes landed.
+Later local full-suite receipts (see `GAPS.md` §10.2) passed 9 of 10 scripts (`sweep` 24/24, `pairing` 7/7,
+`channels` 6/6, `approvals` 7/7, `dialogs` 21/21 on a fresh seed, `a11y` 10/10, `polish` 8/8, `recovery` 4/4,
+`wheel` 6/6), while `live.mjs` locally hits 5/6 when `tapRepaintDiff=0` under non-focused/headless Chrome.
 
 Not published as an Artifact. View locally:
 `python3 -m http.server 8765 -d docs/blueprint` →
@@ -40,10 +42,10 @@ BP_SKILL=~/.agents/skills/blueprint
 bun run build
 (prepare the live fixture once: python3 -m http.server 7499 -d tools/blueprint/fixture &)
 python3 "$BP_SKILL/scripts/devserver.py" start --url http://127.0.0.1:7466/ \
-  --expect "Hermes Duet" --cwd /Users/devgwardo/hermes-duet -- env DUET_CHROME_PORT=9334 \
-  "DUET_CHROME_PROFILE=/Users/devgwardo/hermes-duet/blueprint-out/chrome-profile" \
+  --expect "Hermes Duet" --cwd "$PWD" -- env DUET_CHROME_PORT=9334 \
+  "DUET_CHROME_PROFILE=$PWD/blueprint-out/chrome-profile" \
   DUET_HERMES_URL=http://127.0.0.1:9 bun scripts/demo.ts --reset
-export APP_URL=http://127.0.0.1:7466/ BP_OUT=/Users/devgwardo/hermes-duet/blueprint-out
+export APP_URL=http://127.0.0.1:7466/ BP_OUT="$PWD/blueprint-out"
 for s in sweep live channels pairing a11y approvals recovery; do
   node tools/blueprint/$s.mjs || echo "$s FAILED"
 done

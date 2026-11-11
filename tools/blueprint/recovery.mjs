@@ -7,7 +7,7 @@
 //   APP_URL=http://127.0.0.1:7466/ node tools/blueprint/recovery.mjs
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
-const { execSync } = require("node:child_process");
+import { execFileSync } from "node:child_process";
 const { chromium } = require("playwright-core");
 import fs from "node:fs";
 import os from "node:os";
@@ -15,11 +15,12 @@ import { createHash, randomUUID } from "node:crypto";
 import { resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const BP = resolve(process.env.BP_OUT ?? fileURLToPath(new URL("../../blueprint-out", import.meta.url)));
+const ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)));
+const BP = resolve(process.env.BP_OUT ?? join(ROOT, "blueprint-out"));
 const APP_URL = process.env.APP_URL ?? "http://127.0.0.1:7466/";
 const DEMO_DIR = process.env.DEMO_DIR ?? join(os.tmpdir(), "hermes-duet-demo");
 const INTERNAL_PORT = process.env.DUET_INTERNAL_PORT ?? "7467";
-const SKILL = `${os.homedir()}/.agents/skills/blueprint`;
+const SKILL = process.env.BP_SKILL ?? join(os.homedir(), ".agents", "skills", "blueprint");
 for (const d of ["ui", "render", "mp4", "data"]) fs.mkdirSync(`${BP}/${d}`, { recursive: true });
 
 const report = { script: "recovery", run: `recovery-${randomUUID().slice(0, 8)}`, checks: [], perf: {}, timings: {}, errors: [], warnings: [], screenshots: [], visualReview: "pending" };
@@ -59,16 +60,32 @@ await shot(page, "recovery-offline");
 
 // Part B: the server restarts under the open phone.
 const before = await page.evaluate(() => [...document.querySelectorAll('[id^="item-"]')].map((el) => el.id).sort());
-execSync(`python3 "${SKILL}/scripts/devserver.py" stop --url ${APP_URL}`, { stdio: "ignore" });
+execFileSync("python3", [join(SKILL, "scripts", "devserver.py"), "stop", "--url", APP_URL], { stdio: "ignore" });
 const reconnecting = await page.waitForFunction(
   () => [...document.querySelectorAll(".status-text, .status-title")].some((el) => /reconnecting/i.test(el.textContent ?? "")),
   null, { timeout: 30000 }).then(() => true).catch(() => false);
 check("Dropped connection shows Reconnecting", reconnecting);
 await page.waitForTimeout(400);
 await shot(page, "recovery-reconnecting");
-execSync(
-  `python3 "${SKILL}/scripts/devserver.py" start --url ${APP_URL} --expect "Hermes Duet" --cwd /Users/devgwardo/hermes-duet -- ` +
-  `env DUET_CHROME_PORT=9334 "DUET_CHROME_PROFILE=/Users/devgwardo/hermes-duet/blueprint-out/chrome-profile" DUET_HERMES_URL=http://127.0.0.1:9 bun scripts/demo.ts`,
+execFileSync(
+  "python3",
+  [
+    join(SKILL, "scripts", "devserver.py"),
+    "start",
+    "--url",
+    APP_URL,
+    "--expect",
+    "Hermes Duet",
+    "--cwd",
+    ROOT,
+    "--",
+    "env",
+    "DUET_CHROME_PORT=9334",
+    `DUET_CHROME_PROFILE=${join(BP, "chrome-profile")}`,
+    "DUET_HERMES_URL=http://127.0.0.1:9",
+    "bun",
+    "scripts/demo.ts",
+  ],
   { stdio: "ignore" },
 );
 await page.waitForFunction(() => [...document.querySelectorAll(".card")].length > 0, null, { timeout: 60000 });

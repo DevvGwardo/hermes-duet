@@ -13,13 +13,12 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import { createHash, randomUUID } from "node:crypto";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const BP = resolve(process.env.BP_OUT ?? fileURLToPath(new URL("../../blueprint-out", import.meta.url)));
 const APP_URL = process.env.APP_URL ?? "http://127.0.0.1:7466/";
-const DEMO_DIR = process.env.DEMO_DIR ?? join_tmp();
-function join_tmp() { return `${os.tmpdir()}/hermes-duet-demo`; }
+const DEMO_DIR = process.env.DEMO_DIR ?? join(os.tmpdir(), "hermes-duet-demo");
 const INTERNAL_PORT = process.env.DUET_INTERNAL_PORT ?? "7467";
 for (const d of ["ui", "data"]) fs.mkdirSync(`${BP}/${d}`, { recursive: true });
 
@@ -74,8 +73,14 @@ function seedLongDraft() {
     "effect on either side. If that works for you, can we target signing on Oct 28? ").repeat(3);
   const now = Date.now();
   const item = { id: "dialogs-draft", kind: "card", created_at: now, updated_at: now, run_id: null, task_id: null, card: { type: "approval", status: "pending", title: "Polish: long draft review", action_label: "Send", body: "The exact text below is what will be sent.", draft } };
+  const dbPath = join(DEMO_DIR, "duet.db");
   const sql = `INSERT OR REPLACE INTO items(id,kind,created_at,updated_at,run_id,task_id,json,channel_id) VALUES('dialogs-draft','card',${now},${now},NULL,NULL,'${JSON.stringify(item).replace(/'/g, "''")}','chan-general')`;
-  execFileSync("python3", ["-c", `import sqlite3;con=sqlite3.connect('${DEMO_DIR}/duet.db',timeout=15);con.execute(${JSON.stringify(sql)});con.commit()`]);
+  execFileSync("python3", [
+    "-c",
+    "import sqlite3, sys; con = sqlite3.connect(sys.argv[1], timeout=15); con.execute(sys.argv[2]); con.commit()",
+    dbPath,
+    sql,
+  ]);
 }
 
 const CHROME = process.env.CHROME_PATH ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
@@ -202,11 +207,15 @@ async function pairFresh(page) {
   check("Long draft renders tall on desktop", !!draft && draft.h >= 250 && draft.sh - draft.h <= 2, draft ? `h=${draft.h} scrollH=${draft.sh} rows=${draft.rows}` : "draft card not found");
   await shot(page, "dialogs-draft");
 
-  // empty In progress: cancel the running deck job, read the empty state
+  // empty In progress: open the running task sheet, cancel the job, close the sheet, read the empty state
   await page.evaluate(() => [...document.querySelectorAll(".dock-tab,.side-tab")].find((b) => /Tasks/.test(b.textContent || ""))?.click());
   await page.waitForTimeout(500);
-  await page.evaluate(() => [...document.querySelectorAll(".task-detail .btn")].find((b) => /Cancel|Stop/.test(b.textContent || ""))?.click());
-  await page.waitForTimeout(1200);
+  await page.locator(".tasks-pane .task-running .row, .tasks-pane .task-waiting .row, .tasks-pane .task .row").first().click();
+  await page.waitForSelector(".task-sheet", { timeout: 10000 });
+  await page.locator(".task-sheet .task-actions .btn", { hasText: /Cancel|Stop/ }).first().click();
+  await page.waitForSelector(".tasks-pane .muted.pad, .pane .muted.pad", { timeout: 10000 }).catch(() => {});
+  await page.locator('.sheet.task-sheet .icon-btn[aria-label="Back to tasks"]').click().catch(() => {});
+  await page.waitForTimeout(400);
   const empty = await page.evaluate(() => {
     const el = document.querySelector(".tasks-pane .muted.pad, .pane .muted.pad");
     if (!el) return null;

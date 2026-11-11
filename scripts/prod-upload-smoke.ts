@@ -4,12 +4,12 @@
 // to the live server, and read it back bit-for-bit. Exercises server/multipart.ts end to end
 // on the running launchd service, not just in tests.
 import { readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
+import { config } from '../server/config.ts';
 
-const root = resolve(import.meta.dir, '..');
-const APP = `http://127.0.0.1:${process.env.DUET_PORT ?? 7456}`;
-const INTERNAL = `http://127.0.0.1:${process.env.DUET_INTERNAL_PORT ?? 7457}`;
-const token = readFileSync(join(root, 'data', 'internal.token'), 'utf8').trim();
+const APP = `http://127.0.0.1:${config.port}`;
+const INTERNAL = `http://127.0.0.1:${config.internalPort}`;
+const token = readFileSync(join(config.dataDir, 'internal.token'), 'utf8').trim();
 
 const { code } = (await (await fetch(`${INTERNAL}/internal/pair`, { method: 'POST', headers: { authorization: `Bearer ${token}` } })).json()) as any;
 const res = await fetch(`${APP}/api/pair`, { method: 'POST', headers: { 'content-type': 'application/json', 'user-agent': 'multipart-prod-smoke' }, body: JSON.stringify({ code }) });

@@ -6,13 +6,13 @@
 
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
+import { config } from '../server/config.ts';
 import type { Item, Snapshot } from '../shared/types';
 
-const root = resolve(import.meta.dir, '..');
-const APP = `http://127.0.0.1:${process.env.DUET_PORT ?? 7456}`;
-const INTERNAL = `http://127.0.0.1:${process.env.DUET_INTERNAL_PORT ?? 7457}`;
-const token = readFileSync(join(root, 'data', 'internal.token'), 'utf8').trim();
+const APP = `http://127.0.0.1:${config.port}`;
+const INTERNAL = `http://127.0.0.1:${config.internalPort}`;
+const token = readFileSync(join(config.dataDir, 'internal.token'), 'utf8').trim();
 
 async function pair(): Promise<string> {
   const { code } = (await (await fetch(`${INTERNAL}/internal/pair`, { method: 'POST', headers: { authorization: `Bearer ${token}` } })).json()) as any;
@@ -66,8 +66,9 @@ if (mode === 'approval') {
   console.log('✓ file created after approval:', readFileSync(target, 'utf8').trim());
   await waitFor('agent idle', (s) => !s.agent.busy);
 } else if (mode === 'task') {
+  const dashboardTarget = join(homedir(), 'duet-work', 'smoke', 'dashboard.html');
   await api('POST', '/api/messages', {
-    text: 'Smoke test: start a background task (start_task) that writes a tiny self-contained HTML dashboard with three made-up metrics to ~/duet-work/smoke/dashboard.html and delivers it with deliver_file. Keep it quick.',
+    text: `Smoke test: start a background task (start_task) that writes a tiny self-contained HTML dashboard with three made-up metrics to ${dashboardTarget} and delivers it with deliver_file. Keep it quick.`,
   });
   const task = await waitFor('task created', (s) => s.tasks.find((t) => t.created_at >= after));
   console.log('✓ task started:', task.title);
@@ -80,7 +81,7 @@ if (mode === 'approval') {
 
 if (mode === 'steer') {
   // A message sent mid-run should reach the same turn (or the next one), never get lost.
-  await api('POST', '/api/messages', { text: 'Smoke test: run `sleep 25` in the terminal, then reply "slept".' });
+  await api('POST', '/api/messages', { text: 'Smoke test: run `bun -e "await Bun.sleep(25000)"` in the terminal, then reply "slept".' });
   await waitFor('run busy', (s) => s.agent.busy, 30_000);
   await Bun.sleep(6000);
   await api('POST', '/api/messages', { text: 'Also include the word "pineapple" in your reply.' });
@@ -92,7 +93,7 @@ if (mode === 'steer') {
 }
 
 if (mode === 'stop') {
-  await api('POST', '/api/messages', { text: 'Smoke test: run `sleep 120` in the terminal, then reply "done".' });
+  await api('POST', '/api/messages', { text: 'Smoke test: run `bun -e "await Bun.sleep(120000)"` in the terminal, then reply "done".' });
   await waitFor('run busy', (s) => s.agent.busy, 30_000);
   await Bun.sleep(8000);
   await api('POST', '/api/runs/stop');

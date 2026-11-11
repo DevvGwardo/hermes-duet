@@ -10,18 +10,28 @@
 # Publish only 7456: the internal listener on 7457 stays on loopback inside the container.
 #
 # Chromium runs inside the container (DUET_CHROME_BIN=/usr/bin/chromium, DUET_CHROME_PROFILE=/data/chrome), so the
-# host's browser profile is never the agent's surface, and CDP on 9333 stays inside the container. The native
-# Calendar/Reminders/Mail connectors are macOS-only and report unsupported on Linux.
+# host's browser profile is never the agent's surface, and CDP on 9333 stays inside the container. `shm_size` prevents
+# Chromium tab crashes against Docker's default 64 MB /dev/shm. The native Calendar/Reminders/Mail connectors are
+# macOS-only and report unsupported on Linux.
 services:
   hermes-duet:
     build: .
     image: hermes-duet
     container_name: hermes-duet
     restart: unless-stopped
+    shm_size: "256m"
     ports:
       - "7456:7456"
     env_file:
       - .env
+    environment:
+      # Reach a Hermes gateway running on the Docker host (instead of loopback inside the container).
+      # On Linux Docker Engine, also uncomment extra_hosts below so host.docker.internal resolves.
+      DUET_HERMES_URL: ${DUET_HERMES_URL:-http://host.docker.internal:8642}
+      # Uncomment if your container runtime/seccomp blocks Chromium's sandbox (alternative to cap_add: SYS_ADMIN):
+      # DUET_CHROME_NO_SANDBOX: "1"
+    # extra_hosts:
+    #   - "host.docker.internal:host-gateway"
     volumes:
       - hermes-duet-data:/data
 

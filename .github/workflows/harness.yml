@@ -60,10 +60,17 @@ jobs:
 
       - name: Run the browser sweep
         run: |
+          failed=""
           for s in sweep channels pairing a11y approvals dialogs polish; do
             echo "=== $s ==="
-            node "tools/blueprint/$s.mjs"
+            if ! node "tools/blueprint/$s.mjs"; then
+              failed="$failed $s"
+            fi
           done
+          if [ -n "$failed" ]; then
+            echo "Failed scripts:$failed" >&2
+            exit 1
+          fi
 
       - name: Upload evidence
         if: always()

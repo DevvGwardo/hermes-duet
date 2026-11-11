@@ -5,6 +5,7 @@
 
 import { mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { chromium, devices, webkit, type Browser, type BrowserContextOptions } from 'playwright-core';
 import { DEMO_DIR, DEMO_INTERNAL_PORT, DEMO_PORT } from '../demo.ts';
 
@@ -81,7 +82,7 @@ try {
   const p = await ctx.newPage();
   for (const [sheet, width, height] of sheets) {
     await p.setViewportSize({ width, height });
-    await p.goto(`file://${join(root, 'scripts/brand/brand.html')}?sheet=${sheet}`);
+    await p.goto(`${pathToFileURL(join(root, 'scripts/brand/brand.html')).href}?sheet=${sheet}`);
     await p.evaluate(() => document.fonts.ready);
     await p.waitForTimeout(300);
     await p.screenshot({ path: join(out, `${sheet}.png`), clip: { x: 0, y: 0, width, height } });

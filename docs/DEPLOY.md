@@ -17,7 +17,8 @@ Everything that matters lives in `DUET_DATA_DIR` (default `./data`):
 | `tts/` | synthesized brief audio, cached |
 | `internal.token` | loopback token the MCP shim and CLI use |
 
-Back that directory up and you have everything. It is `0700`, and the database is `0600`.
+Back that directory up and you have everything. On POSIX hosts the directory is `0700` and the database and token
+files are `0600`; on Windows they rely on your user profile's NTFS ACLs rather than POSIX mode bits.
 
 ## Always-on host
 
@@ -117,12 +118,21 @@ docker exec hermes-duet bin/hermes-duet pair   # bash CLI; don't run it with `bu
 - **Data volume.** `/data` is the `DUET_DATA_DIR` (set in the image), so `duet.db`, uploads, delivered files and the
   internal token all live on the named volume `hermes-duet-data`. Back up that volume, not the container. A bind
   mount (`-v /srv/hermes-duet/data:/data`) is easier to archive with the same stop-and-copy recipe above.
-- **Env file.** `--env-file .env` supplies `DUET_PUBLIC_URL`, `DUET_HERMES_URL`, `DUET_HERMES_KEY` and friends. The
-  image already sets `DUET_HOST=0.0.0.0`, `DUET_PORT=7456`, `DUET_INTERNAL_PORT=7457` and `DUET_DATA_DIR=/data`.
+- **Env file & pairing.** `--env-file .env` supplies `DUET_PUBLIC_URL`, `DUET_HERMES_URL`, `DUET_HERMES_KEY` and
+  friends. The image already sets `DUET_HOST=0.0.0.0`, `DUET_PORT=7456`, `DUET_INTERNAL_PORT=7457` and
+  `DUET_DATA_DIR=/data`. `bin/hermes-duet pair` reads `DUET_PUBLIC_URL` directly from the container environment (no
+  `.env` file is copied into `/app`), and `bin/hermes-duet doctor` recognizes container runtimes without expecting
+  `launchd` or `systemd`.
+- **Reaching Hermes on the host.** Inside a container, `127.0.0.1:8642` is the container itself, not the host's Hermes
+  gateway. Set `DUET_HERMES_URL=http://host.docker.internal:8642`; on Linux Docker Engine also add
+  `--add-host=host.docker.internal:host-gateway` (or `extra_hosts` in `docker-compose.yml`).
 - **The browser is inside the container.** The image sets `DUET_CHROME_BIN=/usr/bin/chromium` and
   `DUET_CHROME_PROFILE=/data/chrome`, so the agent's Chromium runs in the container with its profile on the data
   volume. The host's browser profile is never the agent's surface, and CDP (port 9333) never leaves the container:
-  the phone's pane connects to the app on 7456 and the server proxies frames and input.
+  the phone's pane connects to the app on 7456 and the server proxies frames and input. Pass `--shm-size=256m` (already
+  set in `docker-compose.example.yml`) so Chromium does not crash on Docker's default 64 MB `/dev/shm`. If an
+  unprivileged container seccomp profile blocks Chromium's sandbox and you cannot pass `--cap-add=SYS_ADMIN`, set
+  `DUET_CHROME_NO_SANDBOX=1`.
 - **Connectors.** Chromium and the PWA work in the container. The native Calendar, Reminders and Mail connectors
   are macOS-only and report unsupported on Linux; the agent still has CLI tools on `PATH` and Hermes's MCP servers.
 - **Ports.** Publish only 7456, and keep it tailnet-only: put Tailscale, a Cloudflare Tunnel or a reverse proxy with
@@ -162,10 +172,19 @@ Set `DUET_PUBLIC_URL` to that URL: iOS push needs it.
 A Mac is only always-on while it is awake and not lid-closed; when it sleeps, scheduled work waits until it wakes.
 The always-on host above is the way to avoid that.
 
+## Windows
+
+Duet runs natively on Windows via Bun (`bun install && bun run build && bun server/index.ts`). File permissions use your
+Windows profile's NTFS ACLs instead of POSIX `0700`/`0600` modes, and the macOS Calendar/Reminders/Mail connectors report
+unsupported. The live browser probes standard Chrome and Edge installation paths (or honors `DUET_CHROME_BIN`), and the
+`bin/hermes-duet` bash CLI works under Git Bash (`C:\Program Files\Git\bin\bash.exe`).
+
 ## Logs
 
-The service appends stdout and stderr to `$DUET_LOG_DIR/server.log` (default `~/Library/Logs/hermes-duet`, the macOS
-path — on Linux set `DUET_LOG_DIR=/var/log/hermes-duet` or similar) under launchd and the systemd user unit. Duet
+The service appends stdout and stderr to `$DUET_LOG_DIR/server.log` (default `~/Library/Logs/hermes-duet` on macOS, or
+`${XDG_STATE_HOME:-$HOME/.local/state}/hermes-duet` on Linux) under launchd and the `systemd --user` unit.
+`hermes-duet install-systemd` passes `DUET_LOG_DIR` into the unit automatically; if you override `DUET_LOG_DIR`, pick a
+directory writable by your user rather than `/var/log`. Duet
 does not rotate that file behind your back: a rename would leave the running service writing to the old inode while
 `hermes-duet logs` tails an empty new file. Rotate it with:
 
@@ -179,11 +198,12 @@ service keeps its descriptor. `hermes-duet doctor` warns once the log passes 50 
 for a personal install:
 
 ```cron
-0 3 * * 0 /Users/you/.local/bin/hermes-duet rotate-logs 5
+0 3 * * 0 $HOME/.local/bin/hermes-duet rotate-logs 5
 ```
 
-On systemd the unit writes the file above; `hermes-duet logs` reads `journalctl --user -u hermes-duet`, so
-`tail -f "$DUET_LOG_DIR/server.log"` is the reliable view of what the service wrote.
+On systemd the unit writes the file above (in `~/.local/state/hermes-duet/server.log` by default); `hermes-duet logs`
+reads `journalctl --user -u hermes-duet`, so `tail -f "${DUET_LOG_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/hermes-duet}/server.log"`
+shows the file log directly.
 
 ## Environment
 
@@ -198,7 +218,7 @@ Everything is optional except the Hermes key, which the server can also read fro
 | `DUET_HERMES_URL` | `http://127.0.0.1:8642` | Hermes gateway |
 | `DUET_HERMES_KEY` / `API_SERVER_KEY` | – | Hermes API key |
 | `DUET_DATA_DIR` | `./data` | database, uploads, deliverables |
-| `DUET_LOG_DIR` | `~/Library/Logs/hermes-duet` | service log directory (launchd/systemd) |
+| `DUET_LOG_DIR` | `~/Library/Logs/hermes-duet` (macOS), `${XDG_STATE_HOME:-~/.local/state}/hermes-duet` (Linux) | service log directory (launchd/systemd) |
 | `DUET_MAX_TRANSACTION_LIMIT` | `500` | **dollars** per `request_payment` |
 | `DUET_MAX_TRANSACTION_LIMIT_CENTS` | – | exact cents, overrides the above |
 | `DUET_CARD_PROVIDER` | `privacy` | `privacy`, `stripe`, `revolut` or `generic` |
@@ -214,7 +234,8 @@ Everything is optional except the Hermes key, which the server can also read fro
 | `DUET_MEETING_LEAD_MIN` | `15` | how early a meeting triggers prep (0 disables) |
 | `DUET_OP_CMD` | `op item get {domain} --format json` | 1Password lookup |
 | `DUET_BW_CMD` | `bw get item {domain} --raw` | Bitwarden lookup (`BW_SESSION` must be set) |
-| `DUET_CHROME_BIN` | Google Chrome on macOS | Chromium binary for the live browser |
+| `DUET_CHROME_BIN` | auto-probed Chrome/Chromium/Edge | Chromium binary for the live browser |
+| `DUET_CHROME_NO_SANDBOX` | off | `1` passes `--no-sandbox` for restricted containers |
 | `DUET_CHROME_PORT` / `DUET_CHROME_PROFILE` | `9333` / `~/.hermes/duet-chrome` | CDP port, browser profile |
 | `DUET_RUN_TIMEOUT_MS` | 45 min | a run silent this long is stopped as hung |
 | `DUET_MAX_BACKGROUND` | `2` | background tasks allowed at once |

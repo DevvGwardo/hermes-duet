@@ -1,12 +1,8 @@
 # Claude Duet vs. Hermes Duet — feature parity research
 
-Research date: **2026-11-09**. Claude Duet is a US-only research preview that changes quickly; this is a snapshot,
-not a permanent spec. Sources are listed at the bottom.
+Research date: **2026-11-09** (updated after **Parity Pass 1** and **Parity Pass 2**, see [`GAPS.md`](../GAPS.md)). Claude Duet is a US-only research preview that changes quickly; this is a snapshot, not a permanent spec. Sources are listed at the bottom.
 
-The short version: Hermes Duet is already **ahead** on local-machine access, live-browser takeover, event triggers,
-editable approval drafts, search over deliverables, standing pages, model choice, and self-hosting. It is **behind**
-on the trust layer around approvals, the task/channel model, source citations, user-defined routines, connector
-breadth, and always-on availability.
+The short version: after Parity Pass 1 (`71f25c7`–`7fe8e8b`) and Parity Pass 2 (`5975c79`–`6606434`), Hermes Duet reaches **parity or better** across structured approvals, outbound secret scanning, hard-blocked action policies, merchant-bound payment cards, dedicated task sheets with steering and user confirmation, grouped channels with standing instructions, source citations, user-defined routines, notification preferences, editable deliverables, complete FTS v3 indexing, in-app memory editing, read-only connector suggestions, channel repo binding, and always-on Linux/Docker deployment docs. It remains **behind or deliberately different** on cloud isolation, multi-gateway/multi-machine routing, automatic "Everything" channel triage, outbound-thread follow-up tracking, `"Don't ask again"` exceptions, connector OAuth/install flows, native mobile/iPad apps (§4.11), and in-app TTS speed controls.
 
 ---
 
@@ -43,13 +39,13 @@ piece is missing; **Missing** = no equivalent; **N/A** = different product bound
 | Capability | Claude Duet | Hermes Duet | Status |
 |---|---|---|---|
 | One persistent main thread | Yes | General channel / main lane | Parity |
-| Topic channels with shared memory | Yes | Channels with own Hermes session; shared Agent memory scope | Partial — no shared-memory UI, and channel runs are second-class in the app (see §4.1) |
-| Groups of channels | Reported by reviewers | None | Missing |
-| Per-channel standing instructions | Reported by reviewers | Only `topic`, injected as one line in `channelLine()` | Missing |
-| Automatic sorting of work into channels | Reported by reviewers | A task inherits the channel it started in; no routing from general | Missing |
-| Task list with a page per task | Yes | Tasks tab with expandable rows | Partial — no dedicated task page |
-| Steer a running task | Yes | `hermes.steer` exists, but only for the chat/channel lane; no UI or route for a task lane | Missing |
-| User marks a task complete | Yes; agent may suggest, only user confirms | Agent sets `done`; user can cancel or retry, not confirm | Missing |
+| Topic channels with shared memory | Yes | Channels with own Hermes session; shared `context.local.md` memory + unread `seen_at` dots | Parity (Pass 1) |
+| Groups of channels | Reported by reviewers | `channels.group` with grouped strip and channel sheet (`502f270`) | Parity (Pass 1) |
+| Per-channel standing instructions | Reported by reviewers | `channels.instructions` injected before `topic` with safety-override clause (`502f270`) | Parity (Pass 1) |
+| Automatic sorting of work into channels | Reported by reviewers | Tasks inherit their starting channel; no auto-routing from General | Missing |
+| Task list with a page per task | Yes | Tasks tab opening `TaskSheet` with steps, result, sources, files, and composer (`0b148bc`) | Parity (Pass 1) |
+| Steer a running task | Yes | `POST /api/tasks/:id/message` → `steerTask()` via `hermes.steer` + `TaskSheet` composer (`0b148bc`) | Parity (Pass 1) |
+| User marks a task complete | Yes; agent may suggest, only user confirms | `Task.agent_done_at` vs `confirmed_at`; `/confirm` and `/reopen` in `TaskSheet` (`0b148bc`) | Parity (Pass 1) |
 | Handover with result, files, follow-ups | Files in Make; task page | Handover card, retries, follow-ups | Ahead |
 | Task history | Task list | 60 tasks / 7 days loaded (`tasks.recent`) | Partial |
 
@@ -58,10 +54,10 @@ piece is missing; **Missing** = no equivalent; **N/A** = different product bound
 | Capability | Claude Duet | Hermes Duet | Status |
 |---|---|---|---|
 | Morning brief with prepared drafts | Yes | Yes; decisions, drafts, Watching, Skip | Parity / Ahead |
-| Checks through the day | Every few hours, configurable | Check-ins off / 3× daily / hourly | Partial — no arbitrary cadence |
-| User controls what to hear and how often | Yes | Global brief on/off/time; check-ins level; quiet hours | Partial — no per-category or per-channel preferences |
+| Checks through the day | Every few hours, configurable | Check-ins off / 3× daily / hourly + custom user routines | Parity / Partial — fixed check-in presets; arbitrary schedules via routines |
+| User controls what to hear and how often | Yes | `server/notify-prefs.ts`: per-category task pushes, `agent_notify`, per-channel mute, daily cap (`d68aefd`) | Parity (Pass 2) |
 | Follow up on threads that went quiet | Yes | No outbound-thread tracking | Missing |
-| User-defined recurring routines | Routines/scheduled tasks reported and implied | Only fixed check-ins and standing pages | Missing |
+| User-defined recurring routines | Routines/scheduled tasks reported and implied | `routines` table + DST-aware scheduler + `save_routine`/`remove_routine` + Routines sheet (`986ad86`) | Parity (Pass 2) |
 | Event-driven triggers | Interval checks; no webhook/folder documented | Webhooks, watched folder, meeting proximity | Ahead |
 | Quiet hours / held pushes | Not documented | Quiet hours, held "While you were away" | Ahead |
 
@@ -70,26 +66,26 @@ piece is missing; **Missing** = no equivalent; **N/A** = different product bound
 | Capability | Claude Duet | Hermes Duet | Status |
 |---|---|---|---|
 | Make tab for finished work | Yes | Yes | Parity |
-| Editable result files | Yes ("files you can review and edit") | Viewer is read-only; agent must rebuild | Missing |
-| Source citation for numbers/summaries | Yes, names the email/file/sheet | No structured source field | Missing |
+| Editable result files | Yes ("files you can review and edit") | `POST /api/files/:id/versions`; Viewer edit mode for Markdown/text/CSV/JSON and HTML source with sandbox preview (`1415823`) | Parity (Pass 2) |
+| Source citation for numbers/summaries | Yes, names the email/file/sheet | `server/sources.ts` validates real ids & URLs across brief entries, watching, cards, task results (`5a072f6`) | Parity (Pass 1) |
 | Standing artifacts rebuilt on schedule | Implied via routines | Standing pages, compare slider, brief change line | Ahead |
 | Interactive deliverables | Not documented | `window.Duet` bridge to actions/approvals | Ahead |
-| Search your past chats | Yes, Duet + Claude chats outside projects | FTS over Duet items, tasks, files, pages | Partial — own history only; card subfields not indexed |
-| Memory visible/resettable in app | Yes | "What I can see" is read-only; no reset | Partial |
-| Skills/connectors from day one | Yes, inherited from Claude account | Hermes skills/MCP are shown; no install UI | Partial |
+| Search your past chats | Yes, Duet + Claude chats outside projects | FTS schema v3 (`searchText`) across all items, card subfields, sources, tasks, files, pages (`6606434`) | Partial — Duet history fully indexed; external Hermes chats outside Duet not searched |
+| Memory visible/resettable in app | Yes | `GET/PUT/DELETE /api/memory` + Settings > Memory sheet with 32 KB cap (`6606434`) | Parity (Pass 2) |
+| Skills/connectors from day one | Yes, inherited from Claude account | Connectors sheet + `GET /api/suggestions` + `Channel.repo`; no install/OAuth marketplace (`d01374c`) | Partial (Pass 2) |
 
 ### Trust and safety
 
 | Capability | Claude Duet | Hermes Duet | Status |
 |---|---|---|---|
-| Approval before send/pay/sign/delete | Yes | Designed in; prompt-enforced | Partial — see §4.2 |
-| Approval shows action, destination, content, every recipient | Yes | Free-form title/summary plus optional draft | Partial |
-| Independent check that action matches intent | Yes, classifier outside the model | None | Missing |
-| Sensitive-information classifier on outbound messages | Yes, with "never share" and "needs consent" tiers | None | Missing |
-| Blocked actions even with approval | Securities, bank transfers, other people's accounts | No policy engine | Missing |
-| "Don't ask again" with hard exceptions | Yes for some actions; never for money/send/delete/create-account | Every action gets a new card | Missing |
+| Approval before send/pay/sign/delete | Yes | Prompt-enforced `request_approval` backed by hard policy blocks and deterministic outbound scan | Partial — execution still runs through Hermes unless via connector |
+| Approval shows action, destination, content, every recipient | Yes | Structured `action`, `destination`, `recipients`, `content`, `url` pinned on card & resume prompt (`d346b2a`) | Parity (Pass 1) |
+| Independent check that action matches intent | Yes, classifier outside the model | Deterministic field/destination/recipient validation and payment merchant-host matching; no LLM classifier | Partial (Pass 1) |
+| Sensitive-information classifier on outbound messages | Yes, with "never share" and "needs consent" tiers | `server/safety.ts`: PAN/SSN/IBAN/PEM/API keys (`never_share` vs `needs_consent`) on approvals and `notify` (`d346b2a`) | Parity (Pass 1) |
+| Blocked actions even with approval | Securities, bank transfers, other people's accounts | `HARD_BLOCKS` in `server/safety.ts` + `GET /api/policy` + Settings > Always refused (`d346b2a`) | Parity (Pass 1) |
+| "Don't ask again" with hard exceptions | Yes for some actions; never for money/send/delete/create-account | Every sensitive action gets a new card | Missing |
 | Credentials never reach the model or agent machine | Yes, encrypted single-use path / proxy | Vault CLI returns credentials to the Duet server; agent shares the machine and shell | Partial |
-| Browser isolated from agent and user data | Dedicated cloud VM; fixed command surface | Local Chrome, separate profile, full CDP available to the agent | Partial |
+| Browser isolated from agent and user data | Dedicated cloud VM; fixed command surface | Local/container Chrome, separate profile, CDP bound to container/host | Partial |
 | Agent identifies itself to websites | Distinct User-Agent and published IPs | Normal Chrome | Missing |
 | Pairing / loopback / sandboxed deliverables | Account auth + cloud isolation | Pairing cookie, loopback internal API, sandbox CSP | Ahead for a local install |
 
@@ -99,7 +95,7 @@ piece is missing; **Missing** = no equivalent; **N/A** = different product bound
 |---|---|---|---|
 | Itemized approval with hard cap | Yes | Yes, items must add up; `DUET_MAX_TRANSACTION_LIMIT` | Ahead |
 | Single-use card | Yes | Privacy / Stripe Issuing / Revolut / generic | Parity |
-| Card scoped to **merchant and amount** | Yes | Amount cap only; card is typed into whatever tab is active | Partial — see §4.2 |
+| Card scoped to **merchant and amount** | Yes | `merchant_url` → derived host checked via `sameLoginSite` & active element before `browser.fillCard` (`71f25c7`) | Parity (Pass 1) — host-checked at fill time; provider lock if supported |
 | Wallet app approves the spend | Link / Shop Pay | No wallet approval; approval is the card | Partial |
 | Recurring payments | Link cannot | Provider-dependent | N/A |
 
@@ -107,7 +103,7 @@ piece is missing; **Missing** = no equivalent; **N/A** = different product bound
 
 | Capability | Claude Duet | Hermes Duet | Status |
 |---|---|---|---|
-| Works while phone/laptop is off | Cloud VM | Mac must be awake (Docker/Linux supported) | Missing (structural) |
+| Works while phone/laptop is off | Cloud VM | Always-on Linux host / Docker documented (`docs/DEPLOY.md`, `0774238`); local host must stay awake | Partial (Pass 2) |
 | Live browser viewing/takeover | Explicitly not available | Yes, CDP stream + trusted input | Ahead |
 | Access to local files and apps | No | Yes | Ahead |
 | Model choice | No; Opus 5.5 only | `DUET_HERMES_MODEL` | Ahead |
@@ -122,245 +118,133 @@ piece is missing; **Missing** = no equivalent; **N/A** = different product bound
 ## 3. What Hermes Duet already does better
 
 - **Local machine, not a cloud sandbox.** It can read the user's files, run their CLIs, and use their native
-  Calendar/Reminders/Mail bridges. Claude Duet explicitly cannot see local files or run local apps.
+  Calendar/Reminders/Mail bridges on macOS. Claude Duet explicitly cannot see local files or run local apps.
 - **Live browser.** The globe pane lets the user clear a login or CAPTCHA the agent is stuck on. Claude Duet cannot
   show or hand over its browser.
 - **Event-driven, not only interval-driven.** Webhooks, watched folder and meeting proximity are real triggers, not
   just "check every few hours".
 - **Approval drafts are editable on the card.** Claude Duet shows content for approval, but Hermes Duet lets the user
   fix a typo and sends their exact text.
-- **Search includes deliverables.** Tasks, files and standing pages are in the same FTS index; Claude Duet's search
-  is chat-focused.
+- **Search includes deliverables.** Tasks, files, cards and standing pages are in the same FTS v3 index; Claude Duet's
+  search is chat-focused.
 - **Standing pages with a visual diff.** A rebuilt page can be compared against yesterday's version.
-- **Deliberate quietness.** Quiet hours, held pushes, "While you were away", and no push while the app is visible are
-  more developed than the public Duet documentation shows.
+- **Deliberate quietness.** Quiet hours, held pushes, "While you were away", per-category/channel notification
+  preferences, and no push while the app is visible.
 - **No model lock-in and no waitlist.** A local install can use any Hermes model/profile.
 
 Do not copy the parts that are cloud-only tradeoffs: model lock-in, no local files, no browser visibility.
 
 ---
 
-## 4. Missing or materially partial features, in priority order
+## 4. Implementation status and remaining gaps
 
-### 4.1 Security: the approval gate is still model-mediated
+### 4.1 Security: structured approvals, outbound scan, and policy engine (Shipped in Pass 1)
 
-**Duet:** a separate classifier runs outside the model to judge whether the action matches the request, and a
-separate classifier checks outgoing content for sensitive information. Credentials and the browser live outside the
-agent's machine.
+**Shipped (`d346b2a`, `7fe8e8b`):**
+- Structured `action`, `destination`, `recipients[]`, `content`, and `url` fields on `request_approval`, rendered
+  distinctly on approval cards and pinned into the resume prompt (`server/approval.ts`, `server/tools.ts`, `CardView.tsx`).
+- Deterministic outbound secret scanner (`server/safety.ts`) checking `never_share` (Luhn card numbers, SSNs, PEM
+  keys, AWS/GitHub/API tokens) and `needs_consent` (IBANs) across approvals and `notify`.
+- Five hard-blocked categories (`HARD_BLOCKS`: bank/wire, securities/crypto, other people's accounts, password/2FA
+  changes, account creation) exposed at `GET /api/policy` and shown in Settings > Always refused.
 
-**Hermes Duet:** `request_approval` is a tool the model is told to call. The card shows a title/summary and an
-optional draft, but there is no independent check, no structured destination/recipient, no sensitive-data scan, and
-no policy that refuses categories such as bank transfers or securities. The README already says approvals are an
-instruction, not a sandbox; this is the largest trust gap versus Duet.
+**Remaining:**
+- Separate out-of-model LLM intent classifier (beyond deterministic validation and merchant host matching).
+- `"Don't ask again"` trust tier with hard exceptions for money/send/delete/account creation.
+- Duet-side execution path for common connectors (vs prompt-governed execution on the agent host).
 
-Concrete, tractable pieces:
+### 4.2 Payments: merchant host binding (Shipped in Pass 1)
 
-1. **Structured approval fields.** Add `action` (`send_email`, `send_message`, `post`, `delete`, `sign`, `pay`),
-   `destination`, `recipients[]`, `content`, `url` to `request_approval`. Render them as distinct fields on the card,
-   not buried in Markdown; require recipients for send actions.
-2. **Outbound scan before approval.** Scan `draft`, `content`, `summary` and `notify` bodies for card numbers, bank
-   numbers, government IDs, private keys, and configured secret patterns. Refuse to approve a "never share" match and
-   require a fresh card after redaction. A model-based classifier can be optional; the deterministic scan is the
-   floor.
-3. **Action-intent check.** For payments, compare the requested merchant/amount/URL with the card and the active
-   browser host. For sends, require the destination and recipients to be present and unchanged at approval time.
-4. **Policy engine.** A small deny/allow list per tool and per run kind, with hard blocks for money movement,
-   securities, account access, and destructive actions. Surface it in Settings so the user can see what is always
-   refused.
-5. **Don't rely on the prompt alone.** Recommend/enable Hermes `approvals.mode` for hard enforcement; its prompts
-   already map to Duet cards. Consider a Duet-side "execute approved action" path for common connectors so the action,
-   not just the card, is controlled by Duet.
+**Shipped (`71f25c7`):**
+- `request_payment` requires an absolute `http(s)` `merchant_url`, derives and stores `merchant_host`, and displays it
+  on the payment card (`server/payments.ts`, `CardView.tsx`).
+- `browser.fillCard(card, expectedHost)` re-checks `currentHost()` / origin and active element right before typing via
+  `sameLoginSite`, refusing mismatches and hostless legacy cards (`server/browser.ts`).
 
-Files: `server/tools.ts` (schema), `server/approval.ts` (validation/prompt), `server/runner.ts` (tool dispatch),
-`web/src/components/CardView.tsx`, `README.md`.
+**Remaining:** Optional provider-side merchant lock controls and wallet approval parity (Link / Shop Pay).
 
-### 4.2 Payments: the card is not bound to the merchant or the page
+### 4.3 Channel and task model (Shipped in Pass 1)
 
-**Duet:** one-time card scoped to the merchant and amount; the user approves the spend in Link/Shop Pay; the real
-card number is never shared.
+**Shipped (`0b148bc`, `502f270`):**
+- `channels.group` and `channels.instructions` (2,000 chars injected before `topic` with a safety-override clause),
+  grouped strip/sheet, and unread `last_at > seen_at` indicator cleared on open.
+- Dedicated `TaskSheet` with steps, result, sources, delivered files, and a live steering composer
+  (`POST /api/tasks/:id/message` → `steerTask`).
+- `Task.agent_done_at` vs user `confirmed_at` (`POST /api/tasks/:id/confirm` and `/reopen`).
 
-**Hermes Duet:** `request_payment` validates the receipt total and cap, and `browser.fillCard()` types the issued
-card into whichever tab is active. There is no merchant URL/host on the card and no host check before filling. A
-prompt-injected agent could navigate the live browser to another site and have the approved card number typed there.
-The card is single-use and time-limited, but this is still a direct theft path.
+**Remaining:** Automatic triage routing from the General channel into topic channels (`assign_channel`), and longer
+task history pagination beyond the 60-task / 7-day window.
 
-Tractable fix:
+### 4.4 Source citations (Shipped in Pass 1)
 
-- Add `merchant_url` (or `merchant_host`) to `request_payment`; show the host on the payment card.
-- Pass the expected host into `browser.fillCard`; re-read `currentHost()` immediately before typing and refuse unless
-  it matches the merchant host (reuse the `sameLoginSite` rule or an exact/suffix rule). This mirrors the existing
-  `fillLogin` protection.
-- If the provider supports a merchant lock (Privacy/Stripe controls, depending on plan), set it; otherwise treat the
-  host check as mandatory.
-- Persist the merchant host and fill result on the card, never the number.
+**Shipped (`5a072f6`, `7fe8e8b`):**
+- `server/sources.ts` validates real `item`/`task`/`file`/`page` ids and `http(s)` URLs across brief entries,
+  watching lines, cards, handover cards, and task results; clickable source chips open files/pages or link out.
 
-Files: `server/payments.ts`, `server/browser.ts`, `server/runner.ts`, `web/src/components/CardView.tsx`,
-`server/tools.ts`.
+### 4.5 User-defined recurring routines (Shipped in Pass 2)
 
-### 4.3 Channel and task model is thinner than Duet's
+**Shipped (`986ad86`):**
+- `routines` table, DST-aware daily/weekly/interval scheduler (`server/routines.ts`, `server/scheduler.ts`),
+  `save_routine` / `remove_routine` tools, run-now/pause/resume endpoints, and the Settings > Routines sheet.
 
-**Duet:** channels can be grouped, each channel has its own standing instructions, and the "Everything" channel can
-sort work into the right channel. Tasks have their own page and can be steered mid-run; only the user marks a task
-complete.
+### 4.6 Notification preferences (Shipped in Pass 2)
 
-**Hermes Duet:** channels have a name/topic/session only. A task inherits its starting channel. Tasks are rows in a
-tab; there is no task page, no user "complete" action, and no way to send a message *to a running task* even though
-the runner already supports Hermes steering for chat.
+**Shipped (`d68aefd`):**
+- `server/notify-prefs.ts` filtering by task push mode (all/failures/off), `agent_notify` toggle, per-channel mute,
+  and soft daily push cap in Settings (while keeping approvals, questions, and payments exempt).
 
-Concrete pieces:
+**Remaining:** Outbound-thread follow-up tracking for conversations that go quiet.
 
-- `groups` table (or `group` string on `channels`) and a grouped channel strip/sheet.
-- `channels.instructions` field, edited in the channel sheet, injected into `persona()`/`channelLine()` before the
-  topic line.
-- `POST /api/tasks/:id/message` → `runner.steerTask()`; `hermes.steer` on the task lane, with the same
-  `pending_steer` replay as chat. Add a task detail sheet with progress, steps, files and an input.
-- `POST /api/tasks/:id/complete` and `Task.confirmed_at`; the agent's `done` remains "looks done", the user's tap is
-  the real completion. Show that distinction in Tasks.
-- Optional: an `assign_channel` tool (or a routing instruction in the general persona) so general-channel work can be
-  filed into a topic channel.
+### 4.7 Editable deliverables (Shipped in Pass 2)
 
-Files: `server/schema.ts`, `server/db.ts`, `server/channels.ts`, `server/prompts.ts`, `server/runner.ts`,
-`server/index.ts`, `shared/types.ts`, `web/src/components/Channels.tsx`, `web/src/components/TasksView.tsx`,
-`web/src/api.ts`.
+**Shipped (`1415823`):**
+- `POST /api/files/:id/versions` (`server/fileversions.ts`) saves edited text as a new `version_of` entry while leaving
+  the original intact for Version Compare; `Viewer` edits Markdown/text/CSV/JSON and HTML source with a sandboxed preview.
 
-### 4.4 Source citations
+### 4.8 Search and memory (Shipped in Pass 2)
 
-**Duet:** "When it gives you a number or a summary, it tells you which email, file, or spreadsheet it came from."
-This is a trust feature, not decoration.
+**Shipped (`6606434`):**
+- FTS schema v3 (`server/search.ts`, `server/schema.ts`) via `searchText(item)` indexes card entries, drafts, watching,
+  follow-ups, checklist items, metrics, line items, approval recipients/content, and source quotes.
+- Memory API (`GET/PUT/DELETE /api/memory`, `server/memory.ts`) and Settings > Memory sheet edit or clear
+  `config.contextFile` with a 32 KB cap.
 
-**Hermes Duet:** brief entries and cards have title/detail/draft, but no structured source. The model can mention a
-source in prose, and nothing validates or links it.
+**Remaining:** Search across external Hermes conversations outside Duet (if/when exposed by Hermes).
 
-Add `sources` to `BriefEntry`, `CardData` and task results: `{ kind: 'item'|'file'|'page'|'url'|'connector', id?,
-url?, label, quote? }`. Render them as links/chips; validate that item/file/page ids exist; teach the prompt to cite
-a source for every number or claim. This also makes the existing FTS and Make tab more useful.
+### 4.9 Always-on availability and multiple machines (Docs shipped in Pass 2)
 
-Files: `shared/types.ts`, `server/brief.ts`, `server/tools.ts`, `server/prompts.ts`,
-`web/src/components/CardView.tsx`, `web/src/styles.css`.
+**Shipped (`0774238`):**
+- [`docs/DEPLOY.md`](DEPLOY.md) and [`docker-compose.example.yml`](../docker-compose.example.yml) cover Linux mini-PC/VPS
+  systemd deployment, Tailscale, backups, Docker isolation (Chromium/CDP inside the container), and explicit host limits.
 
-### 4.5 User-defined recurring routines
+**Remaining:** Multi-gateway / multi-agent switching (`DUET_HERMES_URL` per profile) and computer/session selection.
 
-**Duet:** routines/scheduled tasks are a core part of the proactive loop; users create them in plain language.
+### 4.10 Connectors and channel repo binding (Read-only shipped in Pass 2)
 
-**Hermes Duet:** the scheduler has fixed slots: one brief, check-ins, page refreshes, meeting proximity, folder and
-webhook triggers. There is no user-created "every Monday 9am, summarize last week's messages" routine, and no UI to
-pause/resume/run one.
+**Shipped (`d01374c`):**
+- `Channel.repo` validation and normalization (`owner/name` or GitHub URL) injected into the channel prompt.
+- Read-only `GET /api/suggestions` and Connectors sheet showing connected tools and suggested next steps.
 
-Add a `routines` table: `id, title, prompt, channel_id, schedule (cron or interval), enabled, last_run, last_result,
-next_run`. Reuse `startTask`/`submitSystem` with a run kind `routine`; add a Settings/Tasks section to create, pause,
-resume, run now and delete. Reuse the quiet-hours and budget rules. This is one of the highest-leverage parity gaps:
-it turns the fixed morning/check-in loop into the user's own loop.
+**Remaining:** Connector OAuth/install marketplace (intentionally omitted; read-only by design) and per-channel allowed-tool scopes.
 
-Files: `server/schema.ts`, `server/db.ts`, `server/scheduler.ts`, `server/runner.ts`, `server/tools.ts`,
-`web/src/components/SettingsSheet.tsx` or a new Routines view.
+### 4.11 Native/mobile polish (Open)
 
-### 4.6 Notification preferences
-
-**Duet:** users can say what they want to hear about and how often.
-
-**Hermes Duet:** switches are global: brief on/off/time, check-ins off/3×/hourly, quiet hours. There is no per-category
-or per-channel preference, and no "only tell me about X" control.
-
-Extend `Settings` with categories and cadence: approvals (always? quiet-hours exception), task done/failed, agent
-`notify`, brief, check-ins; per-channel mute; maybe a maximum pushes/day. Apply the filter in `notify()` and in the
-brief/check-in prompts. Keep a visible "held" behavior so a muted category is not silently lost.
-
-Files: `shared/types.ts`, `server/db.ts`, `server/push.ts`, `server/runner.ts`, `web/src/components/SettingsSheet.tsx`.
-
-### 4.7 Editable deliverables
-
-**Duet:** files come back "for you to review and edit".
-
-**Hermes Duet:** `Viewer` renders Markdown/text/HTML/PDF but is read-only; a change means asking the agent to rebuild.
-The HTML bridge can send actions, but not edit the document.
-
-Add an edit mode for `text/*`, Markdown and CSV: textarea/table edit, save as a new version through
-`POST /api/files/:id/versions` (or `PUT /api/files/:id`), with the same filename and `page_id` behavior. For HTML,
-keep the sandbox and add a source editor rather than a WYSIWYG. This is a product gap more than a technical one.
-
-Files: `web/src/components/Viewer.tsx`, `server/index.ts`, `server/runner.ts`/`server/db.ts` (version write),
-`web/src/api.ts`.
-
-### 4.8 Search and memory
-
-**Duet:** searches past Duet chats and regular Claude chats outside projects; memory can be reviewed/reset.
-
-**Hermes Duet:** FTS covers items, tasks, files and pages, but:
-- Card `entries`, `draft`, `watching`, `follow_ups` and payment line items are not in the FTS row (the trigger indexes
-  only `card.title` and `card.body`), so a decision or a draft is not searchable.
-- There is no memory browser/reset; `context.local.md` is the only editable memory surface.
-- No search over the Hermes agent's own conversation history outside Duet (if that is even exposed).
-
-Index card subfields in `items_fts_*` (or in a small card-detail table) and add a `sources`/`memory` view. If Hermes
-exposes a memory/search API, wire it; if not, at least make the local FTS complete and let the user edit
-`context.local.md` from Settings.
-
-Files: `server/schema.ts`, `server/search.ts`, `server/db.ts`, `web/src/components/SettingsSheet.tsx`.
-
-### 4.9 Always-on availability and multiple machines
-
-**Duet:** runs in the cloud while the phone and laptop are off.
-
-**Hermes Duet:** the Mac must be awake; the README says so. Docker/Linux is supported, but the native connectors are
-macOS-only, and there is one Hermes gateway per install.
-
-This is structural. Options:
-- Document an always-on Linux mini-PC/NAS/VPS deployment with Tailscale, and move the browser into the container
-  (the Dockerfile already bundles Chromium) so it is isolated from the host.
-- Support multiple Hermes gateways/profiles as selectable "agents" (e.g. `DUET_HERMES_URL` per profile) and a
-  health/latency indicator per agent.
-- Wake-on-LAN is not a substitute for a true always-on host; be explicit about that in the README.
-
-Files: docs/deploy, `server/config.ts`, `server/hermes.ts`, possibly a `servers` table.
-
-### 4.10 Connectors, plugins and channel repo binding
-
-**Duet:** inherits 6,000+ connectors/plugins from the Claude account, can suggest plugins, and can attach a GitHub
-repo to a channel.
-
-**Hermes Duet:** connectors are the local AppleScript bridges plus MCP servers configured in Hermes; Settings shows
-status and test, but there is no discovery, install, suggestion, OAuth flow, or channel-level repo binding. The agent
-can use whatever MCP tools Hermes has, which is powerful but invisible to the app.
-
-Start with:
-- A read-only "what is connected" list from Hermes `toolsets` + `mcp_servers` (already partly in
-  `capabilities.ts`), with a "suggested next connector" section.
-- A safe install/update guide rather than an in-app OAuth marketplace.
-- A `channels.repo` field and a GitHub connector wrapper, so a channel can carry its own repo.
-- Per-channel allowed-tool scopes, which also helps the trust boundary in §4.1.
-
-Files: `server/capabilities.ts`, `server/connectors.ts`, `server/channels.ts`, `web/src/components/SettingsSheet.tsx`.
-
-### 4.11 Native/mobile polish
-
-Duet is a native iOS/Android app; Hermes Duet is an installable PWA. The PWA is a deliberate advantage for
-self-hosting, but the gap shows in:
-- Push reliability and background execution on iOS.
-- iPad side-by-side (reported in Duet).
-- Voice/speed settings (TTS is env-only today).
-- Swipeable task cards / a dedicated task page.
-
-These are lower priority than the trust and task gaps, but a native wrapper (Capacitor/React Native shell) or better
-PWA ergonomics would close the perceived gap. Do not add a native app until the web surface is stable.
+Deliberately deferred until the web/PWA surface stabilizes:
+- Native iOS/Android shell (push reliability and background constraints on iOS).
+- iPad side-by-side multi-column shell.
+- In-app TTS voice/speed controls (currently env-configured).
 
 ---
 
-## 5. Recommended sequence
+## 5. Remaining roadmap
 
-1. **Payment host binding** (§4.2) — small, concrete, closes a real theft path.
-2. **Structured approvals + outbound secret scan + policy deny list** (§4.1) — the largest trust gap.
-3. **Task page, task steering, user completion** (§4.3) — the most visible daily-use gap.
-4. **Channel instructions + groups + unread state** (§4.3) — closes the conversation-model gap and uses the already
-   stored `seen_at` field.
-5. **Source citations** (§4.4) — high trust value, moderate effort.
-6. **Routines + notification preferences** (§4.5–4.6) — makes proactivity user-controlled rather than fixed.
-7. **Editable deliverables + complete FTS** (§4.7–4.8).
-8. **Always-on deployment and multi-agent support** (§4.9) — product/docs, not a quick code change.
-9. **Connector discovery / channel repo binding** (§4.10).
-10. **Native/mobile polish** (§4.11).
+Core Passes 1 and 2 closed §§4.1–4.8 and the read-only/docs pieces of §§4.9–4.10. Remaining work:
 
-Do not copy Duet's model lock-in or cloud-only limitations. Do copy the *shape* of its trust model: structured
-approval data, an out-of-model check, and a visible source for every claim.
+1. **Small behavioral gaps:** automatic channel routing from General, outbound-thread follow-up tracking, and
+   `"Don't ask again"` exceptions for low-risk actions (§§4.3, 4.6, 4.1).
+2. **Multi-gateway / multi-agent support** (§4.9) — selectable `DUET_HERMES_URL` profiles and per-agent health.
+3. **Per-channel tool scopes** (§4.10) — narrowing allowed tools per channel.
+4. **Native/mobile polish** (§4.11) — in-app voice/speed UI, iPad layout ergonomics, and optional native shell.
 
 ---
 

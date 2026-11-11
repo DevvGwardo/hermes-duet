@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 
 const BP = resolve(process.env.BP_OUT ?? fileURLToPath(new URL("../../blueprint-out", import.meta.url)));
 const APP_URL = process.env.APP_URL ?? "http://127.0.0.1:7466/";
-const DEMO_DIR = process.env.DEMO_DIR ?? join(os.tmpdir() + "/hermes-duet-demo");
+const DEMO_DIR = process.env.DEMO_DIR ?? join(os.tmpdir(), "hermes-duet-demo");
 const INTERNAL_PORT = process.env.DUET_INTERNAL_PORT ?? "7467";
 for (const d of ["ui", "render", "mp4", "data"]) fs.mkdirSync(`${BP}/${d}`, { recursive: true });
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Hermes Duet CLI: pair a device, check status, nudge the agent, manage the background service (macOS launchd).
+# Hermes Duet CLI: pair a device, check status, nudge the agent, manage the background service (launchd / systemd).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
@@ -31,12 +31,19 @@ DATA="${DUET_DATA_DIR:-$ROOT/data}"
 PORT="${DUET_INTERNAL_PORT:-7457}"
 LABEL="${DUET_LAUNCHD_LABEL:-dev.hermes-duet.server}"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
-LOGDIR="${DUET_LOG_DIR:-$HOME/Library/Logs/hermes-duet}"
+is_linux() { [ "$(uname -s)" = "Linux" ]; }
+is_macos() { [ "$(uname -s)" = "Darwin" ]; }
+is_container() { [ -f /.dockerenv ] || [ -f /run/.containerenv ] || grep -qaE 'docker|containerd|kubepods|lxc' /proc/1/cgroup 2>/dev/null; }
+if is_linux; then
+  DEFAULT_LOGDIR="${XDG_STATE_HOME:-$HOME/.local/state}/hermes-duet"
+else
+  DEFAULT_LOGDIR="$HOME/Library/Logs/hermes-duet"
+fi
+LOGDIR="${DUET_LOG_DIR:-$DEFAULT_LOGDIR}"
 # Linux headless (Ubuntu/Debian homelab, a VPS) runs the same server under a user unit instead of launchd.
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 UNIT="$UNIT_DIR/hermes-duet.service"
 
-is_linux() { [ "$(uname -s)" = "Linux" ]; }
 has_unit() { is_linux && [ -f "$UNIT" ]; }
 
 internal() { # method path [json]
@@ -49,7 +56,7 @@ case "${1:-help}" in
   pair)
     out="$(internal POST /internal/pair)"
     code="$(printf '%s' "$out" | sed -E 's/.*"code":"([^"]+)".*/\1/')"
-    url="$(grep -E '^DUET_PUBLIC_URL=' "$ROOT/.env" 2>/dev/null | cut -d= -f2- || true)"
+    url="${DUET_PUBLIC_URL:-}"
     echo
     echo "  Pairing code:  $code   (valid 10 minutes, single use)"
     [ -n "$url" ] && echo "  Open:          $url" && command -v qrencode >/dev/null && qrencode -t ansiutf8 "$url"
@@ -73,9 +80,21 @@ case "${1:-help}" in
     internal POST "/internal/devices/$1/revoke" >/dev/null && echo "Unpaired $1. That device has to pair again to reconnect."
     ;;
   doctor)
-    if has_unit; then
+    if is_container; then
+      echo "  · background service: container (managed externally)"
+    elif has_unit; then
       if systemctl --user is-active --quiet hermes-duet.service; then echo "  ✓ background service (hermes-duet.service)"; else echo "  ✗ background service: run hermes-duet install-systemd"; fi
-    elif launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1; then echo "  ✓ background service ($LABEL)"; else echo "  ✗ background service: run hermes-duet install"; fi
+    elif is_linux; then
+      if command -v systemctl >/dev/null 2>&1; then
+        echo "  · background service: no systemd user unit (run hermes-duet install-systemd if desired)"
+      else
+        echo "  · background service: Linux (no systemd user unit)"
+      fi
+    elif is_macos; then
+      if launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1; then echo "  ✓ background service ($LABEL)"; else echo "  ✗ background service: run hermes-duet install"; fi
+    else
+      echo "  · background service: $(uname -s) (managed externally)"
+    fi
     out="$(internal GET /internal/doctor)" || exit 1
     printf '%s' "$out" | bun -e 'const d = JSON.parse(await Bun.stdin.text()); for (const c of d.checks) console.log(`  ${c.ok ? "✓" : c.info ? "·" : "✗"} ${c.name}: ${c.detail}`)'
     if command -v tailscale >/dev/null && tailscale serve status 2>/dev/null | grep -q "127.0.0.1:${DUET_PORT:-7456}"; then echo "  ✓ tailscale serve forwards to :${DUET_PORT:-7456}"; else echo "  · tailscale serve not pointing at :${DUET_PORT:-7456} (only needed for phone access)"; fi
@@ -121,7 +140,8 @@ WorkingDirectory=$ROOT
 ExecStart=$BUN $ROOT/server/index.ts
 Restart=always
 RestartSec=3
-Environment=PATH=$AGENT_PATH
+Environment="PATH=$AGENT_PATH"
+Environment="DUET_LOG_DIR=$LOGDIR"
 StandardOutput=append:$LOGDIR/server.log
 StandardError=append:$LOGDIR/server.log
 

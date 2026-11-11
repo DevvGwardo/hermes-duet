@@ -34,9 +34,17 @@ RUN apt-get update \
 RUN useradd --create-home --uid 10001 duet
 
 WORKDIR /app
-COPY --from=build /app /app
-RUN mkdir -p /data && chown -R duet:duet /data /app
+COPY --from=build /app/package.json ./
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/server ./server
+COPY --from=build /app/shared ./shared
+COPY --from=build /app/web/dist ./web/dist
+COPY --from=build /app/bin ./bin
+RUN mkdir -p /data && chmod +x /app/bin/hermes-duet && chown -R duet:duet /data /app
 
+# If Chromium cannot initialize its user-namespace sandbox inside your container runtime,
+# set DUET_CHROME_NO_SANDBOX=1 (or pass --cap-add=SYS_ADMIN). Use DUET_HERMES_URL=http://host.docker.internal:8642
+# to reach a Hermes gateway running on the Docker host.
 ENV NODE_ENV=production \
     DUET_HOST=0.0.0.0 \
     DUET_PORT=7456 \

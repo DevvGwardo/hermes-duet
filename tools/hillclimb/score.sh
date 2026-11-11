@@ -6,8 +6,38 @@ set -u
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 OUT="$(mktemp)"
 trap 'rm -f "$OUT"' EXIT
+
+run_with_timeout() {
+  local secs="$1"
+  shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$secs" "$@"
+    return $?
+  elif command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$secs" "$@"
+    return $?
+  fi
+  "$@" &
+  local pid=$!
+  (
+    sleep "$secs" &
+    local sp=$!
+    trap 'kill "$sp" 2>/dev/null || true; exit 0' TERM INT
+    wait "$sp" 2>/dev/null || exit 0
+    kill -TERM "$pid" 2>/dev/null || true
+    sleep 2
+    kill -KILL "$pid" 2>/dev/null || true
+  ) >/dev/null 2>&1 &
+  local watcher=$!
+  local rc=0
+  wait "$pid" || rc=$?
+  kill "$watcher" 2>/dev/null || true
+  wait "$watcher" 2>/dev/null || true
+  return "$rc"
+}
+
 # 1) bun test with timeout
-if ! timeout 120 bun test >"$OUT" 2>&1; then
+if ! run_with_timeout 120 bun test >"$OUT" 2>&1; then
   cat "$OUT"
   PASS="$(sed -n 's/^ *\([0-9][0-9]*\) pass.*/\1/p' "$OUT" | tail -n 1)"
   echo "SCORE=${PASS:-0}"
@@ -25,7 +55,7 @@ if [ "$FAIL" != "0" ]; then
   exit 1
 fi
 # 2) typecheck gate with timeout
-if ! timeout 120 bun run typecheck >"$OUT" 2>&1; then
+if ! run_with_timeout 120 bun run typecheck >"$OUT" 2>&1; then
   cat "$OUT"
   echo "SCORE=$PASS"
   echo "PASS=$PASS FAIL=$FAIL"
