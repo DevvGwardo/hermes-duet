@@ -15,7 +15,7 @@ const SpeechRecognition: any = (window as any).SpeechRecognition || (window as a
 /** Long enough for a walk-and-talk memo, short enough that a forgotten recording doesn't fill the disk. */
 const MAX_RECORD_SECONDS = 180;
 
-export const Composer = forwardRef<ComposerHandle, { onSent?: () => void }>(function Composer({ onSent }, ref) {
+export const Composer = forwardRef<ComposerHandle, { onSent?: () => void; hidden?: boolean }>(function Composer({ onSent, hidden = false }, ref) {
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [listening, setListening] = useState(false);
@@ -33,6 +33,10 @@ export const Composer = forwardRef<ComposerHandle, { onSent?: () => void }>(func
   const base = useRef('');
   const camera = useRef<HTMLInputElement>(null);
   const library = useRef<HTMLInputElement>(null);
+  const filesLenRef = useRef(0);
+  filesLenRef.current = files.length;
+  const uploadingRef = useRef(0);
+  const stoppingRef = useRef(false);
   const recorder = useAudioRecorder();
 
   useImperativeHandle(ref, () => ({
@@ -49,11 +53,22 @@ export const Composer = forwardRef<ComposerHandle, { onSent?: () => void }>(func
   }));
 
   useEffect(() => {
+    if (hidden) return;
     const el = ta.current;
     if (!el) return;
     el.style.height = 'auto';
     el.style.height = `${Math.min(el.scrollHeight, 180)}px`;
-  }, [text]);
+  }, [text, hidden]);
+
+  useEffect(
+    () => () => {
+      try {
+        rec.current?.abort?.() ?? rec.current?.stop?.();
+      } catch {}
+      rec.current = null;
+    },
+    [],
+  );
 
   // A recording left running would hold the microphone and the battery; cap it and use what was captured.
   useEffect(() => {
@@ -68,49 +83,66 @@ export const Composer = forwardRef<ComposerHandle, { onSent?: () => void }>(func
 
   async function uploadFiles(list: FileList | null) {
     if (!list?.length) return;
-    const picked = Array.from(list).slice(0, 6 - files.length);
+    const slots = Math.max(0, 6 - filesLenRef.current - uploadingRef.current);
+    const picked = Array.from(list).slice(0, slots);
     if (!picked.length) {
       noteError('Up to six files per message.');
       return;
     }
-    setErr(null);
+    if (list.length > slots) noteError('Up to six files per message.');
+    else setErr(null);
+    uploadingRef.current += picked.length;
     setUploading((n) => n + picked.length);
     for (const file of picked) {
       try {
         const { attachment } = await api.upload(file);
+        filesLenRef.current += 1;
         setFiles((f) => [...f, attachment]);
       } catch (e: any) {
         noteError(e?.message ?? `Could not upload ${file.name || 'that file'}.`);
       } finally {
-        setUploading((n) => n - 1);
+        uploadingRef.current = Math.max(0, uploadingRef.current - 1);
+        setUploading((n) => Math.max(0, n - 1));
       }
     }
   }
 
   async function finishRecording() {
-    const blob = await recorder.stop();
-    if (!blob) return;
-    setTranscribing(true);
-    setErr(null);
+    if (stoppingRef.current) return;
+    stoppingRef.current = true;
     try {
-      const { text: heard, attachment } = await api.transcribe(blob);
-      setFiles((f) => [...f, attachment]);
-      const said = heard.trim();
-      if (!said) {
-        noteError("I couldn't make out any words. The memo is attached so you can replay it.");
-        return;
+      const blob = await recorder.stop();
+      if (!blob) return;
+      setTranscribing(true);
+      setErr(null);
+      try {
+        const { text: heard, attachment, error } = await api.transcribe(blob);
+        filesLenRef.current += 1;
+        setFiles((f) => [...f, attachment]);
+        const said = heard.trim();
+        if (error && !said) {
+          noteError(`${error} The memo is attached so you can replay or send it.`);
+          return;
+        }
+        if (!said) {
+          noteError("I couldn't make out any words. The memo is attached so you can replay it.");
+          return;
+        }
+        if (error) noteError(error);
+        setText((t) => (t.trim() ? `${t.replace(/\s*$/, ' ')}${said}` : said));
+        requestAnimationFrame(() => ta.current?.focus());
+      } catch (e: any) {
+        noteError(e?.message ?? 'Could not transcribe that memo.');
+      } finally {
+        setTranscribing(false);
       }
-      setText((t) => (t.trim() ? `${t.replace(/\s*$/, ' ')}${said}` : said));
-      requestAnimationFrame(() => ta.current?.focus());
-    } catch (e: any) {
-      noteError(e?.message ?? 'Could not transcribe that memo.');
     } finally {
-      setTranscribing(false);
+      stoppingRef.current = false;
     }
   }
 
   async function toggleRecord() {
-    if (transcribing) return;
+    if (transcribing || stoppingRef.current) return;
     if (recorder.state === 'recording') {
       await finishRecording();
       return;
@@ -134,8 +166,14 @@ export const Composer = forwardRef<ComposerHandle, { onSent?: () => void }>(func
       for (let i = 0; i < e.results.length; i++) out += e.results[i][0].transcript;
       setText(base.current + out);
     };
-    r.onend = () => setListening(false);
-    r.onerror = () => setListening(false);
+    r.onend = () => {
+      if (rec.current === r) rec.current = null;
+      setListening(false);
+    };
+    r.onerror = () => {
+      if (rec.current === r) rec.current = null;
+      setListening(false);
+    };
     rec.current = r;
     r.start();
     setListening(true);
@@ -151,6 +189,7 @@ export const Composer = forwardRef<ComposerHandle, { onSent?: () => void }>(func
     const ids = files.map((f) => f.id);
     // Clear optimistically. Waiting for the round trip meant a message typed while the POST was in flight was wiped
     // when it finally resolved; on failure the draft goes back, but never over something newer.
+    filesLenRef.current = 0;
     setText('');
     setFiles([]);
     setBg(false);
@@ -170,7 +209,7 @@ export const Composer = forwardRef<ComposerHandle, { onSent?: () => void }>(func
   const showStop = busy && !text.trim() && !files.length;
   const canSend = (!!text.trim() || files.length > 0) && uploading === 0 && !transcribing;
   return (
-    <div className="composer-wrap">
+    <div className="composer-wrap" hidden={hidden}>
       {queued > 0 && (
         <div className="composer-hint">
           Queued {queued} message{queued > 1 ? 's' : ''}. {hermesDown ? "Hermes is offline; they go out as soon as it's back." : "I'll pick it up when this step finishes."}

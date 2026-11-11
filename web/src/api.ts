@@ -49,14 +49,24 @@ export const api = {
     form.append('file', file, file.name || 'upload');
     return fetch('/api/uploads', { method: 'POST', credentials: 'include', body: form }).then((r) => parse<{ attachment: Attachment }>(r));
   },
-  /** Transcribe a recording locally. The server keeps the audio and returns the text plus the stored attachment. */
-  transcribe: (blob: Blob) =>
-    fetch('/api/audio/transcribe', {
+  /** Transcribe a recording locally. The server keeps the audio and returns the text plus the stored attachment.
+   *  On 503 (transcription engine failed), the server still returns `{ error, attachment, text }` so the memo isn't lost. */
+  transcribe: async (blob: Blob): Promise<{ text: string; attachment: Attachment; error?: string }> => {
+    const res = await fetch('/api/audio/transcribe', {
       method: 'POST',
       credentials: 'include',
       headers: { 'content-type': blob.type || 'audio/webm' },
       body: blob,
-    }).then((r) => parse<{ text: string; attachment: Attachment }>(r)),
+    });
+    if (res.status === 503) {
+      const body = (await res.json().catch(() => null)) as { error?: string; attachment?: Attachment; text?: string } | null;
+      if (body?.attachment) {
+        return { text: body.text ?? '', attachment: body.attachment, error: body.error ?? 'Could not transcribe that memo.' };
+      }
+      throw new HttpError(503, body?.error || res.statusText || 'Transcription failed');
+    }
+    return parse<{ text: string; attachment: Attachment }>(res);
+  },
   act: (cardId: string, action: string, value?: string) =>
     call<{ item: Item }>('POST', `/api/cards/${encodeURIComponent(cardId)}/act`, { action, value }),
   stop: () => call<{ ok: true }>('POST', '/api/runs/stop'),
@@ -109,6 +119,8 @@ export const api = {
   archiveChannel: (id: string) => call<{ ok: true }>('DELETE', `/api/channels/${encodeURIComponent(id)}`),
   channelPage: (id: string) => call<{ items: Item[]; has_more: boolean }>('GET', `/api/channels/${encodeURIComponent(id)}/items`),
   seenChannel: (id: string) => call<{ ok: true }>('POST', `/api/channels/${encodeURIComponent(id)}/seen`),
+  item: (id: string) => call<{ item: Item }>('GET', `/api/items/${encodeURIComponent(id)}`),
+  fileMeta: (id: string) => call<{ file: FileEntry }>('GET', `/api/files/${encodeURIComponent(id)}/meta`),
   search: (q: string) => call<{ hits: SearchHit[]; terms: string[] }>('GET', `/api/search?q=${encodeURIComponent(q)}`),
   /** Save an edited deliverable as a new version; the original file is kept. */
   saveFileVersion: (id: string, text: string) => call<{ file: FileEntry }>('POST', `/api/files/${encodeURIComponent(id)}/versions`, { text }),
@@ -122,29 +134,61 @@ export const api = {
   removeRoutine: (id: string) => call<{ ok: true }>('DELETE', `/api/routines/${encodeURIComponent(id)}`),
 };
 
+const channelPageSeq = new Map<string, number>();
+
+async function loadChannelPage(id: string) {
+  const seq = (channelPageSeq.get(id) ?? 0) + 1;
+  channelPageSeq.set(id, seq);
+  setState((s) => ({
+    channelLoading: { ...s.channelLoading, [id]: true },
+    channelError: { ...s.channelError, [id]: null },
+  }));
+  try {
+    const page = await api.channelPage(id);
+    mergeItems(page.items);
+    if (channelPageSeq.get(id) === seq) {
+      // The channel's own truth, recorded per channel: an exhausted #general must not speak for #taxes.
+      setChannelMore(id, page.has_more);
+    }
+  } catch (e: any) {
+    if (channelPageSeq.get(id) === seq) {
+      setState((s) => ({
+        channelError: { ...s.channelError, [id]: e?.message ?? 'Could not load this channel.' },
+      }));
+    }
+    throw e;
+  } finally {
+    if (channelPageSeq.get(id) === seq) {
+      setState((s) => ({
+        channelLoading: { ...s.channelLoading, [id]: false },
+      }));
+    }
+  }
+}
+
 /**
  * Open a channel: show it, mark it read, and page in its history. The snapshot only carries the newest page of the
  * whole install, so a channel the user has not looked at yet is usually not loaded at all.
  */
-export async function openChannel(id: string) {
+export async function openChannel(id: string, force = false) {
   setChannel(id);
-  // The dot clears the moment the channel opens; the server call persists seen_at for the next snapshot.
-  setState((s) => ({ channels: s.channels.map((c) => (c.id === id ? { ...c, seen_at: Date.now() } : c)) }));
+  // The dot clears the moment the channel opens; clamp to server last_at so clock skew cannot keep the dot lit.
+  setState((s) => ({
+    channels: s.channels.map((c) => (c.id === id ? { ...c, seen_at: Math.max(Date.now(), c.last_at ?? 0) } : c)),
+  }));
   api.seenChannel(id).catch(() => {});
   // Ask the same question the thread answers: does this channel have loaded items? Rows from before topic channels
   // carry no `channel_id`, and `channelItems` already resolves those to general. Falling back to the id being opened
   // instead made every such row look like a member of every channel, so a new channel was never fetched and stayed
   // empty.
   const hasItems = channelItems(getState()).length > 0;
-  if (hasItems) return;
-  const page = await api.channelPage(id);
-  mergeItems(page.items);
-  // The channel's own truth, recorded per channel: an exhausted #general must not speak for #taxes.
-  setChannelMore(id, page.has_more);
+  if (!force && hasItems) return;
+  await loadChannelPage(id);
 }
 
 let es: EventSource | null = null;
 let retry = 0;
+let retryTimer: ReturnType<typeof setTimeout> | null = null;
 /**
  * A connect already in flight. Two overlapping calls each take a snapshot and open a source: the slower snapshot then
  * overwrites live state (a streaming reply visibly shortens, a card you just decided flips back to pending), and the
@@ -152,8 +196,25 @@ let retry = 0;
  */
 let connecting = false;
 
+function clearRetryTimer() {
+  if (retryTimer !== null) {
+    clearTimeout(retryTimer);
+    retryTimer = null;
+  }
+}
+
+function scheduleReconnect() {
+  if (retryTimer !== null || connecting) return;
+  const delay = Math.min(15000, 1000 * 2 ** retry++);
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    void connect();
+  }, delay);
+}
+
 export async function connect() {
   if (connecting) return;
+  clearRetryTimer();
   connecting = true;
   try {
     const snap = await api.snapshot();
@@ -161,9 +222,12 @@ export async function connect() {
     applySnapshot(snap);
   } catch (e) {
     connecting = false;
-    if (e instanceof HttpError && e.status === 401) return;
+    if (e instanceof HttpError && e.status === 401) {
+      clearRetryTimer();
+      return;
+    }
     setState({ connected: false, ready: getState().ready });
-    setTimeout(connect, Math.min(15000, 1000 * 2 ** retry++));
+    scheduleReconnect();
     return;
   }
   reportPresence();
@@ -176,6 +240,7 @@ export async function connect() {
   // time, or tear down the stream that replaced it.
   next.onopen = () => {
     if (es !== next) return;
+    clearRetryTimer();
     retry = 0;
     setState({ connected: true });
   };
@@ -191,22 +256,31 @@ export async function connect() {
     next.close();
     es = null;
     // Resync from a fresh snapshot: deltas missed while offline are not replayed.
-    setTimeout(connect, Math.min(15000, 1000 * 2 ** retry++));
+    scheduleReconnect();
   };
+
+  // If the user is reading a channel whose newest messages fell outside the global snapshot window, refetch it now.
+  const active = getState().channelId;
+  if (active && channelItems(getState()).length === 0) {
+    await loadChannelPage(active).catch(() => {});
+  }
 }
 
-export async function loadOlder() {
+export async function loadOlder(): Promise<boolean> {
   const s = getState();
   // The oldest item of the channel being read, not of the whole install. Every channel shares one list, so after
   // paging one channel the globally oldest row is usually from it; using that as the cursor asks the server for a
   // window that holds none (or only part) of the open channel's unloaded history, and an empty page then hides
   // "Earlier messages" everywhere.
   const first = channelItems(s)[0];
-  if (!first) return;
+  if (!first) return false;
+  const channel = s.channelId ?? '';
+  const beforeIds = new Set(s.items.map((x) => x.id));
   // Page back through the channel being read, so scrolling history never jumps into another thread:
   // the response's has_more updates only THIS channel's flag.
   const r = await api.older(first.id, s.channelId);
-  prependItems(r.items, s.channelId ?? '', r.has_more);
+  prependItems(r.items, channel, r.has_more);
+  return r.items.some((x) => !beforeIds.has(x.id));
 }
 
 /** Page back until `id` is in the loaded thread, so a jump to an old pending card lands. */
@@ -214,7 +288,7 @@ export async function loadUntil(id: string, maxPages = 20) {
   for (let i = 0; i < maxPages; i++) {
     const s = getState();
     if (s.items.some((x) => x.id === id) || !hasMoreFor(s)) return;
-    await loadOlder();
+    if (!(await loadOlder())) return;
   }
 }
 

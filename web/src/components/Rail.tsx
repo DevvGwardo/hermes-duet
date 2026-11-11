@@ -1,3 +1,4 @@
+import { visibleFiles } from '../edit';
 import { useStore } from '../store';
 import { Icon, fileIcon, relLabel } from '../ui';
 import { shelf } from '../../../shared/shelf';
@@ -11,7 +12,7 @@ export function Rail({ tab, onJump, onOpenFile, onShowTasks }: { tab: string; on
   const tasks = useStore((s) => s.tasks);
   const files = useStore((s) => s.files);
   const pages = useStore((s) => s.pages);
-  const recent = shelf(files, pages.map((p) => p.id)).slice(0, 6);
+  const recent = visibleFiles(shelf(files, pages.map((p) => p.id))).slice(0, 6);
   const active = tasks.filter((t) => ['running', 'queued', 'waiting'].includes(t.status));
 
   return (

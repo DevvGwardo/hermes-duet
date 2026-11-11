@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Connector, ConnectorSuggestion } from '../../../shared/types';
 import { api } from '../api';
-import { useDialogTrap } from '../hooks/useDialogTrap';
+import { isTopDialog, useDialogTrap } from '../hooks/useDialogTrap';
 import { Icon } from '../ui';
 
 interface SuggestionsResponse {
@@ -21,9 +21,14 @@ export function ConnectorsSheet({ onClose }: { onClose: () => void }) {
   useDialogTrap(dialog);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || !isTopDialog(dialog.current)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      onClose();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
   }, [onClose]);
 
   useEffect(() => {

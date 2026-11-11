@@ -76,3 +76,23 @@ test('general stays first and removing the open channel falls back', () => {
   applyEvent({ type: 'channel_removed', id: 'general' });
   expect(getState().channelId).toBe('taxes');
 });
+
+test('editing an existing channel updates it in place instead of jumping to index 1', () => {
+  setState({ channels: [channel('general'), channel('alpha'), channel('beta'), channel('gamma')], channelId: 'beta' });
+  applyEvent({ type: 'channel', channel: { ...channel('gamma'), topic: 'Updated topic' } });
+  expect(getState().channels.map((c) => c.id)).toEqual(['general', 'alpha', 'beta', 'gamma']);
+  expect(getState().channels[3].topic).toBe('Updated topic');
+  // Editing general keeps it first too.
+  applyEvent({ type: 'channel', channel: { ...channel('general'), topic: 'Main' } });
+  expect(getState().channels.map((c) => c.id)).toEqual(['general', 'alpha', 'beta', 'gamma']);
+  expect(getState().channels[0].topic).toBe('Main');
+});
+
+test('snapshot clears stale channelLoading and channelError while preserving active channel', () => {
+  setState({ channelId: 'taxes', channelLoading: { taxes: true }, channelError: { taxes: 'offline' } });
+  applySnapshot(snapshot());
+  const s = getState();
+  expect(s.channelId).toBe('taxes');
+  expect(s.channelLoading).toEqual({});
+  expect(s.channelError).toEqual({});
+});

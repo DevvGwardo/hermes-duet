@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api';
-import { useDialogTrap } from '../hooks/useDialogTrap';
+import { isTopDialog, useDialogTrap } from '../hooks/useDialogTrap';
 import { Icon } from '../ui';
 
 type Tab = { id: string; title: string; url: string; active: boolean };
@@ -28,6 +28,9 @@ export function BrowserView({ onClose }: { onClose: () => void }) {
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [url, setUrl] = useState('');
   const [urlOpen, setUrlOpen] = useState(false);
+  const urlOpenRef = useRef(urlOpen);
+  urlOpenRef.current = urlOpen;
+  const activeTabUrlRef = useRef('');
   const [tabsOpen, setTabsOpen] = useState(false);
   const [mobile, setMobile] = useState(false);
   const [busy, setBusy] = useState<'fill' | 'viewport' | null>(null);
@@ -84,9 +87,13 @@ export function BrowserView({ onClose }: { onClose: () => void }) {
           try {
             const msg = JSON.parse(ev.data);
             if (msg.type === 'tabs') {
-              setTabs(msg.tabs ?? []);
-              const active = (msg.tabs ?? []).find((t: Tab) => t.active);
-              if (active) setUrl(active.url);
+              const list: Tab[] = msg.tabs ?? [];
+              setTabs(list);
+              const active = list.find((t: Tab) => t.active);
+              if (active) {
+                activeTabUrlRef.current = active.url;
+                if (!urlOpenRef.current) setUrl(active.url);
+              }
             }
             if (msg.type === 'error') {
               setNotice(msg.message);
@@ -156,9 +163,12 @@ export function BrowserView({ onClose }: { onClose: () => void }) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
+      if (e.key !== 'Escape' || !isTopDialog(dialog.current)) return;
       if (document.activeElement === keyRef.current) return;
+      e.preventDefault();
+      e.stopPropagation();
       if (urlOpen) {
+        setUrl(activeTabUrlRef.current);
         setUrlOpen(false);
         return;
       }
@@ -168,8 +178,8 @@ export function BrowserView({ onClose }: { onClose: () => void }) {
       }
       onClose();
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
   }, [onClose, urlOpen, tabsOpen]);
 
   /** Canvas pixels are the page's CSS pixels: scale the touch back into that space. */
@@ -274,8 +284,13 @@ export function BrowserView({ onClose }: { onClose: () => void }) {
         </button>
         <button
           className="browser-url"
-          onClick={() => setUrlOpen((v) => !v)}
-          title={url}
+          onClick={() =>
+            setUrlOpen((v) => {
+              if (v) setUrl(activeTabUrlRef.current);
+              return !v;
+            })
+          }
+          title={activeTabUrlRef.current || url}
         >
           <span className={`status-dot ${status === 'live' ? 'ok' : status === 'error' ? 'bad' : ''}`} />
           {url.replace(/^https?:\/\//, '').slice(0, 64) || 'no tab'}
@@ -376,9 +391,9 @@ export function BrowserView({ onClose }: { onClose: () => void }) {
         aria-label="Keyboard for the live browser"
       />
       {notice && status === 'live' && (
-        <div className="browser-notice" onClick={() => setNotice(null)}>
+        <button type="button" className="browser-notice" onClick={() => setNotice(null)} aria-label="Dismiss notice">
           {notice}
-        </div>
+        </button>
       )}
     </div>
   );

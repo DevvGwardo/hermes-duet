@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import type { FileEntry } from '../../shared/types';
-import { isEditableMime, visibleFiles } from './edit';
+import type { FileEntry, Page } from '../../shared/types';
+import { isEditableMime, previousPageVersion, visibleFiles } from './edit';
 
 describe('isEditableMime', () => {
   test('text-ish mime types are editable', () => {
@@ -55,5 +55,59 @@ describe('visibleFiles', () => {
   test('order is preserved', () => {
     const files = [file('old'), file('new', 'old'), file('middle')];
     expect(visibleFiles(files).map((f) => f.id)).toEqual(['new', 'middle']);
+  });
+});
+
+describe('previousPageVersion', () => {
+  const pageFile = (id: string, created_at: number, opts: { page_id?: string; version_of?: string } = {}) =>
+    ({
+      id,
+      title: id,
+      name: `${id}.html`,
+      mime: 'text/html',
+      size: 1,
+      created_at,
+      ...opts,
+    }) as FileEntry;
+
+  const page = (id: string, file_id: string): Page => ({
+    id,
+    title: 'Morning page',
+    instructions: 'Build it',
+    file_id,
+    created_at: 1,
+    updated_at: 100,
+  });
+
+  test('picks the latest scheduled refresh before the current file and excludes manual edits', () => {
+    const files = [
+      pageFile('day1', 100, { page_id: 'p1' }),
+      pageFile('day1-edit', 150, { page_id: 'p1', version_of: 'day1' }),
+      pageFile('day2', 200, { page_id: 'p1' }),
+      pageFile('day2-edit', 250, { page_id: 'p1', version_of: 'day2' }),
+      pageFile('other-page', 190, { page_id: 'p2' }),
+    ];
+    // Even if page.file_id stayed at day2, day2-edit (manual) is ignored and day1 is returned.
+    expect(previousPageVersion(files, page('p1', 'day2'))?.id).toBe('day1');
+  });
+
+  test('walks page.file_id version_of chain when page.file_id points at a manual edit', () => {
+    const files = [
+      pageFile('day1', 100, { page_id: 'p1' }),
+      pageFile('day2', 200, { page_id: 'p1' }),
+      pageFile('day2-edit1', 210, { page_id: 'p1', version_of: 'day2' }),
+      pageFile('day2-edit2', 220, { page_id: 'p1', version_of: 'day2-edit1' }),
+    ];
+    // Today's page is currently backed by day2-edit2 -> chain covers day2-edit2, day2-edit1, day2; Previous must be day1.
+    expect(previousPageVersion(files, page('p1', 'day2-edit2'))?.id).toBe('day1');
+  });
+
+  test('returns undefined when no earlier scheduled version exists', () => {
+    const files = [
+      pageFile('day1', 100, { page_id: 'p1' }),
+      pageFile('day1-edit', 150, { page_id: 'p1', version_of: 'day1' }),
+    ];
+    expect(previousPageVersion(files, page('p1', 'day1-edit'))).toBeUndefined();
+    expect(previousPageVersion(files, page('p1', 'day1'))).toBeUndefined();
   });
 });

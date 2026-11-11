@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { MemoryState } from '../../../shared/types';
 import { api } from '../api';
-import { useDialogTrap } from '../hooks/useDialogTrap';
+import { isTopDialog, useDialogTrap } from '../hooks/useDialogTrap';
 import { Icon } from '../ui';
 
 /**
@@ -19,8 +19,9 @@ export function MemorySheet({ onClose }: { onClose: () => void }) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
+      if (e.key !== 'Escape' || !isTopDialog(dialog.current)) return;
       // Capture phase, so the outer Settings sheet's own Escape handler doesn't close both dialogs at once.
+      e.preventDefault();
       e.stopPropagation();
       onClose();
     };
@@ -76,6 +77,7 @@ export function MemorySheet({ onClose }: { onClose: () => void }) {
     }
   }
 
+  const ready = state !== null;
   const max = state?.max_bytes ?? 32 * 1024;
   const bytes = new TextEncoder().encode(text).length;
   const over = bytes > max;
@@ -95,15 +97,16 @@ export function MemorySheet({ onClose }: { onClose: () => void }) {
         <div className="settings-body">
           <section>
             <p className="muted small">
-              This is the context file on your Mac{state ? ` (${state.path})` : ''}. I read it before your first message every turn. Edit it
+              This is the context file on this computer{state ? ` (${state.path})` : ''}. I read it before your first message every turn. Edit it
               here, or reset it to start clean.
             </p>
             <textarea
               value={text}
               onChange={(e) => setText(e.target.value)}
               rows={10}
+              disabled={!ready || busy}
               aria-label="Memory"
-              placeholder="- Tasks: run `todo list --today`"
+              placeholder={ready ? '- Tasks: run `todo list --today`' : 'Loading…'}
             />
             <div className="memory-meta">
               <span className={over ? 'memory-over' : ''}>
@@ -111,13 +114,17 @@ export function MemorySheet({ onClose }: { onClose: () => void }) {
               </span>
               <span>Limit {max} bytes</span>
             </div>
-            {err && <p className="card-error">{err}</p>}
+            {err && (
+              <p className="card-error" role="alert">
+                {err}
+              </p>
+            )}
             {msg && <p className="muted small">{msg}</p>}
             <div className="memory-btns">
-              <button className="btn btn-primary small" disabled={busy || over} onClick={save}>
+              <button className="btn btn-primary small" disabled={!ready || busy || over} onClick={save}>
                 {busy ? 'Saving…' : 'Save'}
               </button>
-              <button className="btn btn-ghost small" disabled={busy} onClick={reset}>
+              <button className="btn btn-ghost small" disabled={!ready || busy} onClick={reset}>
                 Reset
               </button>
             </div>

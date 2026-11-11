@@ -3,7 +3,7 @@ import type { Routine, RoutineSchedule } from '../../../shared/types';
 import { scheduleLabel } from '../../../server/routines';
 import { api } from '../api';
 import { useStore } from '../store';
-import { useDialogTrap } from '../hooks/useDialogTrap';
+import { isTopDialog, useDialogTrap } from '../hooks/useDialogTrap';
 import { Icon } from '../ui';
 
 const DAY_LABELS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
@@ -32,9 +32,14 @@ export function RoutinesSheet({ onClose }: { onClose: () => void }) {
   useDialogTrap(dialog);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || !isTopDialog(dialog.current)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      onClose();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
   }, [onClose]);
 
   const [editing, setEditing] = useState<Routine | null>(null);
@@ -48,6 +53,14 @@ export function RoutinesSheet({ onClose }: { onClose: () => void }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  const generalId = channels.find((c) => c.slug === 'general')?.id ?? channels[0]?.id;
+
+  useEffect(() => {
+    if (editing && !routines.some((r) => r.id === editing.id)) {
+      resetForm();
+    }
+  }, [routines, editing]);
+
   function startEdit(r: Routine) {
     setEditing(r);
     setTitle(r.title);
@@ -56,7 +69,7 @@ export function RoutinesSheet({ onClose }: { onClose: () => void }) {
     setTime(r.schedule.kind === 'interval' ? '09:00' : r.schedule.time);
     setWeekdays(r.schedule.kind === 'weekly' ? [...r.schedule.weekdays] : [1]);
     setEvery(r.schedule.kind === 'interval' ? r.schedule.every_minutes : 360);
-    setChannelId(r.channel_id ?? '');
+    setChannelId(r.channel_id && r.channel_id !== generalId ? r.channel_id : '');
     setErr(null);
   }
 
@@ -72,8 +85,14 @@ export function RoutinesSheet({ onClose }: { onClose: () => void }) {
     setErr(null);
   }
 
+  const missingWeekdays = kind === 'weekly' && weekdays.length === 0;
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (missingWeekdays) {
+      setErr('Pick at least one weekday.');
+      return;
+    }
     setBusy(true);
     setErr(null);
     const schedule: RoutineSchedule =
@@ -84,7 +103,7 @@ export function RoutinesSheet({ onClose }: { onClose: () => void }) {
         title,
         prompt,
         schedule,
-        channel_id: channelId || undefined,
+        channel_id: channelId,
       });
       resetForm();
     } catch (e: any) {
@@ -95,29 +114,39 @@ export function RoutinesSheet({ onClose }: { onClose: () => void }) {
   }
 
   async function runNow(id: string) {
+    setBusy(true);
     setErr(null);
     try {
       await api.runRoutine(id);
     } catch (e: any) {
       setErr(e?.message ?? 'Could not run that routine.');
+    } finally {
+      setBusy(false);
     }
   }
 
   async function toggle(r: Routine) {
+    setBusy(true);
     setErr(null);
     try {
       await (r.enabled ? api.pauseRoutine(r.id) : api.resumeRoutine(r.id));
     } catch (e: any) {
       setErr(e?.message ?? 'Could not change that routine.');
+    } finally {
+      setBusy(false);
     }
   }
 
   async function remove(id: string) {
+    setBusy(true);
     setErr(null);
     try {
       await api.removeRoutine(id);
+      if (editing?.id === id) resetForm();
     } catch (e: any) {
       setErr(e?.message ?? 'Could not remove that routine.');
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -163,10 +192,10 @@ export function RoutinesSheet({ onClose }: { onClose: () => void }) {
                     <button className="btn btn-ghost small" disabled={busy} onClick={() => toggle(r)}>
                       {r.enabled ? 'Pause' : 'Resume'}
                     </button>
-                    <button className="icon-btn" onClick={() => startEdit(r)} aria-label={`Edit ${r.title}`} title="Edit routine">
+                    <button className="icon-btn" disabled={busy} onClick={() => startEdit(r)} aria-label={`Edit ${r.title}`} title="Edit routine">
                       <Icon.pencil size={16} />
                     </button>
-                    <button className="icon-btn" onClick={() => remove(r.id)} aria-label={`Delete ${r.title}`} title="Delete routine">
+                    <button className="icon-btn" disabled={busy} onClick={() => remove(r.id)} aria-label={`Delete ${r.title}`} title="Delete routine">
                       <Icon.archive size={16} />
                     </button>
                   </div>
@@ -214,20 +243,23 @@ export function RoutinesSheet({ onClose }: { onClose: () => void }) {
                 </label>
               )}
               {kind === 'weekly' && (
-                <div className="day-row" role="group" aria-label="Weekdays">
-                  {DAY_LABELS.map((label, i) => (
-                    <button
-                      type="button"
-                      key={i}
-                      className={`day-chip ${weekdays.includes(i) ? 'on' : ''}`}
-                      aria-pressed={weekdays.includes(i)}
-                      aria-label={['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][i]}
-                      onClick={() => setWeekdays((d) => (d.includes(i) ? d.filter((x) => x !== i) : [...d, i].sort((a, b) => a - b)))}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
+                <>
+                  <div className="day-row" role="group" aria-label="Weekdays">
+                    {DAY_LABELS.map((label, i) => (
+                      <button
+                        type="button"
+                        key={i}
+                        className={`day-chip ${weekdays.includes(i) ? 'on' : ''}`}
+                        aria-pressed={weekdays.includes(i)}
+                        aria-label={['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][i]}
+                        onClick={() => setWeekdays((d) => (d.includes(i) ? d.filter((x) => x !== i) : [...d, i].sort((a, b) => a - b)))}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  {missingWeekdays && <p className="card-error">Pick at least one weekday.</p>}
+                </>
               )}
               {kind === 'interval' && (
                 <label className="routine-field">
@@ -254,15 +286,22 @@ export function RoutinesSheet({ onClose }: { onClose: () => void }) {
                         {c.name}
                       </option>
                     ))}
+                  {channelId && !channels.some((c) => c.id === channelId) && (
+                    <option value={channelId}>(archived channel)</option>
+                  )}
                 </select>
               </label>
-              {err && <p className="card-error">{err}</p>}
+              {err && (
+                <p className="card-error" role="alert">
+                  {err}
+                </p>
+              )}
               <span className="routine-form-btns">
-                <button className="btn btn-primary small" disabled={busy} type="submit">
+                <button className="btn btn-primary small" disabled={busy || missingWeekdays} type="submit">
                   {busy ? 'Saving…' : editing ? 'Save changes' : 'Add routine'}
                 </button>
                 {editing && (
-                  <button className="btn small" type="button" onClick={resetForm}>
+                  <button className="btn small" type="button" disabled={busy} onClick={resetForm}>
                     Cancel
                   </button>
                 )}

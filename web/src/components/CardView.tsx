@@ -34,7 +34,24 @@ export function CardView({ item, onOpenFile }: { item: Item; onOpenFile: (id: st
   const draftEdited = !!card.draft && draft.trim() !== card.draft.trim();
   const tz = useStore((s) => s.settings?.timezone);
   // An ask left waiting since yesterday may no longer hold ("tomorrow" in its draft, an errand already done).
-  const age = pending && (card.type === 'approval' || card.type === 'choice') ? askAge(item.created_at, Date.now(), tz) : null;
+  // Tick once a minute (and on visibility return) so an idle window keeps the age badge current.
+  const tracksAge = pending && (card.type === 'approval' || card.type === 'choice');
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!tracksAge) return;
+    setNow(Date.now());
+    const tick = () => setNow(Date.now());
+    const timer = setInterval(tick, 60_000);
+    const onVis = () => {
+      if (document.visibilityState === 'visible') tick();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVis);
+    };
+  }, [tracksAge, item.created_at]);
+  const age = tracksAge ? askAge(item.created_at, now, tz) : null;
 
   async function act(action: string, value?: string) {
     // Busy marks the tapped button; an approval's value is the edited draft, not a button label.
@@ -156,20 +173,48 @@ export function CardView({ item, onOpenFile }: { item: Item; onOpenFile: (id: st
   );
 }
 
+let activeMediaOwner: symbol | null = null;
+
+function clearMediaSession(owner: symbol) {
+  if (activeMediaOwner !== owner) return;
+  activeMediaOwner = null;
+  const session = (navigator as any).mediaSession;
+  if (!session) return;
+  try {
+    session.setActionHandler?.('play', null);
+    session.setActionHandler?.('pause', null);
+    session.setActionHandler?.('stop', null);
+    session.metadata = null;
+  } catch {}
+}
+
 /**
- * "Listen": the brief read aloud, so the morning can be taken in while walking. The audio is synthesized on the Mac
+ * "Listen": the brief read aloud, so the morning can be taken in while walking. The audio is synthesized on the host
  * and cached; a lock-screen player is exposed through the Media Session API so playback survives switching apps.
  */
 function ListenButton({ item }: { item: Item }) {
   const audio = useRef<HTMLAudioElement | null>(null);
+  const loadingRef = useRef(false);
+  const owner = useRef(Symbol('listen'));
   const [state, setState] = useState<'idle' | 'loading' | 'playing'>('idle');
   const [err, setErr] = useState<string | null>(null);
   const title = item.card?.title ?? 'Morning brief';
 
   useEffect(
     () => () => {
-      audio.current?.pause();
-      audio.current = null;
+      loadingRef.current = false;
+      const el = audio.current;
+      if (el) {
+        el.onplaying = null;
+        el.onplay = null;
+        el.onpause = null;
+        el.onended = null;
+        el.onerror = null;
+        el.pause();
+        el.removeAttribute('src');
+        audio.current = null;
+      }
+      clearMediaSession(owner.current);
     },
     [],
   );
@@ -184,43 +229,59 @@ function ListenButton({ item }: { item: Item }) {
   }
 
   async function toggle() {
+    if (loadingRef.current || state === 'loading') return;
     setErr(null);
     const el = audio.current ?? new Audio();
     audio.current = el;
-    if (state === 'playing') {
+    if (state === 'playing' && !el.paused) {
       el.pause();
       setState('idle');
       return;
     }
+    loadingRef.current = true;
+    setState('loading');
     try {
       if (el.src !== new URL(`/api/brief/${item.id}/audio`, location.href).href) {
         el.src = `/api/brief/${item.id}/audio`;
         el.preload = 'auto';
       }
+      el.onplaying = () => setState('playing');
+      el.onplay = () => setState('playing');
+      el.onpause = () => {
+        if (!loadingRef.current) setState('idle');
+      };
       el.onended = () => setState('idle');
       el.onerror = () => {
+        loadingRef.current = false;
         setState('idle');
-        setErr('Could not play the brief. Set up speech on the Mac: hermes-duet doctor.');
+        setErr('Could not play the brief. Set up speech on the host: hermes-duet doctor.');
       };
       const session = (navigator as any).mediaSession;
       if (session && typeof MediaMetadata !== 'undefined') {
+        activeMediaOwner = owner.current;
         session.metadata = new MediaMetadata({ title, artist: 'Hermes Duet', album: 'Morning brief' });
         session.setActionHandler?.('play', () => void el.play());
         session.setActionHandler?.('pause', () => el.pause());
         session.setActionHandler?.('stop', stop);
       }
-      setState('loading');
       await el.play();
       setState('playing');
     } catch (e: any) {
       setState('idle');
       setErr(/not allowed|gesture/i.test(String(e?.message)) ? 'Tap Listen again to allow audio.' : 'Could not play the brief.');
+    } finally {
+      loadingRef.current = false;
     }
   }
 
   return (
     <>
-      <button className={`listen ${state}`} onClick={toggle} aria-label={state === 'playing' ? 'Pause the brief' : 'Listen to the brief'}>
+      <button
+        className={`listen ${state}`}
+        disabled={state === 'loading'}
+        onClick={toggle}
+        aria-label={state === 'playing' ? 'Pause the brief' : 'Listen to the brief'}
+      >
         {state === 'playing' ? <Icon.stop size={14} /> : <Icon.play size={14} />}
         {state === 'playing' ? 'Pause' : state === 'loading' ? 'Getting audio…' : 'Listen'}
       </button>
@@ -519,50 +580,123 @@ function PageLink({ fileId, onOpen }: { fileId: string; onOpen: (id: string) => 
  * Provenance chips for an entry, a watching line or a whole card. file/page
  * chips open through the existing file viewer (a page resolves to the version
  * the brief was written about); url chips are plain external links; anything
- * else is a readable label with the excerpt, if any, on hover.
+ * else is a readable label. Any chip with a `quote` exposes an inline excerpt
+ * on tap/click or keyboard focus so phones don't rely on hover tooltips.
  */
-function SourceChips({ sources, onOpenFile }: { sources: Source[]; onOpenFile: (id: string) => void }) {
+export function SourceChips({ sources, onOpenFile }: { sources: Source[]; onOpenFile: (id: string) => void }) {
   const pages = useStore((s) => s.pages);
+  const [openQuote, setOpenQuote] = useState<number | null>(null);
+  const pointerDownRef = useRef(false);
+
   if (!sources.length) return null;
+
+  const markPointer = () => {
+    pointerDownRef.current = true;
+    requestAnimationFrame(() => {
+      pointerDownRef.current = false;
+    });
+  };
+  const toggleQuote = (i: number) => setOpenQuote((cur) => (cur === i ? null : i));
+  const focusQuote = (i: number) => {
+    if (!pointerDownRef.current) setOpenQuote(i);
+  };
+  const quoteBtn = (i: number, label: string) => (
+    <button
+      type="button"
+      className={`chip source source-quote-btn ${openQuote === i ? 'on' : ''}`}
+      aria-expanded={openQuote === i}
+      aria-label={`View quote for ${label}`}
+      onPointerDown={markPointer}
+      onFocus={() => focusQuote(i)}
+      onClick={() => toggleQuote(i)}
+    >
+      “”
+    </button>
+  );
+
+  const activeQuote = openQuote !== null ? sources[openQuote] : null;
+
   return (
-    <div className="sources" aria-label="Sources">
-      {sources.map((s, i) => {
-        const hint = s.quote ?? s.label;
-        if (s.kind === 'file' && s.id) {
-          return (
-            <button key={i} className="chip source" title={hint} onClick={() => onOpenFile(s.id!)} aria-label={`Open source ${s.label}`}>
-              {s.label}
-            </button>
-          );
-        }
-        if (s.kind === 'page' && s.id) {
-          const fileId = pages.find((p) => p.id === s.id)?.file_id;
-          if (!fileId) {
-            return (
-              <span key={i} className="chip source is-label" title={hint}>
+    <div className="sources-wrap">
+      <div className="sources" aria-label="Sources">
+        {sources.map((s, i) => {
+          const hint = s.quote ?? s.label;
+          if (s.kind === 'file' && s.id) {
+            const btn = (
+              <button type="button" className="chip source" title={hint} onClick={() => onOpenFile(s.id!)} aria-label={`Open source ${s.label}`}>
                 {s.label}
+              </button>
+            );
+            return s.quote ? (
+              <span key={i} className="source-pair">
+                {btn}
+                {quoteBtn(i, s.label)}
               </span>
+            ) : (
+              <span key={i}>{btn}</span>
+            );
+          }
+          if (s.kind === 'page' && s.id) {
+            const fileId = pages.find((p) => p.id === s.id)?.file_id;
+            if (fileId) {
+              const btn = (
+                <button type="button" className="chip source" title={hint} onClick={() => onOpenFile(fileId)} aria-label={`Open source ${s.label}`}>
+                  {s.label}
+                </button>
+              );
+              return s.quote ? (
+                <span key={i} className="source-pair">
+                  {btn}
+                  {quoteBtn(i, s.label)}
+                </span>
+              ) : (
+                <span key={i}>{btn}</span>
+              );
+            }
+          }
+          if (s.kind === 'url' && isSafeSourceUrl(s.url)) {
+            const link = (
+              <a className="chip source" href={s.url} target="_blank" rel="noreferrer noopener" title={hint}>
+                {s.label}
+              </a>
+            );
+            return s.quote ? (
+              <span key={i} className="source-pair">
+                {link}
+                {quoteBtn(i, s.label)}
+              </span>
+            ) : (
+              <span key={i}>{link}</span>
+            );
+          }
+          if (s.quote) {
+            return (
+              <button
+                key={i}
+                type="button"
+                className={`chip source is-label has-quote ${openQuote === i ? 'on' : ''}`}
+                title={hint}
+                aria-expanded={openQuote === i}
+                onPointerDown={markPointer}
+                onFocus={() => focusQuote(i)}
+                onClick={() => toggleQuote(i)}
+              >
+                {s.label}
+              </button>
             );
           }
           return (
-            <button key={i} className="chip source" title={hint} onClick={() => onOpenFile(fileId)} aria-label={`Open source ${s.label}`}>
+            <span key={i} className="chip source is-label" title={hint}>
               {s.label}
-            </button>
+            </span>
           );
-        }
-        if (s.kind === 'url' && isSafeSourceUrl(s.url)) {
-          return (
-            <a key={i} className="chip source" href={s.url} target="_blank" rel="noreferrer noopener" title={hint}>
-              {s.label}
-            </a>
-          );
-        }
-        return (
-          <span key={i} className="chip source is-label" title={hint}>
-            {s.label}
-          </span>
-        );
-      })}
+        })}
+      </div>
+      {activeQuote?.quote && (
+        <blockquote className="source-quote" aria-label={`Quote from ${activeQuote.label}`}>
+          <span className="source-quote-label">{activeQuote.label}:</span> “{activeQuote.quote}”
+        </blockquote>
+      )}
     </div>
   );
 }

@@ -8,7 +8,7 @@ import { trackDialogOpeners } from './hooks/useDialogTrap';
 import { BrandBadge, Decode, MangaBackdrop, Mascot, SpeechBubble, Wordmark } from './components/Manga';
 import { Rail } from './components/Rail';
 import { Thread } from './components/Thread';
-import { getState, useStore } from './store';
+import { channelItems, getState, useStore } from './store';
 import { Icon } from './ui';
 
 // The first paint is the thread. The two other tabs and the three on-demand overlays are their own chunks: a phone
@@ -58,6 +58,16 @@ function useStatus() {
   return { cls: 'idle', text: 'Ready', short: 'Ready' };
 }
 
+function channelOf(p: { channel_id?: string | null; url?: string | null }): string | null {
+  if (p.channel_id) return p.channel_id;
+  if (!p.url) return null;
+  try {
+    return new URL(p.url, location.origin).searchParams.get('channel') || null;
+  } catch {
+    return p.url.match(/[?&]channel=([^&#]+)/)?.[1] ?? null;
+  }
+}
+
 function Shell() {
   const [tab, setTab] = useState<Tab>('chat');
   const [fileId, setFileId] = useState<string | null>(null);
@@ -66,10 +76,12 @@ function Shell() {
   const [search, setSearch] = useState(false);
   const [channelsOpen, setChannelsOpen] = useState(false);
   const [browserOpen, setBrowserOpen] = useState(false);
+  const [taskId, setTaskId] = useState<string | null>(null);
   const [jump, setJump] = useState<string | null>(null);
   const [briefNote, setBriefNote] = useState<string | null>(null);
   const [sent, setSent] = useState(0);
   const composer = useRef<ComposerHandle>(null);
+  const jumpSeq = useRef(0);
   const agent = useStore((s) => s.agent);
   const pushEnabled = useStore((s) => s.pushEnabled);
   const pending = useStore((s) => s.pending.length);
@@ -92,22 +104,63 @@ function Shell() {
   }, [settled]);
 
   useEffect(() => {
-    // Notification taps arrive here when the app is already open. Brief and handover pushes name their card only
-    // in the URL, so read both. Clearing first lets a second tap on the same card scroll to it again.
+    if (tab !== 'tasks' && taskId) setTaskId(null);
+  }, [tab, taskId]);
+
+  const jumpTo = async (id: string, channelHint?: string | null) => {
+    const seq = ++jumpSeq.current;
+    setTab('chat');
+    // Resolve which channel the item belongs to first (caller hint, loaded store, or server GET /api/items/:id),
+    // then ensure that channel is open and loaded BEFORE asking Thread to scroll to `id`.
+    const s = getState();
+    let channel =
+      channelHint ||
+      s.items.find((i) => i.id === id)?.channel_id ||
+      s.pending.find((i) => i.id === id)?.channel_id ||
+      null;
+    if (!channel) {
+      try {
+        const res = await api.item(id);
+        channel = res.item.channel_id ?? getState().channels[0]?.id ?? null;
+      } catch {
+        channel = getState().channels[0]?.id ?? null;
+      }
+    }
+    if (seq !== jumpSeq.current) return;
+    if (channel && (channel !== getState().channelId || channelItems(getState()).length === 0)) {
+      await openChannel(channel).catch(() => {});
+    }
+    if (seq !== jumpSeq.current) return;
+    setJump(null);
+    requestAnimationFrame(() => {
+      if (seq === jumpSeq.current) setJump(id);
+    });
+  };
+  const jumpToRef = useRef(jumpTo);
+  jumpToRef.current = jumpTo;
+
+  useEffect(() => {
+    // Notification taps arrive here when the app is already open. Read both top-level data fields and URL query params.
     const onMsg = (e: MessageEvent) => {
       if (e.data?.type === 'open') {
-        setTab('chat');
         const card = cardOf(e.data);
+        const channel = channelOf(e.data);
         if (card) {
-          setJump(null);
-          requestAnimationFrame(() => setJump(card));
+          void jumpToRef.current(card, channel);
+        } else if (channel) {
+          setTab('chat');
+          void openChannel(channel).catch(() => {});
+        } else {
+          setTab('chat');
         }
       }
     };
     navigator.serviceWorker?.addEventListener('message', onMsg);
     const card = cardOf({ url: location.search });
-    if (card) {
-      setJump(card);
+    const channel = channelOf({ url: location.search });
+    if (card || channel) {
+      if (card) void jumpToRef.current(card, channel);
+      else if (channel) void openChannel(channel).catch(() => {});
       // A reload shouldn't jump back to the card the notification opened.
       history.replaceState(null, '', location.pathname);
     }
@@ -115,14 +168,17 @@ function Shell() {
   }, []);
 
   useEffect(() => {
-    // "/" jumps to the composer, ⌘K / Ctrl-K opens search, from anywhere unless you're already typing.
+    // "/" jumps to the composer, ⌘K / Ctrl-K opens search, when no dialog/sheet/overlay is open and focus isn't typing.
     const onKey = (e: KeyboardEvent) => {
+      const dialogOpen =
+        !!fileId || settings || search || channelsOpen || browserOpen || !!document.querySelector('.sheet, .browser-pane');
+      if (dialogOpen) return;
       if (e.key === 'k' && (e.metaKey || e.ctrlKey) && !e.altKey) {
         e.preventDefault();
         setSearch(true);
         return;
       }
-      if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey || settings || fileId) return;
+      if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
       if ((e.target as HTMLElement).closest?.('input, textarea, select, [contenteditable="true"]')) return;
       e.preventDefault();
       setTab('chat');
@@ -130,16 +186,7 @@ function Shell() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [settings, fileId]);
-
-  const jumpTo = (id: string) => {
-    setTab('chat');
-    // A card or message can live in another channel: open that one first, or the jump has nothing to scroll to.
-    const channel = getState().items.find((i) => i.id === id)?.channel_id ?? getState().pending.find((i) => i.id === id)?.channel_id;
-    if (channel && channel !== getState().channelId) openChannel(channel).catch(() => {});
-    setJump(null);
-    requestAnimationFrame(() => setJump(id));
-  };
+  }, [settings, fileId, search, channelsOpen, browserOpen]);
   const startPrompt = (p: string) => {
     setTab('chat');
     requestAnimationFrame(() => composer.current?.prefill(p));
@@ -270,12 +317,12 @@ function Shell() {
             </>
           )}
           <Suspense fallback={null}>
-            {tab === 'tasks' && <TasksView onJump={jumpTo} onOpenFile={openFile} />}
+            {tab === 'tasks' && <TasksView onJump={jumpTo} onOpenFile={openFile} openTaskId={taskId} onOpenTask={setTaskId} />}
             {tab === 'make' && <MakeView onOpenFile={openFile} onStart={startPrompt} onCompare={compareFile} />}
           </Suspense>
         </main>
 
-        {tab === 'chat' && <Composer ref={composer} onSent={() => setSent((n) => n + 1)} />}
+        <Composer ref={composer} hidden={tab !== 'chat'} onSent={() => setSent((n) => n + 1)} />
 
         <nav className="dock" role="tablist">
           {(Object.keys(TAB_META) as Tab[]).map((t) => {
@@ -299,7 +346,15 @@ function Shell() {
         {fileId && <Viewer fileId={fileId} compareId={compareId} onClose={() => (setFileId(null), setCompareId(null))} />}
         {channelsOpen && <ChannelsSheet onClose={() => setChannelsOpen(false)} />}
         {search && (
-          <SearchOverlay onClose={() => setSearch(false)} onJump={jumpTo} onShowTasks={() => setTab('tasks')} onOpenFile={openFile} />
+          <SearchOverlay
+            onClose={() => setSearch(false)}
+            onJump={jumpTo}
+            onShowTasks={(id) => {
+              setTaskId(id ?? null);
+              setTab('tasks');
+            }}
+            onOpenFile={openFile}
+          />
         )}
         {browserOpen && <BrowserView onClose={() => setBrowserOpen(false)} />}
         {settings && <SettingsSheet onClose={() => setSettings(false)} />}
@@ -332,7 +387,7 @@ function Pair() {
         <div className="pair-hero">
           <Mascot size={210} live={busy} />
           <SpeechBubble>
-            Who's this? Run <code>hermes-duet pair</code> on your Mac and tell me the code.
+            Who's this? Run <code>hermes-duet pair</code> on your computer and tell me the code.
           </SpeechBubble>
         </div>
         <h1>

@@ -21,6 +21,9 @@ export interface State {
   channels: Channel[];
   /** The channel the Chat tab is showing; null until the snapshot lands. */
   channelId: string | null;
+  /** Per-channel initial/retry page fetch status. */
+  channelLoading: Record<string, boolean>;
+  channelError: Record<string, string | null>;
   settings: Settings | null;
   agent: AgentState;
   pushEnabled: boolean;
@@ -41,6 +44,8 @@ let state: State = {
   pages: [],
   channels: [],
   channelId: null,
+  channelLoading: {},
+  channelError: {},
   settings: null,
   agent: initialAgent,
   pushEnabled: false,
@@ -103,6 +108,8 @@ export function applySnapshot(s: Snapshot) {
       pages: s.pages ?? [],
       channels,
       channelId,
+      channelLoading: {},
+      channelError: {},
       settings: s.settings,
       agent: s.agent,
       pushEnabled: s.push_enabled,
@@ -185,10 +192,12 @@ export function applyEvent(ev: ServerEvent) {
       setState((s) => ({ pages: s.pages.filter((p) => p.id !== ev.id) }));
       break;
     case 'channel': {
-      // A new or renamed channel joins the strip, but general stays first: the
-      // server orders snapshots that way, and a live event must not dethrone it.
+      // A new channel joins the strip; an edited channel updates in place; general always stays first.
       setState((s) => {
-        const list = [ev.channel, ...s.channels.filter((c) => c.id !== ev.channel.id)];
+        const exists = s.channels.some((c) => c.id === ev.channel.id);
+        const list = exists
+          ? s.channels.map((c) => (c.id === ev.channel.id ? ev.channel : c))
+          : [ev.channel, ...s.channels];
         const general = list.find((c) => c.slug === 'general');
         const rest = list.filter((c) => c.slug !== 'general');
         return { channels: general ? [general, ...rest] : list, channelId: s.channelId ?? ev.channel.id };

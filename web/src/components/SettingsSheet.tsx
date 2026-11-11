@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { Connector, Settings } from '../../../shared/types';
 import { api, enablePush, isStandalone, pushSupported } from '../api';
 import { useStore } from '../store';
-import { useDialogTrap } from '../hooks/useDialogTrap';
+import { isTopDialog, useDialogTrap } from '../hooks/useDialogTrap';
 import { Icon } from '../ui';
 import { ConnectorsSheet } from './ConnectorsSheet';
 import { MemorySheet } from './MemorySheet';
@@ -15,6 +15,9 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
   const agent = useStore((s) => s.agent);
   const channels = useStore((s) => s.channels);
   const [pushMsg, setPushMsg] = useState<string | null>(null);
+  const [pushBusy, setPushBusy] = useState(false);
+  const [saveErr, setSaveErr] = useState<string | null>(null);
+  const [maxPushes, setMaxPushes] = useState(() => String(settings?.max_pushes_per_day ?? 0));
   const [briefMsg, setBriefMsg] = useState<string | null>(null);
   const [connectors, setConnectors] = useState<Connector[] | null>(null);
   const [testing, setTesting] = useState<string | null>(null);
@@ -30,16 +33,22 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
   useDialogTrap(dialog);
 
   useEffect(() => {
+    if (settings) setMaxPushes(String(settings.max_pushes_per_day ?? 0));
+  }, [settings?.max_pushes_per_day]);
+
+  useEffect(() => {
     // Escape closes the routines, connectors or memory sheet first when one is open on top of this one.
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || routinesOpen || showConnectors || memoryOpen) return;
+      if (e.key !== 'Escape' || routinesOpen || showConnectors || memoryOpen || !isTopDialog(dialog.current)) return;
+      e.preventDefault();
+      e.stopPropagation();
       onClose();
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
   }, [onClose, routinesOpen, showConnectors, memoryOpen]);
 
-  // Probes run AppleScript, so they load when the sheet opens rather than with every snapshot.
+  // Probes run local checks on the host, so they load when the sheet opens rather than with every snapshot.
   useEffect(() => {
     api
       .connectors()
@@ -50,7 +59,37 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
   }, []);
 
   if (!settings) return null;
-  const save = (patch: Partial<Settings>) => api.saveSettings(patch).catch(() => {});
+  const save = (patch: Partial<Settings>) => {
+    setSaveErr(null);
+    return api.saveSettings(patch).catch((e: any) => {
+      setSaveErr(e?.message ?? 'Could not save settings.');
+    });
+  };
+
+  function commitMaxPushes() {
+    const trimmed = maxPushes.trim();
+    const parsed = trimmed === '' ? 0 : Math.trunc(Number(trimmed));
+    if (!Number.isFinite(parsed)) {
+      setMaxPushes(String(settings?.max_pushes_per_day ?? 0));
+      return;
+    }
+    const clamped = Math.max(0, Math.min(100, parsed));
+    setMaxPushes(String(clamped));
+    if (clamped !== (settings?.max_pushes_per_day ?? 0)) void save({ max_pushes_per_day: clamped });
+  }
+
+  async function onTestPush() {
+    setPushBusy(true);
+    setPushMsg(null);
+    try {
+      const r = await api.testPush();
+      setPushMsg(r.sent ? 'Sent a test.' : 'No devices subscribed.');
+    } catch (e: any) {
+      setPushMsg(e?.message ?? 'Could not send a test notification.');
+    } finally {
+      setPushBusy(false);
+    }
+  }
 
   async function testConnector(id: string) {
     setTesting(id);
@@ -66,13 +105,22 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
   }
 
   async function onPush() {
+    if (pushBusy) return;
     if (!pushSupported()) {
       setPushMsg(isStandalone() ? 'This browser does not support push.' : 'On iPhone: Share → Add to Home Screen, then open Hermes Duet from there.');
       return;
     }
-    const r = await enablePush().catch((e) => (setPushMsg(e.message), null));
-    if (r === 'denied') setPushMsg('Notifications are blocked. Allow them in Settings → Notifications → Hermes Duet.');
-    if (r === 'ok') setPushMsg('Notifications on.');
+    setPushBusy(true);
+    setPushMsg(null);
+    try {
+      const r = await enablePush();
+      if (r === 'denied') setPushMsg('Notifications are blocked. Allow them in Settings → Notifications → Hermes Duet.');
+      if (r === 'ok') setPushMsg('Notifications on.');
+    } catch (e: any) {
+      setPushMsg(e?.message ?? 'Could not turn on notifications.');
+    } finally {
+      setPushBusy(false);
+    }
   }
 
   return (
@@ -86,30 +134,35 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
             <Icon.close size={20} />
           </button>
         </header>
+        {saveErr && (
+          <p className="sheet-error" role="alert">
+            {saveErr}
+          </p>
+        )}
         <div className="settings-body">
           <section>
             <h3>Notifications</h3>
             <div className="setting-row">
               <span>{pushEnabled ? 'On for this device' : 'Off for this device'}</span>
               {pushEnabled ? (
-                <button className="btn btn-ghost small" onClick={() => api.testPush().then((r) => setPushMsg(r.sent ? 'Sent a test.' : 'No devices subscribed.'))}>
-                  Send test
+                <button className="btn btn-ghost small" disabled={pushBusy} onClick={onTestPush}>
+                  {pushBusy ? 'Sending…' : 'Send test'}
                 </button>
               ) : (
-                <button className="btn btn-primary small" onClick={onPush}>
-                  Turn on
+                <button className="btn btn-primary small" disabled={pushBusy} onClick={onPush}>
+                  {pushBusy ? 'Turning on…' : 'Turn on'}
                 </button>
               )}
             </div>
             {pushMsg && <p className="muted small">{pushMsg}</p>}
-            <div className="setting-row">
+            <label className="setting-row">
               <span>Task pushes</span>
-              <select value={settings.notify_tasks ?? 'all'} onChange={(e) => save({ notify_tasks: e.target.value as Settings['notify_tasks'] })}>
+              <select aria-label="Task pushes" value={settings.notify_tasks ?? 'all'} onChange={(e) => save({ notify_tasks: e.target.value as Settings['notify_tasks'] })}>
                 <option value="all">Every finish</option>
                 <option value="failures">Failures only</option>
                 <option value="off">Off</option>
               </select>
-            </div>
+            </label>
             <label className="setting-row">
               <span>Agent notifications</span>
               <input type="checkbox" className="switch" checked={settings.notify_agent ?? true} onChange={(e) => save({ notify_agent: e.target.checked })} />
@@ -120,10 +173,14 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
                 type="number"
                 min={0}
                 max={100}
-                value={settings.max_pushes_per_day ?? 0}
-                onChange={(e) => {
-                  const v = e.target.valueAsNumber;
-                  if (Number.isFinite(v)) save({ max_pushes_per_day: Math.trunc(v) });
+                value={maxPushes}
+                onChange={(e) => setMaxPushes(e.target.value)}
+                onBlur={commitMaxPushes}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    commitMaxPushes();
+                  }
                 }}
               />
             </label>
@@ -187,14 +244,14 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
                 </button>
               ))}
             </div>
-            <label className="setting-row">
+            <div className="setting-row" role="group" aria-label="Quiet hours">
               <span>Quiet from</span>
               <span className="time-pair">
-                <input type="time" value={settings.quiet_start} onChange={(e) => save({ quiet_start: e.target.value })} />
+                <input type="time" aria-label="Quiet from" value={settings.quiet_start} onChange={(e) => save({ quiet_start: e.target.value })} />
                 <span className="muted">to</span>
-                <input type="time" value={settings.quiet_end} onChange={(e) => save({ quiet_end: e.target.value })} />
+                <input type="time" aria-label="Quiet to" value={settings.quiet_end} onChange={(e) => save({ quiet_end: e.target.value })} />
               </span>
-            </label>
+            </div>
           </section>
 
           <section>
@@ -216,7 +273,7 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
                 Open
               </button>
             </div>
-            <p className="muted small">Native apps on this Mac. Nothing leaves it: each one is a local CLI or AppleScript.</p>
+            <p className="muted small">Local tools and apps on this computer. Nothing leaves it: each one runs locally via a CLI or system bridge.</p>
             {connErr && <p className="card-error">{connErr}</p>}
             {!connectors && !connErr && <p className="muted small">Checking…</p>}
             <ul className="connector-list">

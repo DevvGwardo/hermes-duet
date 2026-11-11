@@ -45,6 +45,9 @@ export function useAudioRecorder(): AudioRecorder {
   const ticker = useRef<ReturnType<typeof setInterval> | null>(null);
   const finish = useRef<((blob: Blob | null) => void) | null>(null);
   const discard = useRef(false);
+  const mounted = useRef(true);
+  const starting = useRef(false);
+  const cancelledStart = useRef(false);
 
   const teardown = useCallback(() => {
     if (ticker.current) clearInterval(ticker.current);
@@ -52,20 +55,38 @@ export function useAudioRecorder(): AudioRecorder {
     for (const t of stream.current?.getTracks() ?? []) t.stop();
     stream.current = null;
     rec.current = null;
-    setState('idle');
-    setSeconds(0);
+    if (mounted.current) {
+      setState('idle');
+      setSeconds(0);
+    }
   }, []);
 
-  useEffect(() => teardown, [teardown]);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      cancelledStart.current = true;
+      finish.current?.(null);
+      finish.current = null;
+      teardown();
+    };
+  }, [teardown]);
 
   const start = useCallback(async () => {
+    if (starting.current || rec.current || !mounted.current) return false;
     setError(null);
     if (!supported) {
       setError('Recording is not available in this browser.');
       return false;
     }
+    starting.current = true;
+    cancelledStart.current = false;
     try {
       const media = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+      if (!mounted.current || cancelledStart.current) {
+        for (const t of media.getTracks()) t.stop();
+        return false;
+      }
       const mimeType = recorderMime();
       const r = new MediaRecorder(media, mimeType ? { mimeType } : undefined);
       stream.current = media;
@@ -90,23 +111,32 @@ export function useAudioRecorder(): AudioRecorder {
       return true;
     } catch (e: any) {
       teardown();
-      setError(
-        /denied|not allowed/i.test(String(e?.name ?? e?.message))
-          ? 'Microphone access is off. Allow it in Settings → Hermes Duet → Microphone.'
-          : `Could not record: ${e?.message ?? e}`,
-      );
+      if (mounted.current) {
+        setError(
+          /denied|not allowed/i.test(String(e?.name ?? e?.message))
+            ? 'Microphone access is off. Allow it in Settings → Hermes Duet → Microphone.'
+            : `Could not record: ${e?.message ?? e}`,
+        );
+      }
       return false;
+    } finally {
+      starting.current = false;
     }
   }, [supported, teardown]);
 
   const stop = useCallback(async () => {
     const r = rec.current;
-    if (!r) return null;
+    if (!r || finish.current) return null;
+    if (r.state === 'inactive') {
+      teardown();
+      return null;
+    }
     return new Promise<Blob | null>((resolve) => {
       finish.current = resolve;
       try {
         r.stop();
       } catch {
+        finish.current = null;
         teardown();
         resolve(null);
       }
@@ -115,6 +145,7 @@ export function useAudioRecorder(): AudioRecorder {
 
   const cancel = useCallback(() => {
     discard.current = true;
+    cancelledStart.current = true;
     const r = rec.current;
     if (!r) return;
     try {

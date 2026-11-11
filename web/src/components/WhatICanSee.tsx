@@ -46,7 +46,7 @@ export function WhatICanSee({ compact = false }: { compact?: boolean }) {
   return (
     <dl className="can-see">
       <dt>Your context</dt>
-      <dd>{caps.context.length ? caps.context.join(' · ') : <span className="muted">No context file yet. Copy context.example.md to context.local.md on the Mac.</span>}</dd>
+      <dd>{caps.context.length ? caps.context.join(' · ') : <span className="muted">No context file yet. Copy context.example.md to context.local.md on this computer.</span>}</dd>
       <dt>Skills</dt>
       <dd>
         {caps.skills.total ? (

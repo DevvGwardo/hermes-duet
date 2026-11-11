@@ -1443,14 +1443,25 @@ code {
 
 /* Provenance chips: muted metadata, not calls to action. file/page/url chips
    open or link out; item/task/connector labels just sit there. */
+.sources-wrap {
+  margin-top: 8px;
+}
 .sources {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-top: 8px;
 }
 .sources .chip {
   margin-top: 0;
+}
+.source-pair {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 2px;
+}
+.source-quote-btn {
+  padding: 5px 7px;
+  font-family: var(--mono);
 }
 .chip.source {
   background: transparent;
@@ -1464,15 +1475,37 @@ code {
 a.chip.source {
   display: inline-block;
 }
-.chip.source:not(.is-label):hover {
+.chip.source:not(.is-label):hover,
+.chip.source.has-quote:hover,
+.chip.source.has-quote.on,
+.source-quote-btn:hover,
+.source-quote-btn.on {
   border-color: var(--gold);
   color: var(--gold);
-  background: rgba(255, 215, 0, 0.06);
+  background: rgba(255, 215, 0, 0.08);
 }
 .chip.source.is-label {
   cursor: default;
 }
-.watching .sources {
+.chip.source.is-label.has-quote {
+  cursor: pointer;
+}
+.source-quote {
+  margin: 8px 0 0;
+  padding: 6px 10px;
+  border-left: 2px solid var(--gold);
+  background: rgba(0, 0, 0, 0.28);
+  border-radius: 0 6px 6px 0;
+  font-size: 13px;
+  color: var(--paper-2);
+  overflow-wrap: anywhere;
+}
+.source-quote-label {
+  font-weight: 650;
+  color: var(--gold);
+  margin-right: 6px;
+}
+.watching .sources-wrap {
   margin-top: 4px;
 }
 
@@ -1631,6 +1664,9 @@ li.done .tick {
 /* ---------------------------------------------------------------- composer */
 .composer-wrap {
   padding: 8px max(12px, calc((100% - var(--col)) / 2)) 8px;
+}
+.composer-wrap[hidden] {
+  display: none;
 }
 .composer-hint {
   font: 400 11.5px var(--mono);
@@ -2050,6 +2086,14 @@ li.done .tick {
   border-bottom: 2px solid #000;
   box-shadow: 0 1px 0 var(--line);
   background: linear-gradient(180deg, #181818, var(--ink-1));
+}
+.sheet-error {
+  margin: 0;
+  padding: 8px 18px;
+  border-bottom: 1.5px solid var(--line);
+  background: rgba(255, 107, 107, 0.12);
+  color: var(--danger);
+  font-size: 13px;
 }
 .sheet-title {
   flex: 1;
@@ -2819,6 +2863,17 @@ li.done .tick {
   .top-brand .wm-sm {
     font-size: 12.5px;
   }
+  .browser-bar {
+    gap: 2px;
+    padding: 6px 4px;
+  }
+  .browser-bar .icon-btn {
+    width: 34px;
+    height: 36px;
+  }
+  .browser-url {
+    padding: 7px 8px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2959,6 +3014,9 @@ li.done .tick {
   left: 12px;
   right: 12px;
   bottom: 16px;
+  display: block;
+  width: calc(100% - 24px);
+  text-align: left;
   padding: 9px 12px;
   font-family: var(--mono);
   font-size: 11.5px;
@@ -3050,6 +3108,25 @@ li.done .tick {
   white-space: nowrap;
   color: var(--faint);
   font-size: 12px;
+}
+.channel-strip-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px 6px;
+  font-size: 12.5px;
+  color: var(--danger);
+}
+.channel-strip-error span {
+  flex: 1;
+  min-width: 0;
+}
+.channel-strip-error .link {
+  margin-top: 0;
+}
+.channel-strip-error .icon-btn {
+  width: 28px;
+  height: 28px;
 }
 .channels-sheet {
   height: auto;
@@ -3181,7 +3258,7 @@ li.done .tick {
   border: 1.5px solid var(--line-2);
   border-radius: 6px;
   padding: 10px 12px;
-  font-size: 15px;
+  font-size: 16px; /* >=16px stops iOS zoom-on-focus */
   line-height: 1.5;
   color: var(--paper);
   resize: vertical;
@@ -3727,7 +3804,7 @@ li.done .tick {
   resize: none;
   border: 0;
   padding: 14px 16px;
-  font: 14px/1.55 var(--mono);
+  font: 16px/1.55 var(--mono); /* >=16px stops iOS zoom-on-focus */
   color: var(--paper-2);
   background: rgba(0, 0, 0, 0.25);
 }

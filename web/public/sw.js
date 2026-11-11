@@ -18,7 +18,13 @@ self.addEventListener('push', (event) => {
     badge: '/badge-96.png',
     tag: data.tag || undefined,
     renotify: Boolean(data.tag),
-    data: { url: data.url || '/', card_id: data.card_id || null, ask: Boolean(data.ask), sent_at: data.sent_at || 0 },
+    data: {
+      url: data.url || '/',
+      card_id: data.card_id || null,
+      channel_id: data.channel_id || null,
+      ask: Boolean(data.ask),
+      sent_at: data.sent_at || 0,
+    },
     // Action buttons show on Android/desktop; iOS ignores them and just opens the app. An approval whose draft
     // or command is only in the card never gets Approve here: its first button opens the card instead.
     // `has_draft` is the older name of `must_read`, accepted for pushes queued before the rename.
@@ -83,25 +89,50 @@ function b64ToBytes(base64) {
 }
 
 self.addEventListener('notificationclick', (event) => {
-  const { url, card_id } = event.notification.data || {};
+  const { url, card_id, channel_id } = event.notification.data || {};
   event.notification.close();
   event.waitUntil(
     (async () => {
-      if (card_id && (event.action === 'approve' || event.action === 'decline')) {
-        await fetch(`/api/cards/${encodeURIComponent(card_id)}/act`, {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ action: event.action }),
-        }).catch(() => {});
+      let targetUrl;
+      try {
+        targetUrl = new URL(url || '/', self.location.origin);
+        if (targetUrl.origin !== self.location.origin) targetUrl = new URL('/', self.location.origin);
+      } catch {
+        targetUrl = new URL('/', self.location.origin);
+      }
+      const resolvedCard = card_id || targetUrl.searchParams.get('card') || null;
+      const resolvedChannel = channel_id || targetUrl.searchParams.get('channel') || null;
+      if (resolvedCard && !targetUrl.searchParams.has('card')) targetUrl.searchParams.set('card', resolvedCard);
+      if (resolvedChannel && !targetUrl.searchParams.has('channel')) targetUrl.searchParams.set('channel', resolvedChannel);
+      const target = targetUrl.href;
+
+      if (resolvedCard && (event.action === 'approve' || event.action === 'decline')) {
+        try {
+          const res = await fetch(`/api/cards/${encodeURIComponent(resolvedCard)}/act`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ action: event.action }),
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        } catch {
+          await self.registration.showNotification('Hermes Duet — could not send decision', {
+            body: 'Tap to open the card and try again.',
+            icon: '/icon-192.png',
+            badge: '/badge-96.png',
+            tag: `act-error-${resolvedCard}`,
+            renotify: true,
+            data: { url: target, card_id: resolvedCard, channel_id: resolvedChannel },
+          });
+        }
         return;
       }
+
       const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-      const target = new URL(url || '/', self.location.origin).href;
       for (const w of wins) {
         if ('focus' in w) {
           await w.focus();
-          w.postMessage({ type: 'open', url: target, card_id });
+          w.postMessage({ type: 'open', url: target, card_id: resolvedCard, channel_id: resolvedChannel });
           return;
         }
       }

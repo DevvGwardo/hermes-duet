@@ -5,8 +5,8 @@ import { expect, test } from 'bun:test';
 (globalThis as any).document = { addEventListener() {}, visibilityState: 'hidden' };
 (globalThis as any).window = { addEventListener() {}, matchMedia: () => ({ matches: false }) };
 
-const { api, loadOlder, loadUntil, openChannel } = await import('./api');
-const { getState, hasMoreFor, setState } = await import('./store');
+const { api, connect, loadOlder, loadUntil, openChannel } = await import('./api');
+const { channelItems, getState, hasMoreFor, setState } = await import('./store');
 
 const CHANNELS = [
   { id: 'chan-general', slug: 'general' } as any,
@@ -227,6 +227,210 @@ test('saveFileVersion posts the edited text to the version route', async () => {
     expect(JSON.parse(s.calls[0].init.body)).toEqual({ text: '# Edited' });
     expect(res.file.version_of).toBe('v1');
   } finally {
+    s.restore();
+  }
+});
+
+test('api.item and api.fileMeta hit the single-record lookup routes', async () => {
+  const s = stubFetch((url) => {
+    if (url.startsWith('/api/items/')) return ok({ item: { id: 'it-1' } });
+    return ok({ file: { id: 'f-1' } });
+  });
+  try {
+    const itemRes = await api.item('it 1');
+    const fileRes = await api.fileMeta('f/1');
+    expect(s.calls.map((c) => c.url)).toEqual(['/api/items/it%201', '/api/files/f%2F1/meta']);
+    expect(itemRes.item.id).toBe('it-1');
+    expect(fileRes.file.id).toBe('f-1');
+  } finally {
+    s.restore();
+  }
+});
+
+test('api.transcribe preserves the saved voice memo on 503 when attachment is returned', async () => {
+  const memo = { id: 'att-1', name: 'Voice memo', mime: 'audio/webm', size: 12, kind: 'audio', created_at: 1 };
+  const s = stubFetch(() => ({
+    status: 503,
+    ok: false,
+    statusText: 'Service Unavailable',
+    text: async () => '',
+    json: async () => ({ error: 'whisper missing', attachment: memo, text: '' }),
+  }));
+  try {
+    const res = await api.transcribe(new Blob(['audio'], { type: 'audio/webm' }));
+    expect(res).toEqual({ text: '', attachment: memo as any, error: 'whisper missing' });
+  } finally {
+    s.restore();
+  }
+});
+
+test('openChannel clamps seen_at to last_at for clock skew and records errors on failure', async () => {
+  const real = { channelPage: api.channelPage, seenChannel: api.seenChannel };
+  const future = Date.now() + 300_000;
+  (api as any).seenChannel = async () => ({ ok: true });
+  (api as any).channelPage = async () => {
+    throw new Error('offline');
+  };
+  try {
+    setState({
+      channelId: 'chan-general',
+      channels: [
+        { id: 'chan-general', slug: 'general' } as any,
+        { id: 'chan-taxes', slug: 'taxes', last_at: future, seen_at: 0 } as any,
+      ],
+      items: [],
+      channelLoading: {},
+      channelError: {},
+    });
+    const err = await openChannel('chan-taxes').catch((e) => e);
+    expect(err.message).toBe('offline');
+    const c = getState().channels.find((x) => x.id === 'chan-taxes')!;
+    expect(c.seen_at).toBeGreaterThanOrEqual(future);
+    expect(getState().channelLoading['chan-taxes']).toBe(false);
+    expect(getState().channelError['chan-taxes']).toBe('offline');
+  } finally {
+    (api as any).channelPage = real.channelPage;
+    (api as any).seenChannel = real.seenChannel;
+  }
+});
+
+test('loadOlder returns false immediately when channel is empty or yields no unseen items (loadUntil does not spin)', async () => {
+  const realOlder = api.older;
+  let calls = 0;
+  (api as any).older = async () => {
+    calls++;
+    // Simulate stale cursor/server keeping has_more: true while returning no new items.
+    return { items: [{ id: 'existing-1', channel_id: 'chan-taxes', created_at: 100 }], has_more: true };
+  };
+  try {
+    // 1) Empty open channel: loadOlder returns false with zero API calls, loadUntil stops immediately.
+    setState({
+      channelId: 'chan-taxes',
+      channels: CHANNELS,
+      hasMoreBy: { 'chan-taxes': true },
+      items: [],
+    });
+    expect(await loadOlder()).toBe(false);
+    await loadUntil('target', 10);
+    expect(calls).toBe(0);
+
+    // 2) No new items returned even with has_more: true -> loadUntil exits after 1 probe instead of 10.
+    setState({
+      items: [{ id: 'existing-1', channel_id: 'chan-taxes', created_at: 100 } as any],
+    });
+    await loadUntil('missing-id', 10);
+    expect(calls).toBe(1);
+  } finally {
+    (api as any).older = realOlder;
+  }
+});
+
+test('connect refetches empty active channel on reconnect and deduplicates reconnect timers', async () => {
+  const realES = (globalThis as any).EventSource;
+  const instances: any[] = [];
+  class FakeEventSource {
+    onopen: (() => void) | null = null;
+    onmessage: ((m: any) => void) | null = null;
+    onerror: (() => void) | null = null;
+    closed = false;
+    constructor(public url: string) {
+      instances.push(this);
+    }
+    close() {
+      this.closed = true;
+    }
+  }
+  (globalThis as any).EventSource = FakeEventSource;
+
+  let failSnap = true;
+  const scheduled: { fn: () => void; ms: number; cleared: boolean }[] = [];
+  const realSetTimeout = globalThis.setTimeout;
+  const realClearTimeout = globalThis.clearTimeout;
+  let nextTid = 1000;
+  const byId = new Map<number, { fn: () => void; ms: number; cleared: boolean }>();
+  (globalThis as any).setTimeout = (fn: () => void, ms: number) => {
+    const rec = { fn, ms, cleared: false };
+    const id = nextTid++;
+    scheduled.push(rec);
+    byId.set(id, rec);
+    return id;
+  };
+  (globalThis as any).clearTimeout = (id: number) => {
+    const rec = byId.get(id);
+    if (rec) rec.cleared = true;
+  };
+
+  let snapReq = 0;
+  const pageCalls: string[] = [];
+  const s = stubFetch((url) => {
+    if (url === '/api/state') {
+      snapReq++;
+      if (failSnap) {
+        return { status: 503, ok: false, statusText: 'Down', text: async () => 'down', json: async () => ({}) };
+      }
+      // Snapshot returns items only in general, leaving active channel #chan-taxes empty.
+      return ok({
+        items: [{ id: 'g-1', channel_id: 'chan-general', created_at: 10, updated_at: 10 }],
+        has_more: false,
+        pending: [],
+        tasks: [],
+        files: [],
+        pages: [],
+        channels: CHANNELS,
+        settings: { brief_enabled: true, brief_time: '07:30', checkins: 'off', quiet_start: '22:00', quiet_end: '07:00', timezone: 'UTC' },
+        agent: { busy: false, current_run: null, queued: 0, hermes: 'ok', background_running: 0 },
+        push_enabled: false,
+      });
+    }
+    if (url === '/api/channels/chan-taxes/items') {
+      pageCalls.push(url);
+      return ok({
+        items: [{ id: 'tax-older', channel_id: 'chan-taxes', created_at: 5, updated_at: 5 }],
+        has_more: true,
+      });
+    }
+    return ok({ ok: true });
+  });
+
+  try {
+    setState({ channelId: 'chan-taxes', channels: CHANNELS, items: [] });
+
+    // Trigger reconnect failure and second overlapping trigger; old pending timer should be cleared cleanly.
+    await connect();
+    expect(scheduled).toHaveLength(1);
+    expect(scheduled.filter((t) => !t.cleared)).toHaveLength(1);
+    await connect();
+    expect(scheduled).toHaveLength(2);
+    expect(scheduled[0].cleared).toBe(true);
+    expect(scheduled.filter((t) => !t.cleared)).toHaveLength(1);
+
+    // Succeed snapshot while active channel is chan-taxes (not in global snapshot) -> must fetch channelPage.
+    failSnap = false;
+    await connect();
+    expect(snapReq).toBe(3);
+    expect(pageCalls).toEqual(['/api/channels/chan-taxes/items']);
+    expect(channelItems(getState()).map((i) => i.id)).toEqual(['tax-older']);
+    expect(getState().hasMoreBy['chan-taxes']).toBe(true);
+    // Reconnect timer should be cleared by connect() entry/open and EventSource opened cleanly.
+    expect(scheduled.every((t) => t.cleared)).toBe(true);
+    expect(instances).toHaveLength(1);
+    instances[0].onopen?.();
+    expect(getState().connected).toBe(true);
+
+    // Stream error schedules exactly one reconnect timer even if onerror fires twice, and next connect clears it.
+    instances[0].onerror?.();
+    instances[0].onerror?.();
+    expect(scheduled).toHaveLength(3);
+    expect(scheduled.filter((t) => !t.cleared)).toHaveLength(1);
+    await connect();
+    expect(scheduled.every((t) => t.cleared)).toBe(true);
+    instances[1].onopen?.();
+    expect(getState().connected).toBe(true);
+  } finally {
+    for (const esInst of instances) esInst.close();
+    (globalThis as any).EventSource = realES;
+    (globalThis as any).setTimeout = realSetTimeout;
+    (globalThis as any).clearTimeout = realClearTimeout;
     s.restore();
   }
 });

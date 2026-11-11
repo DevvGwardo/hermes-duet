@@ -1,16 +1,29 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Task } from '../../../shared/types';
+import type { Item, Task } from '../../../shared/types';
 import { api } from '../api';
-import { useDialogTrap } from '../hooks/useDialogTrap';
+import { visibleFiles } from '../edit';
+import { isTopDialog, useDialogTrap } from '../hooks/useDialogTrap';
 import { STATUS_LABEL } from '../labels';
 import { useStore } from '../store';
 import { Icon, Markdown, relLabel, timeLabel } from '../ui';
-import { FileRow } from './CardView';
+import { FileRow, SourceChips } from './CardView';
 
-export function TasksView({ onJump, onOpenFile }: { onJump: (itemId: string) => void; onOpenFile: (id: string) => void }) {
+export function TasksView({
+  onJump,
+  onOpenFile,
+  openTaskId,
+  onOpenTask,
+}: {
+  onJump: (itemId: string) => void;
+  onOpenFile: (id: string) => void;
+  openTaskId?: string | null;
+  onOpenTask?: (id: string | null) => void;
+}) {
   const tasks = useStore((s) => s.tasks);
   const pendingCards = useStore((s) => s.pending);
-  const [openId, setOpenId] = useState<string | null>(null);
+  const [localOpenId, setLocalOpenId] = useState<string | null>(null);
+  const openId = onOpenTask ? (openTaskId ?? null) : localOpenId;
+  const setOpenId = onOpenTask ?? setLocalOpenId;
   const openTask = tasks.find((t) => t.id === openId) ?? null;
 
   const active = tasks.filter((t) => t.status === 'running' || t.status === 'queued');
@@ -99,21 +112,55 @@ function TaskSheet({ task, onClose, onOpenFile }: { task: Task; onClose: () => v
   const dialog = useRef<HTMLDivElement | null>(null);
   useDialogTrap(dialog);
   const files = useStore((s) => s.files);
-  const handover = useStore((s) => s.items.find((i) => i.id === task.handover_id));
-  const own = files.filter((f) => f.task_id === task.id);
+  const storeHandover = useStore((s) => s.items.find((i) => i.id === task.handover_id));
+  const [fetchedHandover, setFetchedHandover] = useState<Item | null>(null);
+  const [handoverErr, setHandoverErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [sent, setSent] = useState<Record<number, boolean>>({});
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    setSent({});
+    setErr(null);
+    setBusy(null);
+  }, [task.id]);
+
+  useEffect(() => {
+    setFetchedHandover(null);
+    setHandoverErr(null);
+    if (storeHandover || !task.handover_id) return;
+    let live = true;
+    api
+      .item(task.handover_id)
+      .then(
+        (r) => live && setFetchedHandover(r.item),
+        (e: any) => live && setHandoverErr(e?.message ?? 'Could not load handover card.'),
+      );
+    return () => {
+      live = false;
+    };
+  }, [task.handover_id, !!storeHandover]);
+  const handover = storeHandover ?? (fetchedHandover?.id === task.handover_id ? fetchedHandover : undefined);
+  const own = visibleFiles(files.filter((f) => f.task_id === task.id));
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || !isTopDialog(dialog.current)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      onClose();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
   }, [onClose]);
 
   const done = task.steps.filter((s) => s.done).length;
   const live = task.status === 'running' || task.status === 'waiting';
   const confirmed = !!task.confirmed_at;
+  const canRetry =
+    task.status === 'failed' &&
+    !!task.handover_id &&
+    (handover ? !!handover.card?.retry && !handover.card?.decision : !!task.instructions);
 
   async function run(label: string, fn: () => Promise<unknown>) {
     setBusy(label);
@@ -127,11 +174,21 @@ function TaskSheet({ task, onClose, onOpenFile }: { task: Task; onClose: () => v
     }
   }
 
-  async function followUp(i: number) {
+  async function retryTask() {
     if (!task.handover_id) return;
+    await run('retry', async () => {
+      const res = await api.act(task.handover_id!, 'retry');
+      if (res?.item) setFetchedHandover(res.item);
+    });
+  }
+
+  async function followUp(i: number) {
+    if (!task.handover_id || sent[i] || !!busy) return;
     setSent((s) => ({ ...s, [i]: true }));
+    setErr(null);
     try {
-      await api.act(task.handover_id, 'follow_up', String(i));
+      const res = await api.act(task.handover_id, 'follow_up', String(i));
+      if (res?.item) setFetchedHandover(res.item);
     } catch (e: any) {
       setSent((s) => ({ ...s, [i]: false }));
       setErr(e?.message ?? 'That did not go through.');
@@ -193,14 +250,7 @@ function TaskSheet({ task, onClose, onOpenFile }: { task: Task; onClose: () => v
           {task.sources?.length ? (
             <section aria-label="Sources">
               <h3 className="section-title">Sources</h3>
-              <ul className="task-sources">
-                {task.sources.map((s, i) => (
-                  <li key={i}>
-                    <span className="task-source-label">{s.label}</span>
-                    {s.quote && <span className="task-source-quote">“{s.quote}”</span>}
-                  </li>
-                ))}
-              </ul>
+              <SourceChips sources={task.sources} onOpenFile={onOpenFile} />
             </section>
           ) : null}
 
@@ -210,11 +260,14 @@ function TaskSheet({ task, onClose, onOpenFile }: { task: Task; onClose: () => v
 
           {task.follow_ups?.length && task.handover_id ? (
             <div className="follow-ups">
-              {task.follow_ups.map((f, i) => (
-                <button key={i} className="chip" disabled={sent[i] || handover?.card?.follow_ups?.[i]?.used} onClick={() => followUp(i)}>
-                  {sent[i] || handover?.card?.follow_ups?.[i]?.used ? 'On it' : f.label}
-                </button>
-              ))}
+              {task.follow_ups.map((f, i) => {
+                const used = sent[i] || handover?.card?.follow_ups?.[i]?.used || f.used;
+                return (
+                  <button key={i} className="chip" disabled={!!busy || used} onClick={() => followUp(i)}>
+                    {used ? 'On it' : f.label}
+                  </button>
+                );
+              })}
             </div>
           ) : null}
 
@@ -224,12 +277,21 @@ function TaskSheet({ task, onClose, onOpenFile }: { task: Task; onClose: () => v
                 {busy === 'cancel' ? 'Stopping…' : task.background ? 'Cancel task' : 'Stop'}
               </button>
             )}
-            {task.status === 'failed' && handover?.card?.retry && !handover.card.decision && (
-              <button className="btn btn-ghost small" disabled={!!busy} onClick={() => run('retry', () => api.act(handover.id, 'retry'))}>
+            {canRetry && (
+              <button className="btn btn-ghost small" disabled={!!busy} onClick={retryTask}>
                 {busy === 'retry' ? 'Starting…' : 'Try again'}
               </button>
             )}
           </div>
+          {task.status === 'failed' && handover?.card?.decision && (
+            <p className="muted small">
+              {handover.card.decision}
+              {handover.card.decided_at ? ` · ${timeLabel(handover.card.decided_at)}` : ''}
+            </p>
+          )}
+          {handoverErr && !handover && !canRetry && task.status === 'failed' && (
+            <p className="muted small">{handoverErr}</p>
+          )}
           {err && (
             <p className="card-error" role="alert">
               {err}
@@ -287,7 +349,7 @@ function TaskComposer({ taskId }: { taskId: string }) {
           rows={1}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
+            if (e.key === 'Enter' && !e.shiftKey && !(e.nativeEvent as any).isComposing) {
               e.preventDefault();
               void send();
             }

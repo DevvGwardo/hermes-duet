@@ -1,6 +1,6 @@
 import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Item } from '../../../shared/types';
-import { loadOlder, loadUntil } from '../api';
+import { loadOlder, loadUntil, openChannel } from '../api';
 import { useStore } from '../store';
 import { Icon, Markdown, dayLabel, timeLabel } from '../ui';
 import { Attachments } from './Attachments';
@@ -36,6 +36,8 @@ export function Thread({
   // useSyncExternalStore compares snapshots by identity, so the filter runs here rather than inside the selector.
   const items = useMemo(() => (channelId ? all.filter((i) => (i.channel_id ?? generalId) === channelId) : all), [all, channelId, generalId]);
   const hasMore = useStore((s) => s.hasMoreBy[s.channelId ?? ''] ?? false);
+  const channelLoading = useStore((s) => (s.channelId ? !!s.channelLoading[s.channelId] : false));
+  const channelError = useStore((s) => (s.channelId ? s.channelError[s.channelId] ?? null : null));
   // What changed at the tail of the thread, said out loud once per change.
   const newest = items[items.length - 1];
   const [announce, setAnnounce] = useState('');
@@ -47,6 +49,7 @@ export function Thread({
     else if (newest.kind === 'system' && newest.text) setAnnounce(newest.text);
   }, [newest?.id, newest?.kind, newest?.card?.status, newest?.text]);
   const ref = useRef<HTMLDivElement>(null);
+  const channelRef = useRef(channelId);
   const stick = useRef(true);
   const [loading, setLoading] = useState(false);
   const lastLen = useRef(0);
@@ -54,6 +57,20 @@ export function Thread({
   // Scrolled up: offer a way back down, and count what arrived meanwhile.
   const [away, setAway] = useState(false);
   const [unseen, setUnseen] = useState(0);
+
+  // Reset scroll/unseen tracking when switching channels so another thread's scroll position doesn't leak across.
+  // Declared before the `[items]` layout effect so refs update before the append/scroll check runs.
+  useLayoutEffect(() => {
+    channelRef.current = channelId;
+    stick.current = true;
+    lastLen.current = items.length;
+    lastId.current = items[items.length - 1]?.id;
+    setAway(false);
+    setUnseen(0);
+    setAnnounce('');
+    if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [channelId]);
 
   // Follow the bottom while the user is already there (new items and streaming text).
   useLayoutEffect(() => {
@@ -113,23 +130,48 @@ export function Thread({
   }
 
   async function older() {
-    const el = ref.current!;
+    const el = ref.current;
+    if (!el) return;
+    const startedChannel = channelRef.current;
     const prevHeight = el.scrollHeight;
     setLoading(true);
     try {
       await loadOlder();
     } finally {
       setLoading(false);
-      // Compensate only for height that actually arrived. A failed page adds nothing, and the old arithmetic then set
-      // scrollTop to 0 — the reader was thrown to the top of the thread for tapping "Earlier messages" offline.
+      // Compensate only for height that actually arrived, and only if the reader is still on the same channel.
       requestAnimationFrame(() => {
-        const added = el.scrollHeight - prevHeight;
-        if (added > 0) el.scrollTop = added;
+        if (channelRef.current !== startedChannel || !ref.current) return;
+        const added = ref.current.scrollHeight - prevHeight;
+        if (added > 0) ref.current.scrollTop = added;
       });
     }
   }
 
   if (!items.length) {
+    if (channelLoading) {
+      return (
+        <div className="thread empty" ref={ref}>
+          <div className="empty-state">
+            <p className="muted pad">Loading messages…</p>
+          </div>
+        </div>
+      );
+    }
+    if (channelError && channelId) {
+      return (
+        <div className="thread empty" ref={ref}>
+          <div className="empty-state">
+            <p className="card-error pad" role="alert">
+              Couldn’t load this channel: {channelError}
+            </p>
+            <button className="btn btn-ghost small" onClick={() => openChannel(channelId, true).catch(() => {})}>
+              Retry
+            </button>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="thread empty" ref={ref}>
         <div className="empty-state">

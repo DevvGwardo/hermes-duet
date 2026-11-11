@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { shelf } from '../../../shared/shelf';
 import type { FileEntry, Page, Task } from '../../../shared/types';
 import { api } from '../api';
-import { visibleFiles } from '../edit';
+import { previousPageVersion, visibleFiles } from '../edit';
 import { useStore } from '../store';
 import { Icon, bytesLabel, dayLabel, fileIcon, relLabel, timeLabel } from '../ui';
 
@@ -20,10 +20,6 @@ export function MakeView({ onStart, onOpenFile, onCompare }: { onStart: (prompt:
   // A file the user edited is replaced by its newest version, so the list shows the edit once. `shelf` still
   // decides which standing-page version is current; this only hides a file its own edit superseded.
   const shown = visibleFiles(shelf(files, pages.map((p) => p.id)));
-  // Every delivered version of a page stays in the files list; the newest one is current, the one before it is what
-  // "Compare" slides against.
-  const versionsOf = (page: Page) =>
-    files.filter((f) => f.page_id === page.id).sort((a, b) => b.created_at - a.created_at);
   return (
     <div className="pane make-pane">
       {pages.length > 0 && (
@@ -31,7 +27,7 @@ export function MakeView({ onStart, onOpenFile, onCompare }: { onStart: (prompt:
           <h2 className="section-title">Every morning</h2>
           <ul className="list">
             {pages.map((p) => {
-              const previous = versionsOf(p).find((f) => f.id !== p.file_id);
+              const previous = previousPageVersion(files, p);
               return (
                 <li key={p.id}>
                   <PageRow

@@ -29,7 +29,7 @@ class Boundary extends Component<{ children: ReactNode }, { failed: boolean }> {
     return (
       <div className="crash" role="alert">
         <h1>That screen didn’t load.</h1>
-        <p>Nothing is lost: the thread, your tasks and your files all live on the Mac. Reloading or trying again is safe.</p>
+        <p>Nothing is lost: the thread, your tasks and your files all live on the host. Reloading or trying again is safe.</p>
         <div className="crash-actions">
           <button className="btn btn-primary" onClick={() => this.setState({ failed: false })}>
             Try again

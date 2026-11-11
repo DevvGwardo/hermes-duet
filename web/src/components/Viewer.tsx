@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
+import type { FileEntry } from '../../../shared/types';
 import { api } from '../api';
 import { isEditableMime } from '../edit';
 import { applyEvent, useStore } from '../store';
-import { useDialogTrap } from '../hooks/useDialogTrap';
+import { isTopDialog, useDialogTrap } from '../hooks/useDialogTrap';
 import { Icon, Markdown, bytesLabel } from '../ui';
 
 /**
@@ -25,9 +26,13 @@ export function Viewer({ fileId, compareId, onClose }: { fileId: string; compare
     setEditing(false);
     setDraft('');
     setEditErr(null);
+    setNote(null);
     setShowPreview(false);
   }, [fileId]);
-  const file = useStore((s) => s.files.find((f) => f.id === currentId));
+  const storeFile = useStore((s) => s.files.find((f) => f.id === currentId));
+  const [fetchedFile, setFetchedFile] = useState<FileEntry | null>(null);
+  const [metaState, setMetaState] = useState<'idle' | 'loading' | 'missing' | 'error'>('idle');
+  const file = storeFile ?? (fetchedFile?.id === currentId ? fetchedFile : undefined);
   const older = useStore((s) => s.files.find((f) => f.id === compareId));
   const [text, setText] = useState<string | null>(null);
   const [olderText, setOlderText] = useState<string | null>(null);
@@ -39,6 +44,7 @@ export function Viewer({ fileId, compareId, onClose }: { fileId: string; compare
   const [editErr, setEditErr] = useState<string | null>(null);
   const [showPreview, setShowPreview] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
+  const [svgPreviewUrl, setSvgPreviewUrl] = useState<string | null>(null);
   const frame = useRef<HTMLIFrameElement | null>(null);
   const dialog = useRef<HTMLDivElement | null>(null);
   useDialogTrap(dialog);
@@ -59,33 +65,95 @@ export function Viewer({ fileId, compareId, onClose }: { fileId: string; compare
           : file.mime.startsWith('text/') || /json|csv/.test(file.mime)
             ? 'text'
             : 'download';
+  const dirty = editing && draft !== (text ?? '');
+
+  // Fall back to GET /api/files/:id/meta when opening a file outside the newest 200 snapshot files.
+  useEffect(() => {
+    if (storeFile) {
+      setFetchedFile(null);
+      setMetaState('idle');
+      return;
+    }
+    const ctrl = new AbortController();
+    setFetchedFile(null);
+    setMetaState('loading');
+    api
+      .fileMeta(currentId)
+      .then((res) => {
+        if (ctrl.signal.aborted) return;
+        setFetchedFile(res.file);
+        setMetaState('idle');
+      })
+      .catch((e: any) => {
+        if (ctrl.signal.aborted) return;
+        setMetaState(e?.status === 404 ? 'missing' : 'error');
+      });
+    return () => ctrl.abort();
+  }, [currentId, storeFile]);
 
   useEffect(() => {
     if (!editable) return;
+    const ctrl = new AbortController();
     setText(null);
     setLoadFailed(false);
-    fetch(sourceUrl, { credentials: 'include' })
-      .then((r) => r.text())
-      .then(setText)
+    fetch(sourceUrl, { credentials: 'include', signal: ctrl.signal })
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.text();
+      })
+      .then((t) => {
+        if (!ctrl.signal.aborted) setText(t);
+      })
       .catch(() => {
+        if (ctrl.signal.aborted) return;
         setLoadFailed(true);
         setText('Could not load this file.');
       });
+    return () => ctrl.abort();
   }, [sourceUrl, editable]);
 
   useEffect(() => {
-    if (!compareId) return;
-    fetch(`/api/files/${encodeURIComponent(compareId)}`, { credentials: 'include' })
-      .then((r) => r.text())
-      .then(setOlderText)
-      .catch(() => setOlderText('Could not load the previous version.'));
+    if (!compareId) {
+      setOlderText(null);
+      return;
+    }
+    const ctrl = new AbortController();
+    setOlderText(null);
+    fetch(`/api/files/${encodeURIComponent(compareId)}`, { credentials: 'include', signal: ctrl.signal })
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.text();
+      })
+      .then((t) => {
+        if (!ctrl.signal.aborted) setOlderText(t);
+      })
+      .catch(() => {
+        if (!ctrl.signal.aborted) setOlderText('Could not load the previous version.');
+      });
+    return () => ctrl.abort();
   }, [compareId]);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+    if (!editing || !isSvg || !showPreview) {
+      setSvgPreviewUrl(null);
+      return;
+    }
+    const url = URL.createObjectURL(new Blob([draft], { type: 'image/svg+xml' }));
+    setSvgPreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [draft, editing, isSvg, showPreview]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || !isTopDialog(dialog.current)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (dirty && !window.confirm('Discard unsaved edits?')) return;
+      onClose();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [onClose, dirty]);
 
   // A dashboard's buttons: only messages from *this* frame count, and only the two shapes the bridge sends.
   useEffect(() => {
@@ -112,10 +180,13 @@ export function Viewer({ fileId, compareId, onClose }: { fileId: string; compare
   }, [currentId]);
 
   function print() {
-    try {
-      frame.current?.contentWindow?.print();
-      return;
-    } catch {}
+    const win = frame.current?.contentWindow;
+    if (win) {
+      try {
+        win.print();
+        return;
+      } catch {}
+    }
     window.open(src, '_blank', 'noopener');
   }
 
@@ -128,6 +199,15 @@ export function Viewer({ fileId, compareId, onClose }: { fileId: string; compare
     }
   }
 
+  function confirmDiscard(): boolean {
+    return !dirty || window.confirm('Discard unsaved edits?');
+  }
+
+  function attemptClose() {
+    if (!confirmDiscard()) return;
+    onClose();
+  }
+
   function startEdit() {
     setDraft(text ?? '');
     setEditErr(null);
@@ -136,6 +216,7 @@ export function Viewer({ fileId, compareId, onClose }: { fileId: string; compare
   }
 
   function cancelEdit() {
+    if (!confirmDiscard()) return;
     setEditing(false);
     setDraft('');
     setEditErr(null);
@@ -163,7 +244,7 @@ export function Viewer({ fileId, compareId, onClose }: { fileId: string; compare
   const canCopy = !editing && (kind === 'markdown' || kind === 'text') && text !== null;
 
   return (
-    <div className="sheet-backdrop" onClick={onClose}>
+    <div className="sheet-backdrop" onClick={attemptClose}>
       <div ref={dialog} className="sheet viewer" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={`${file?.title ?? 'File'} viewer`}>
         <header className="sheet-head">
           <div className="sheet-title">
@@ -192,10 +273,12 @@ export function Viewer({ fileId, compareId, onClose }: { fileId: string; compare
               Copy
             </button>
           )}
-          <a className="btn btn-ghost small" href={`${src}?download=1`}>
-            Download
-          </a>
-          <button className="icon-btn" onClick={onClose} aria-label="Close">
+          {metaState !== 'missing' && (
+            <a className="btn btn-ghost small" href={`${src}?download=1`}>
+              Download
+            </a>
+          )}
+          <button className="icon-btn" onClick={attemptClose} aria-label="Close">
             <Icon.close size={20} />
           </button>
         </header>
@@ -204,7 +287,17 @@ export function Viewer({ fileId, compareId, onClose }: { fileId: string; compare
             {note}
           </div>
         )}
-        {editing ? (
+        {kind === 'none' ? (
+          <div className="viewer-body">
+            <p className="muted pad">
+              {metaState === 'loading'
+                ? 'Loading file…'
+                : metaState === 'missing'
+                  ? 'This file is no longer on the server.'
+                  : 'Could not load file details. You can still try Download.'}
+            </p>
+          </div>
+        ) : editing ? (
           <div className="viewer-edit">
             {isHtml || isSvg ? (
               <div className="viewer-edit-toggle" role="tablist" aria-label="Editor view">
@@ -220,12 +313,12 @@ export function Viewer({ fileId, compareId, onClose }: { fileId: string; compare
               showPreview ? (
                 isHtml ? (
                   <iframe
-                    src={src}
+                    srcDoc={draft}
                     title={`${file?.title ?? 'File'} preview`}
                     sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-downloads allow-modals"
                   />
                 ) : (
-                  <img src={src} alt={file?.title ?? 'File preview'} />
+                  svgPreviewUrl && <img src={svgPreviewUrl} alt={file?.title ?? 'File preview'} />
                 )
               ) : (
                 <textarea value={draft} onChange={(e) => setDraft(e.target.value)} spellCheck={false} aria-label="File source" />
@@ -250,7 +343,12 @@ export function Viewer({ fileId, compareId, onClose }: { fileId: string; compare
             <div className="compare-stage">
               <div className="compare-pane">
                 {kind === 'frame' ? (
-                  <iframe src={src} title={file?.title ?? 'Current version'} sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-downloads allow-modals" />
+                  <iframe
+                    ref={frame}
+                    src={src}
+                    title={file?.title ?? 'Current version'}
+                    sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-downloads allow-modals"
+                  />
                 ) : kind === 'markdown' ? (
                   text !== null && <Markdown text={text} className="doc" />
                 ) : (
@@ -291,8 +389,8 @@ export function Viewer({ fileId, compareId, onClose }: { fileId: string; compare
                 sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-downloads allow-modals"
               />
             )}
-            {kind === 'markdown' && text !== null && <Markdown text={text} className="doc" />}
-            {kind === 'text' && text !== null && <pre className="doc-pre">{text}</pre>}
+            {kind === 'markdown' && (loadFailed ? <p className="card-error pad">{text}</p> : text !== null ? <Markdown text={text} className="doc" /> : <p className="muted pad">Loading…</p>)}
+            {kind === 'text' && (loadFailed ? <p className="card-error pad">{text}</p> : text !== null ? <pre className="doc-pre">{text}</pre> : <p className="muted pad">Loading…</p>)}
             {kind === 'download' && <p className="muted pad">No preview for this type. Use Download.</p>}
           </div>
         )}

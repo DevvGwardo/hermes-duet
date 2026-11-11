@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Channel, SearchHit } from '../../../shared/types';
 import { openChannel, api } from '../api';
-import { setChannel, useStore } from '../store';
-import { useDialogTrap } from '../hooks/useDialogTrap';
+import { useStore } from '../store';
+import { isTopDialog, useDialogTrap } from '../hooks/useDialogTrap';
 import { Icon } from '../ui';
 
 /** True when the channel has activity the user has not opened yet. The open channel never shows one. */
@@ -17,30 +17,58 @@ export function isUnread(c: Channel, active: string | null): boolean {
 export function ChannelsStrip({ onSearch, onManage }: { onSearch: () => void; onManage: () => void }) {
   const channels = useStore((s) => s.channels);
   const active = useStore((s) => s.channelId);
+  const [err, setErr] = useState<{ id: string; message: string } | null>(null);
+
+  useEffect(() => {
+    setErr(null);
+  }, [active]);
+
+  async function select(id: string) {
+    setErr(null);
+    try {
+      await openChannel(id);
+    } catch (e: any) {
+      setErr({ id, message: e?.message ?? 'Could not open that channel.' });
+    }
+  }
+
   return (
-    <nav className="channels" aria-label="Channels">
-      <div className="channels-scroll">
-        {channels.map((c) => (
-          <button
-            key={c.id}
-            className={`channel-pill ${active === c.id ? 'on' : ''}`}
-            onClick={() => openChannel(c.id).catch(() => {})}
-            aria-current={active === c.id}
-            title={c.topic ?? c.name}
-          >
-            <Icon.hash size={13} />
-            {c.slug}
-            {isUnread(c, active) && <span className="unread-dot" aria-label="Unread" />}
+    <>
+      <nav className="channels" aria-label="Channels">
+        <div className="channels-scroll">
+          {channels.map((c) => (
+            <button
+              key={c.id}
+              className={`channel-pill ${active === c.id ? 'on' : ''}`}
+              onClick={() => void select(c.id)}
+              aria-current={active === c.id}
+              title={c.topic ?? c.name}
+            >
+              <Icon.hash size={13} />
+              {c.slug}
+              {isUnread(c, active) && <span className="unread-dot" aria-label="Unread" />}
+            </button>
+          ))}
+          <button className="channel-pill add" onClick={onManage} aria-label="New channel or manage channels">
+            <Icon.plus size={15} />
           </button>
-        ))}
-        <button className="channel-pill add" onClick={onManage} aria-label="New channel or manage channels">
-          <Icon.plus size={15} />
+        </div>
+        <button className="icon-btn channel-search" onClick={onSearch} aria-label="Search everything">
+          <Icon.search size={18} />
         </button>
-      </div>
-      <button className="icon-btn channel-search" onClick={onSearch} aria-label="Search everything">
-        <Icon.search size={18} />
-      </button>
-    </nav>
+      </nav>
+      {err && (
+        <div className="channel-strip-error" role="alert">
+          <span>{err.message}</span>
+          <button className="link" onClick={() => void select(err.id)}>
+            Retry
+          </button>
+          <button className="icon-btn" onClick={() => setErr(null)} aria-label="Dismiss error">
+            <Icon.close size={14} />
+          </button>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -64,9 +92,14 @@ export function ChannelsSheet({ onClose }: { onClose: () => void }) {
   useDialogTrap(dialog);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || !isTopDialog(dialog.current)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      onClose();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
   }, [onClose]);
 
   // Group headings only when at least one channel is grouped; the general channel stays pinned first.
@@ -132,27 +165,47 @@ export function ChannelsSheet({ onClose }: { onClose: () => void }) {
     }
   }
 
+  async function switchTo(id: string) {
+    setBusy(true);
+    setErr(null);
+    try {
+      await openChannel(id);
+      onClose();
+    } catch (e: any) {
+      setErr(e?.message ?? 'Could not open that channel.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function archive(id: string) {
     setBusy(true);
     setErr(null);
     try {
       await api.archiveChannel(id);
-      if (active === id) {
-        const next = channels.find((c) => c.id !== id);
-        if (next) setChannel(next.id);
-      }
     } catch (e: any) {
       setErr(e?.message ?? 'Could not archive that channel.');
-    } finally {
       setBusy(false);
+      return;
     }
+    if (active === id) {
+      const next = channels.find((c) => c.slug === 'general' && c.id !== id) ?? channels.find((c) => c.id !== id);
+      if (next) {
+        try {
+          await openChannel(next.id);
+        } catch (e: any) {
+          setErr(e?.message ?? 'Channel archived, but could not load the next channel.');
+        }
+      }
+    }
+    setBusy(false);
   }
 
   function row(c: Channel, isGeneral: boolean) {
     return (
       <li key={c.id} className={`channel-row ${c.id === active ? 'on' : ''}`}>
         <div className="channel-row-wrap">
-          <button className="channel-row-main" onClick={() => openChannel(c.id).then(onClose).catch(() => {})}>
+          <button className="channel-row-main" disabled={busy} onClick={() => void switchTo(c.id)}>
             <span className="channel-hash">
               <Icon.hash size={14} />
             </span>
@@ -243,6 +296,11 @@ export function ChannelsSheet({ onClose }: { onClose: () => void }) {
             <Icon.close size={20} />
           </button>
         </header>
+        {err && (
+          <p className="sheet-error" role="alert">
+            {err}
+          </p>
+        )}
         <div className="settings-body">
           <section>
             <h3>Open</h3>
@@ -289,7 +347,11 @@ export function ChannelsSheet({ onClose }: { onClose: () => void }) {
                 {busy ? 'Creating…' : 'Create'}
               </button>
             </form>
-            {err && <p className="card-error">{err}</p>}
+            {err && (
+              <p className="card-error" role="alert">
+                {err}
+              </p>
+            )}
             <p className="muted small">Each channel gets its own Hermes session, so long projects don't fill the main thread. Memory and files are shared.</p>
           </section>
         </div>
@@ -311,8 +373,8 @@ export function SearchOverlay({
   onOpenFile,
 }: {
   onClose: () => void;
-  onJump: (id: string) => void;
-  onShowTasks: () => void;
+  onJump: (id: string, channelId?: string | null) => void;
+  onShowTasks: (taskId?: string | null) => void;
   onOpenFile: (id: string) => void;
 }) {
   const [q, setQ] = useState('');
@@ -330,9 +392,14 @@ export function SearchOverlay({
   const findChannel = (id: string) => items.find((i) => i.id === id)?.channel_id;
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || !isTopDialog(dialog.current)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      onClose();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
   }, [onClose]);
 
   useEffect(() => {
@@ -365,11 +432,10 @@ export function SearchOverlay({
   function open(hit: SearchHit) {
     if (hit.kind === 'item') {
       const channel = hit.channel_id ?? findChannel(hit.id);
-      if (channel) openChannel(channel).catch(() => {});
-      onJump(hit.id);
+      onJump(hit.id, channel);
       onClose();
     } else if (hit.kind === 'task') {
-      onShowTasks();
+      onShowTasks(hit.id);
       onClose();
     } else if (hit.kind === 'page') {
       const file = pages.find((p) => p.id === hit.id)?.file_id;
