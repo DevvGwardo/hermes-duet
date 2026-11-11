@@ -4,7 +4,7 @@ A 10-agent audit of `hermes-duet` (architect, backend, frontend, api, data, test
 produced the findings below. This file is now the record of what happened to each one: **fixed**, **still open** (with
 why), or **rejected** (the crew was wrong — do not re-investigate without new evidence).
 
-**Baseline at audit time:** 348 tests pass, `tsc` clean. **Now:** 438 tests pass, `tsc` clean, `bun run build` clean.
+**Baseline at audit time:** 348 tests pass, `tsc` clean. **After 2026-11-11 pass:** >= 735 tests across 61 files (Windows baseline failures resolved), `tsc` clean, `bun run build` clean.
 
 Line numbers in the original findings refer to commit `8fbabc7`; they have moved.
 
@@ -206,8 +206,8 @@ split view.
 | 6.2 | No MCP shim contract test | **Fixed** `70ab0cc` |
 | 6.3 | `runner.ts` core loop is untested | **Fixed** across `c4d2c7e`…`4a91be4` |
 | 6.4 | Real-money card issuance is never exercised | **Fixed** `a5ba574` |
-| 6.5 | Vault subprocess path is untested | **Partly fixed** `f9add4a` |
-| 6.6 | CI runs only typecheck + test + build | **Open** |
+| 6.5 | Vault subprocess path is untested | **Fixed** `f9add4a` + 2026-11-11 pass |
+| 6.6 | CI runs only typecheck + test + build | **Partly fixed** (Windows CI, Docker build, nightly harness, blocking prod audit; lint/coverage open) |
 
 **6.1** `server/index.test.ts` calls the handlers directly (the servers only bind under `import.meta.main`): pairing
 and auth, snapshot, trailing-slash routing, JSON 404s, 405 + `Allow`, the upload cap, error shaping (including that an
@@ -220,11 +220,14 @@ exactly `TOOLS`, `tools/call` reaches `/internal/tool/<name>` with the token, an
 **6.4** Every provider path is asserted against a stubbed `fetch`: privacy's `spend_limit`, stripe's all-time limit and
 form fields, revolut's and the generic proxy's totals, and a refusal surfacing as an error rather than a card.
 
-**6.5** `commandFor`/`safeDomain` are covered (`{domain}` reaches exactly one argv word; metacharacters are refused).
-`readLogin` itself still shells out to the real CLIs and has no test with a stubbed executor.
+**6.5** `commandFor`/`safeDomain` are covered (`{domain}` reaches exactly one argv word; metacharacters are refused), and
+`server/vault.test.ts` now exercises `readLogin` via `__setVaultRunner`/`__setVaultHas` (including quoted Windows paths
+with spaces, injection guards, and credential redaction).
 
-**6.6 Open.** CI still runs typecheck + test + build. No lint, format check, dependency audit, coverage report or
-smoke run. `scripts/smoke.ts` needs a Hermes gateway, so it belongs in a nightly job rather than on every push.
+**6.6 Partly fixed.** `.github/workflows/ci.yml` runs typecheck, unit tests, and build on both `ubuntu-latest` and
+`windows-latest`, verifies the Docker image build, and runs a blocking `bun audit --production --audit-level=high`;
+`.github/workflows/harness.yml` runs nightly/manual Playwright checks. Lint, formatting checks, and coverage reporting
+remain open, and `scripts/smoke.ts` still needs a live Hermes gateway so it belongs in a manual/nightly run rather than push CI.
 
 ---
 
@@ -413,7 +416,7 @@ to the helper's stop, so the reconnect check fails); `wheel.mjs` needs the fixtu
 (`python3 -m http.server 7499 -d tools/blueprint/fixture`) plus a normally-started demo. An earlier draft of
 this entry claimed recovery/wheel green from a rerun that had actually crashed them both — the tally script had
 matched stale Nov-5 report files (`ls -t` without a date filter); corrected only after re-checking file mtimes. First pass had dialogs at 20/21 — a suite-ordering artifact: approvals runs
-before it and deliberately leaves `tasks=1`, so the Tasks empty-state contrast check found "no empty text";
+before it and deliberately leaves `tasks=1`, so the Tasks empty-state contrast check found "no empty text" (later when `TaskSheet` replaced inline detail, `tools/blueprint/dialogs.mjs` also needed its `.task-detail .btn` selector updated to `.tasks-pane .row` -> `.task-sheet .task-actions .btn`);
 dialogs alone on a fresh seed is 21/21.
 
 **10.3** `openChannel` decided whether to fetch a channel's page with `(i.channel_id ?? id) === id` — the *target*
@@ -452,8 +455,8 @@ with a stubbed Hermes (it failed before), plus a `curl` smoke against the demo p
   a real thread. It changes what a returning phone has; that is a product trade, not a clear defect.
 - **3.3** encryption at rest: still needs the key-holding decision (OS keychain vs passphrase, unattended boot).
 - **5.4** offline shell: needs cache invalidation designed for a LAN server; a wrong cache is worse than a spinner.
-- **6.6** lint/coverage: the nightly browser harness and advisory audit exist; a linter and coverage target are
-  separate tool choices.
+- **6.6** lint/coverage: `ubuntu-latest` + `windows-latest` CI, Docker build verification, nightly browser harness, and
+  blocking `bun audit --production --audit-level=high` exist; a linter and coverage target are separate tool choices.
 - **`runner.ts` split**: still the structural fix, and still not something to combine with behavioural changes.
 
 ---
@@ -484,10 +487,10 @@ Round 4 closed 2.6, 5.6 and 8.9. What remains, in order:
    1.9 KB on the seed, so this is a product trade measured against real data, not a blind cut.
 2. **3.3** encryption at rest, once the key-holding decision is made (keychain for a Mac install, passphrase for a VPS).
 3. **5.4** an offline shell with a versioned cache.
-4. **6.6** a linter and a coverage target; the nightly browser harness and advisory audit already run.
+4. **6.6** a linter and a coverage target; cross-platform CI, nightly browser harness, and blocking `bun audit --production --audit-level=high` already run.
 5. **`runner.ts` split**, as a standalone structural change.
 
-`server/runner.ts` is still ~1,950 lines with a large tool-dispatch switch. Splitting it
+`server/runner.ts` has grown to ~2,550 lines with a large tool-dispatch switch. Splitting it
 (`server/cards/actions.ts`, `server/runs/manager.ts`, `server/tools/dispatch.ts`, `runner.ts` as facade) is the
 structural fix that keeps 1.1–1.9 reviewable. Do not attempt that in the same change as a behavioural fix.
 
@@ -521,8 +524,8 @@ bit-identical. Run it any time with `bun scripts/prod-upload-smoke.ts`.
 Driven by `docs/CLAUDE-DUET-PARITY.md`. Five workstreams ran in isolated worktrees and were merged into
 `feat/duet-parity`. `bun run typecheck` and `bun run build` are clean.
 
-**Gate:** `bun test` - **514 pass / 8 fail**, 522 tests across 54 files. The 8 failures are the pre-existing
-Windows-only cases (`rotate-logs`, symlink resolution, POSIX mode bits, `/tmp` paths); the same 8 fail on `8f3ab81`.
+**Gate (at merge time):** `bun test` - **514 pass / 8 fail**, 522 tests across 54 files. The 8 failures were pre-existing
+Windows-only cases (`rotate-logs`, symlink resolution, POSIX mode bits, `/tmp` paths) that also failed on `8f3ab81`; they were later resolved in the 2026-11-11 cross-platform pass.
 
 | Gap | What landed | Commit |
 |---|---|---|
@@ -548,8 +551,8 @@ Six LongCat 2.5 Free workstreams in isolated worktrees, merged into `feat/duet-p
 `5975c79` (Routine, notification preferences, Channel.repo, FileEntry.version_of, routine events).
 `bun run typecheck` and `bun run build` are clean.
 
-**Gate:** `bun test` - **627 pass / 8 fail**, 635 tests across 59 files. The 8 are the same Windows-only cases
-(`rotate-logs`, symlink resolution, POSIX mode bits, `/tmp` paths) that fail on the baseline.
+**Gate (at merge time):** `bun test` - **627 pass / 8 fail**, 635 tests across 59 files. The 8 were the same Windows-only cases
+(`rotate-logs`, symlink resolution, POSIX mode bits, `/tmp` paths) that failed on baseline and were later resolved in the 2026-11-11 pass.
 
 | Gap | What landed | Commit |
 |---|---|---|
@@ -563,3 +566,12 @@ Six LongCat 2.5 Free workstreams in isolated worktrees, merged into `feat/duet-p
 **Still open:** native/mobile shell (§4.11, deliberately deferred until the web surface is stable); multi-gateway /
 multi-agent support (documented as structural, not implemented); connector OAuth/install marketplace and per-channel
 tool scopes (the app stays read-only by design).
+
+---
+
+## Cross-platform & hardening pass - 2026-11-11
+
+Landed cross-platform compatibility, security, data integrity, UI state, CLI/Docker, and CI fixes across five parallel workstreams:
+- Resolved the baseline Windows test failures (`.gitattributes` LF enforcement and Git Bash resolution in `scripts/log-rotation.test.ts`, Windows path/ACL handling in `server/delivery.ts`, `server/permissions.ts`, and `server/uploads.test.ts`, plus `serveStatic`, Chrome probing, and vault quoting).
+- Hardened CI (`.github/workflows/ci.yml` `windows-latest` job + blocking `bun audit --production --audit-level=high`; `.github/workflows/harness.yml` per-script failure tracking) and CLI/Docker/blueprint scripts; `tools/blueprint/dialogs.mjs` updated from `.task-detail .btn` to `.task-sheet`.
+- Expanded the test suite to >= 735 tests across 61 files with Windows failures resolved (full post-parity-pass-2 browser sweep receipt pending).

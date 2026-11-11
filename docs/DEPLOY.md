@@ -176,7 +176,7 @@ The always-on host above is the way to avoid that.
 
 Duet runs natively on Windows via Bun (`bun install && bun run build && bun server/index.ts`). File permissions use your
 Windows profile's NTFS ACLs instead of POSIX `0700`/`0600` modes, and the macOS Calendar/Reminders/Mail connectors report
-unsupported. The live browser probes standard Chrome and Edge installation paths (or honors `DUET_CHROME_BIN`), and the
+unsupported. The live browser probes standard Chrome and Chromium installation paths (or honors `DUET_CHROME_BIN`), and the
 `bin/hermes-duet` bash CLI works under Git Bash (`C:\Program Files\Git\bin\bash.exe`).
 
 ## Logs
@@ -234,7 +234,7 @@ Everything is optional except the Hermes key, which the server can also read fro
 | `DUET_MEETING_LEAD_MIN` | `15` | how early a meeting triggers prep (0 disables) |
 | `DUET_OP_CMD` | `op item get {domain} --format json` | 1Password lookup |
 | `DUET_BW_CMD` | `bw get item {domain} --raw` | Bitwarden lookup (`BW_SESSION` must be set) |
-| `DUET_CHROME_BIN` | auto-probed Chrome/Chromium/Edge | Chromium binary for the live browser |
+| `DUET_CHROME_BIN` | auto-probed Chrome/Chromium | Chromium binary for the live browser |
 | `DUET_CHROME_NO_SANDBOX` | off | `1` passes `--no-sandbox` for restricted containers |
 | `DUET_CHROME_PORT` / `DUET_CHROME_PROFILE` | `9333` / `~/.hermes/duet-chrome` | CDP port, browser profile |
 | `DUET_RUN_TIMEOUT_MS` | 45 min | a run silent this long is stopped as hung |
