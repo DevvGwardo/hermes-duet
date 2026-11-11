@@ -451,13 +451,10 @@ with a stubbed Hermes (it failed before), plus a `curl` smoke against the demo p
 
 ### What is deliberately still open
 
-- **5.5** reconnect snapshot trimming: the compressed snapshot is 1.9 KB on the seed, so this needs a measurement on
-  a real thread. It changes what a returning phone has; that is a product trade, not a clear defect.
+- **5.5** reconnect snapshot trimming: measured on the live thread (`items: 136`, `tasks: 41`, `files: 6` → **76.7 KB raw / 22.9 KB gzipped** for the default 80-item/40-task snapshot slice), so aggressive trimming remains deferred as a product tradeoff until multi-channel or artifact-heavy threads grow substantially.
 - **3.3** encryption at rest: still needs the key-holding decision (OS keychain vs passphrase, unattended boot).
 - **5.4** offline shell: needs cache invalidation designed for a LAN server; a wrong cache is worse than a spinner.
-- **6.6** lint/coverage: `ubuntu-latest` + `windows-latest` CI, Docker build verification, nightly browser harness, and
-  blocking `bun audit --production --audit-level=high` exist; a linter and coverage target are separate tool choices.
-- **`runner.ts` split**: still the structural fix, and still not something to combine with behavioural changes.
+- **6.6** linter choice: `ubuntu-latest` + `windows-latest` CI, Docker build verification, nightly browser harness, `bun test --coverage` (`94.79%` lines), and blocking `bun audit --production --audit-level=high` all run cleanly; adding an external ESLint/Biome config remains an optional tooling choice.
 
 ---
 
@@ -481,18 +478,14 @@ The crew asserted these confidently; the gate checked and they are wrong or alre
 
 ## Suggested next steps, in order of value
 
-Round 4 closed 2.6, 5.6 and 8.9. What remains, in order:
+What remains, pending explicit product/policy choices:
 
-1. **5.5** measure `/api/state` on a real thread, then trim what a returning phone has. The compressed snapshot is
-   1.9 KB on the seed, so this is a product trade measured against real data, not a blind cut.
-2. **3.3** encryption at rest, once the key-holding decision is made (keychain for a Mac install, passphrase for a VPS).
-3. **5.4** an offline shell with a versioned cache.
-4. **6.6** a linter and a coverage target; cross-platform CI, nightly browser harness, and blocking `bun audit --production --audit-level=high` already run.
-5. **`runner.ts` split**, as a standalone structural change.
+1. **3.3** encryption at rest, once the key-holding decision is made (OS keychain/DPAPI vs passphrase for headless boots).
+2. **5.4** an offline shell with a versioned LAN cache invalidation scheme.
+3. **5.5** revisit snapshot trimming only if a real thread's gzipped snapshot (~22.9 KB at 136 items / 41 tasks) grows materially.
+4. **6.6** adopt an external linter only if formatting/lint rules become worthwhile beyond `tsc --noEmit` + TypeScript checks.
 
-`server/runner.ts` has grown to ~2,550 lines with a large tool-dispatch switch. Splitting it
-(`server/cards/actions.ts`, `server/runs/manager.ts`, `server/tools/dispatch.ts`, `runner.ts` as facade) is the
-structural fix that keeps 1.1–1.9 reviewable. Do not attempt that in the same change as a behavioural fix.
+Resolved structurally on 2026-11-11: `server/runner.ts` was split with zero behaviour changes into `server/runs/state.ts`, `server/runs/manager.ts`, `server/cards/actions.ts`, `server/tools/deliver.ts`, and `server/tools/dispatch.ts`, with `server/runner.ts` retained as the 38-line public facade.
 
 ---
 
@@ -575,3 +568,12 @@ Landed cross-platform compatibility, security, data integrity, UI state, CLI/Doc
 - Resolved the baseline Windows test failures (`.gitattributes` LF enforcement and Git Bash resolution in `scripts/log-rotation.test.ts`, Windows path/ACL handling in `server/delivery.ts`, `server/permissions.ts`, and `server/uploads.test.ts`, plus `serveStatic`, Chrome probing, and vault quoting).
 - Hardened CI (`.github/workflows/ci.yml` `windows-latest` job + blocking `bun audit --production --audit-level=high`; `.github/workflows/harness.yml` per-script failure tracking) and CLI/Docker/blueprint scripts; `tools/blueprint/dialogs.mjs` updated from `.task-detail .btn` to `.task-sheet`.
 - Expanded the test suite to >= 735 tests across 61 files with Windows failures resolved (full post-parity-pass-2 browser sweep receipt pending).
+
+---
+
+## Structural split, harness fix & coverage pass - 2026-11-11
+
+- **Browser harness `dialogs` fix**: `TaskSheet` (`web/src/components/TasksView.tsx`) now portals to `document.body` on `.task-sheet-backdrop` (`z-index: 29` in `web/src/styles.css`) above `.sidebar`/`.rail` (`z-index: 2`) while yielding to `Viewer`/Settings overlays (`z-index: 30`), with desktop sheet bounds matching sibling modals; `tools/blueprint/dialogs.mjs` also seeds `duet.db` via `bun:sqlite` instead of requiring `python3`, passing **21/21** checks locally on Windows Chrome.
+- **Standalone `server/runner.ts` split (`17cf096`)**: Split into cycle-free modules `server/runs/state.ts`, `server/runs/manager.ts`, `server/cards/actions.ts`, `server/tools/deliver.ts`, and `server/tools/dispatch.ts`, with `server/runner.ts` (38 lines) preserved as the public facade.
+- **Coverage & snapshot telemetry**: Extracted deterministic test entry points (`schedulerTick` in `server/scheduler.ts`, `folderWatchPass` in `server/triggers-runtime.ts`) raising coverage to **100.00%** lines (`scheduler.ts`, up from `28.17%`) and **98.80%** lines (`triggers-runtime.ts`, up from `62.16%`). Measured live thread snapshot (**5.5**): **76,701 B raw / 22,880 B gzipped** across 136 items and 41 tasks.
+- **Full local gate**: `bun run typecheck` clean; `bun test --coverage` **746 pass / 0 fail** (4,811 `expect()` calls, 61 files, `92.10%` funcs / `94.79%` lines); `bun run build` clean; `bun audit --production --audit-level=high` 0 vulnerabilities.

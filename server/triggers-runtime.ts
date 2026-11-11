@@ -65,40 +65,55 @@ export function recordWebhookIp(ip: string, now = Date.now()) {
   kv.set(WEBHOOK_IP_RECORD, Object.fromEntries(keys.map((k) => [k, active[k]])));
 }
 
+export interface FolderWatchState {
+  previous: WatchedFile[];
+  lastFired: number;
+}
+
+/** One poll of `dir`. Returns true when new settled files triggered `fire`. */
+export async function folderWatchPass(
+  state: FolderWatchState,
+  dir: string,
+  fire: (files: WatchedFile[]) => Promise<void> | void,
+  now = Date.now(),
+): Promise<boolean> {
+  try {
+    const current = listFolder(dir);
+    // `folderPass` decides what is announced and what stays new; the snapshot is advanced only past settled files.
+    const pass = folderPass(state.previous, current, now, {
+      due: folderDue(state.lastFired, now),
+      quiet: inQuietHours(settings.get(), new Date(now)),
+    });
+    state.previous = pass.next;
+    if (!pass.fire.length) return false;
+    state.lastFired = now;
+    triggers.save({ id: 'trigger-downloads', kind: 'file_watch', config: { dir }, last_triggered_at: state.lastFired });
+    await fire(pass.fire);
+    return true;
+  } catch (e: any) {
+    console.warn('[downloads]', e?.message ?? e);
+    return false;
+  }
+}
+
 /**
  * Watch the Downloads folder. Polling rather than fs.watch: the folder is small, the interval is 15 seconds, and a
  * poll cannot miss a rename or wedge itself the way an FSEvent stream can after the Mac sleeps.
  */
 export function startFolderWatch(fire: (files: WatchedFile[]) => Promise<void>) {
   if (!config.watchDir) return;
-  let previous = listFolder(config.watchDir);
   // The first pass establishes what was already there: opening Duet must not announce yesterday's downloads.
-  let lastFired = Date.now();
-  setInterval(async () => {
-    try {
-      const current = listFolder(config.watchDir);
-      const now = Date.now();
-      // `folderPass` decides what is announced and what stays new; the snapshot is advanced only past settled files.
-      const pass = folderPass(previous, current, now, {
-        due: folderDue(lastFired, now),
-        quiet: inQuietHours(settings.get()),
-      });
-      previous = pass.next;
-      if (!pass.fire.length) return;
-      lastFired = now;
-      triggers.save({ id: 'trigger-downloads', kind: 'file_watch', config: { dir: config.watchDir }, last_triggered_at: lastFired });
-      await fire(pass.fire);
-    } catch (e: any) {
-      console.warn('[downloads]', e?.message ?? e);
-    }
+  const state: FolderWatchState = { previous: listFolder(config.watchDir), lastFired: Date.now() };
+  setInterval(() => {
+    void folderWatchPass(state, config.watchDir, fire);
   }, 15_000);
 }
 
 /** Meetings already announced, so a tick every minute doesn't repeat itself. */
 const announcedMeetings = new Set<string>();
 
-export function meetingPrepEnabled(): boolean {
-  return config.meetingLeadMinutes > 0 && !inQuietHours(settings.get());
+export function meetingPrepEnabled(now = Date.now()): boolean {
+  return config.meetingLeadMinutes > 0 && !inQuietHours(settings.get(), new Date(now));
 }
 
 /**
@@ -118,9 +133,13 @@ export function meetingsToPrep(events: CalendarEvent[], now = Date.now()): Calen
 }
 
 /** One pass of the meeting clock. Returns how many meetings it woke the agent for. */
-export async function checkMeetings(fire: (e: CalendarEvent, now: number) => void, now = Date.now()): Promise<number> {
-  if (!meetingPrepEnabled()) return 0;
-  const events = await calendarEvents();
+export async function checkMeetings(
+  fire: (e: CalendarEvent, now: number) => void,
+  now = Date.now(),
+  readEvents: () => Promise<CalendarEvent[]> = calendarEvents,
+): Promise<number> {
+  if (!meetingPrepEnabled(now)) return 0;
+  const events = await readEvents();
   const due = meetingsToPrep(events, now);
   for (const e of due) fire(e, now);
   return due.length;
