@@ -30,7 +30,7 @@ function trimSnippet(s: string): string {
 }
 
 /** A source's searchable text: the chip label and the verbatim quote backing it. */
-export function sourceText(sources: Source[] | undefined): string[] {
+function sourceText(sources: Source[] | undefined): string[] {
   const out: string[] = [];
   for (const s of sources ?? []) {
     if (s.label) out.push(s.label);

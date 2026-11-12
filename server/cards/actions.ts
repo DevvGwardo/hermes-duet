@@ -75,12 +75,8 @@ export function deliverableApproval(file: FileEntry, raw: Record<string, unknown
 const decidingCards = new Set<string>();
 
 /**
- * Take a decision to Hermes on one of its own ask cards. The card is only marked decided once the POST resolves: a
- * green "Approved" on an action the agent never received is the one lie this app must not tell. If it fails the card
- * goes back to pending — keeping any edit the user made — with the reason on it, so it can be tapped again.
- *
- * The card stays pending while the POST is out, so a second tap would otherwise send the same decision twice; the
- * in-flight set makes the duplicate a no-op.
+ * Forward a decision to Hermes for one of its own ask cards, keeping the card pending until the POST
+ * succeeds and deduplicating concurrent taps via `decidingCards`. On failure, reverts to pending with an error.
  */
 export async function settleHermesAsk(item: Item, status: CardStatus, send: () => Promise<unknown>): Promise<Item> {
   if (decidingCards.has(item.id)) throw new Error('that decision is already on its way');

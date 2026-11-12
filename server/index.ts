@@ -8,8 +8,9 @@ import { capabilities } from './capabilities';
 import { channelInput, channelPatch } from './channels';
 import { encodedPath, encodingHeaders, preferredEncoding } from './compress';
 import { createPairCode, deviceCookie, deviceFor, internalToken, isHttps, pairBlocked, redeemPairCode, sameOrigin } from './auth';
+import * as browser from './browser';
+import { broadcast, sseResponse } from './bus';
 import { listConnectors, testConnector } from './connectors';
-import { sseResponse } from './bus';
 import { config } from './config';
 import { MAX_EDIT_BYTES } from '../shared/edit';
 import { type AttachmentRow, attachments, channels, db, devices, files, items, kv, newId, pages, routines, settings, tasks, toAttachment, triggers } from './db';
@@ -30,7 +31,6 @@ import { checkMeetings, meetingPrepEnabled, recordWebhook, recordWebhookIp, star
 import { MAX_UPLOAD_BYTES, checkBodySize, deleteUnlinkedUpload, isAudioMime, normalizeMime, prune, saveUpload, uploadDir } from './uploads';
 import { parseMultipartCapped, type MultipartResult } from './multipart';
 import { readLogin, vaults } from './vault';
-import { broadcast } from './bus';
 
 const json = (data: unknown, status = 200, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(data), {
@@ -244,8 +244,6 @@ const APP_CSP = [
   "frame-ancestors 'none'",
 ].join('; ');
 
-import * as browser from './browser';
-
 /** Strip local paths, URLs/ports, markup and stack fragments from route-specific error responses. */
 function safeRouteMessage(e: unknown, fallback: string): string {
   if (e instanceof UserError) return e.message;
@@ -288,11 +286,78 @@ async function resolveIdempotent(scope: string): Promise<Item | null> {
   }
 }
 
+async function withIdempotentBody<T>(
+  req: Request,
+  scopePrefix: string,
+  onDuplicate: (item: Item) => Response,
+  fn: (rawBody: T, remember: (id: string) => void) => Promise<Response> | Response,
+): Promise<Response> {
+  // Check cached/in-flight idempotency before burning per-device quota, and re-check after await body().
+  const idem = idempotencyKey(req);
+  const scope = idem ? `${scopePrefix}${idem}` : null;
+  if (scope) {
+    const existing = await resolveIdempotent(scope);
+    if (existing) return onDuplicate(existing);
+  }
+  const rawBody = await body<T>(req);
+  if (scope) {
+    const existing = await resolveIdempotent(scope);
+    if (existing) return onDuplicate(existing);
+  }
+  const finishIdem = scope ? startIdempotentInflight(scope) : null;
+  let createdId: string | null = null;
+  try {
+    return await fn(rawBody, (id) => {
+      createdId = id;
+      if (scope) rememberIdempotent(scope, id);
+    });
+  } finally {
+    finishIdem?.(createdId);
+  }
+}
+
+function resolveAttachments(raw: unknown): { ids: string[]; rows: AttachmentRow[] } | { error: Response } {
+  if (raw && !Array.isArray(raw)) return { error: err(400, 'attachment_ids must be a list') };
+  const ids = Array.isArray(raw) ? raw.slice(0, 6).map(String) : [];
+  const rows = ids.map((id) => attachments.get(id)).filter((r): r is AttachmentRow => !!r);
+  if (rows.length !== ids.length) return { error: err(400, 'unknown attachment') };
+  return { ids, rows };
+}
+
+async function readMultipart(
+  req: Request,
+  fields: string[],
+  missingMsg: string,
+): Promise<{ bytes: Uint8Array; mp: MultipartResult } | { error: Response }> {
+  let mp: MultipartResult;
+  try {
+    mp = await parseMultipartCapped(req.body!, req.headers.get('content-type'), MAX_UPLOAD_BYTES, fields, join(uploadDir(), 'incoming'));
+  } catch (e) {
+    if (e instanceof UserError && e.status === 413) return { error: err(413, e.message) };
+    return { error: err(400, missingMsg) };
+  }
+  if (!mp.file) return { error: err(400, missingMsg) };
+  try {
+    return { bytes: new Uint8Array(readFileSync(mp.file.path)), mp };
+  } finally {
+    rmSync(mp.file.path, { force: true });
+  }
+}
+
+async function transcribeResponse(path: string, mime: string, attachment: ReturnType<typeof toAttachment>, logLabel: string): Promise<Response> {
+  try {
+    const text = await transcribeFile(path, mime);
+    return json({ text, attachment });
+  } catch (e: any) {
+    if (!(e instanceof UserError)) console.error(logLabel, e?.stack ?? e);
+    return json({ error: safeAudioError(e), attachment, text: '' }, 503);
+  }
+}
+
 // ---------- public app server (the tunnel points here) ----------
 export async function handleApp(req: Request, server?: any): Promise<Response> {
   const url = new URL(req.url);
-  // A trailing slash is the same route. Without this, `/api/items/` missed every branch and fell out of the API block
-  // as an opaque 404 (and non-API paths fell through to the app shell), which the client reported as a parse error.
+  // Strip trailing slashes so `/api/items/` hits `/api/items` instead of falling through to static HTML.
   const rawPath = url.pathname;
   const path = rawPath.length > 1 ? rawPath.replace(/\/+$/, '') : rawPath;
 
@@ -388,8 +453,6 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
       const before = url.searchParams.get('before') ?? '';
       const channel = url.searchParams.get('channel') ?? '';
       if (channel && !activeChannel(channel)) return err(404, 'no such channel');
-      // No cursor means "the newest page". Passing an empty id used to fall through to `items.get('')`, which is null,
-      // so the route answered 200 with an empty thread — indistinguishable from an empty conversation.
       if (!before) return json(items.latest(100, channel || undefined));
       return json(items.before(before, 100, channel || undefined));
     }
@@ -560,107 +623,64 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
     }
 
     if (path === '/api/messages' && req.method === 'POST') {
-      // Check cached or in-flight idempotency BEFORE burning per-device quota, and re-check synchronously after await body().
-      const idem = idempotencyKey(req);
-      const scope = idem ? `${device}:${idem}` : null;
-      if (scope) {
-        const existing = await resolveIdempotent(scope);
-        if (existing) return json({ item: existing, duplicate: true });
-      }
-      const rawBody = await body<{ text?: string; channel_id?: string; attachment_ids?: string[] }>(req);
-      if (scope) {
-        const existing = await resolveIdempotent(scope);
-        if (existing) return json({ item: existing, duplicate: true });
-      }
-      const finishIdem = scope ? startIdempotentInflight(scope) : null;
-      let createdId: string | null = null;
-      try {
-        const { text, channel_id, attachment_ids } = rawBody;
-        if (channel_id && !activeChannel(String(channel_id))) return err(404, 'no such channel');
-        const limited = tooMany(limits.messages, device, 'messages');
-        if (limited) return limited;
-        const ids = Array.isArray(attachment_ids) ? attachment_ids.slice(0, 6).map(String) : [];
-        if (attachment_ids && !Array.isArray(attachment_ids)) return err(400, 'attachment_ids must be a list');
-        const rows = ids.map((id) => attachments.get(id)).filter((r): r is AttachmentRow => !!r);
-        if (rows.length !== ids.length) return err(400, 'unknown attachment');
-        const t = messageText(text, rows.length > 0);
-        if (!t) return err(400, 'empty message');
-        if (t.length > MAX_MESSAGE) return err(400, 'message too long');
-        const note = attachmentNote(rows);
-        const item = submitUser(t, note ? `${t}${note}` : undefined, channel_id, rows.map(toAttachment));
-        if (rows.length) attachments.link(ids, item.id);
-        createdId = item.id;
-        if (scope) rememberIdempotent(scope, item.id);
-        return json({ item });
-      } finally {
-        finishIdem?.(createdId);
-      }
+      return withIdempotentBody<{ text?: string; channel_id?: string; attachment_ids?: string[] }>(
+        req,
+        `${device}:`,
+        (existing) => json({ item: existing, duplicate: true }),
+        ({ text, channel_id, attachment_ids }, remember) => {
+          if (channel_id && !activeChannel(String(channel_id))) return err(404, 'no such channel');
+          const limited = tooMany(limits.messages, device, 'messages');
+          if (limited) return limited;
+          const att = resolveAttachments(attachment_ids);
+          if ('error' in att) return att.error;
+          const { ids, rows } = att;
+          const t = messageText(text, rows.length > 0);
+          if (!t) return err(400, 'empty message');
+          if (t.length > MAX_MESSAGE) return err(400, 'message too long');
+          const note = attachmentNote(rows);
+          const item = submitUser(t, note ? `${t}${note}` : undefined, channel_id, rows.map(toAttachment));
+          if (rows.length) attachments.link(ids, item.id);
+          remember(item.id);
+          return json({ item });
+        },
+      );
     }
     if (path === '/api/tasks' && req.method === 'POST') {
-      const idem = idempotencyKey(req);
-      const scope = idem ? `task:${device}:${idem}` : null;
-      if (scope) {
-        const existing = await resolveIdempotent(scope);
-        if (existing) {
+      return withIdempotentBody<{ text?: string; channel_id?: string; attachment_ids?: string[] }>(
+        req,
+        `task:${device}:`,
+        (existing) => {
           const task = existing.task_id ? tasks.get(existing.task_id) : undefined;
           return json({ item: existing, ...(task ? { task } : {}), duplicate: true });
-        }
-      }
-      const rawBody = await body<{ text?: string; channel_id?: string; attachment_ids?: string[] }>(req);
-      if (scope) {
-        const existing = await resolveIdempotent(scope);
-        if (existing) {
-          const task = existing.task_id ? tasks.get(existing.task_id) : undefined;
-          return json({ item: existing, ...(task ? { task } : {}), duplicate: true });
-        }
-      }
-      const finishIdem = scope ? startIdempotentInflight(scope) : null;
-      let createdId: string | null = null;
-      try {
-        const { text, channel_id, attachment_ids } = rawBody;
-        if (channel_id && !activeChannel(String(channel_id))) return err(404, 'no such channel');
-        const limited = tooMany(limits.tasks, device, 'tasks');
-        if (limited) return limited;
-        // The same attachment contract as /api/messages: the task keeps the files, and its prompt names their paths so
-        // the agent can open them. A background send with a photo and no caption is a legitimate message.
-        const ids = Array.isArray(attachment_ids) ? attachment_ids.slice(0, 6).map(String) : [];
-        if (attachment_ids && !Array.isArray(attachment_ids)) return err(400, 'attachment_ids must be a list');
-        const rows = ids.map((id) => attachments.get(id)).filter((r): r is AttachmentRow => !!r);
-        if (rows.length !== ids.length) return err(400, 'unknown attachment');
-        const t = String(text ?? '').trim() || (rows.length ? 'Look at the file I attached.' : '');
-        if (!t) return err(400, 'empty message');
-        if (t.length > MAX_MESSAGE) return err(400, 'message too long');
-        const started = startUserTask(t, channel_id, rows.map(toAttachment), attachmentNote(rows));
-        if (rows.length) attachments.link(ids, started.item.id);
-        createdId = started.item.id;
-        if (scope) rememberIdempotent(scope, started.item.id);
-        return json(started);
-      } finally {
-        finishIdem?.(createdId);
-      }
+        },
+        ({ text, channel_id, attachment_ids }, remember) => {
+          if (channel_id && !activeChannel(String(channel_id))) return err(404, 'no such channel');
+          const limited = tooMany(limits.tasks, device, 'tasks');
+          if (limited) return limited;
+          const att = resolveAttachments(attachment_ids);
+          if ('error' in att) return att.error;
+          const { ids, rows } = att;
+          const t = String(text ?? '').trim() || (rows.length ? 'Look at the file I attached.' : '');
+          if (!t) return err(400, 'empty message');
+          if (t.length > MAX_MESSAGE) return err(400, 'message too long');
+          const started = startUserTask(t, channel_id, rows.map(toAttachment), attachmentNote(rows));
+          if (rows.length) attachments.link(ids, started.item.id);
+          remember(started.item.id);
+          return json(started);
+        },
+      );
     }
 
     // ---- uploads, voice memos and spoken briefs (see server/uploads.ts, server/audio.ts) ----
     if (path === '/api/uploads' && req.method === 'POST') {
       const limited = tooMany(limits.uploads, device, 'uploads');
       if (limited) return limited;
-      // One limit: the same number uploads.ts enforces, checked WHILE the body streams (GAPS 2.3 —
-      // a chunked body used to be fully buffered by formData() before any size check could run).
+      // Same ceiling as uploads.ts, enforced while streaming so chunked bodies are bounded too.
       if (tooLarge(req, MAX_UPLOAD_BYTES)) return err(413, 'that file is too large');
-      let mp: MultipartResult | null = null;
-      try {
-        mp = await parseMultipartCapped(req.body!, req.headers.get('content-type'), MAX_UPLOAD_BYTES, ['file'], join(uploadDir(), 'incoming'));
-      } catch (e) {
-        if (e instanceof UserError && e.status === 413) return err(413, e.message);
-        return err(400, 'send the file in a "file" field');
-      }
-      if (!mp.file) return err(400, 'send the file in a "file" field');
-      try {
-        const bytes = new Uint8Array(readFileSync(mp.file.path));
-        return json({ attachment: saveUpload({ bytes, mime: normalizeMime(mp.fields.mime ?? mp.file.mime), filename: String(mp.fields.name ?? mp.file.filename) }) });
-      } finally {
-        rmSync(mp.file.path, { force: true });
-      }
+      const parsed = await readMultipart(req, ['file'], 'send the file in a "file" field');
+      if ('error' in parsed) return parsed.error;
+      const { bytes, mp } = parsed;
+      return json({ attachment: saveUpload({ bytes, mime: normalizeMime(mp.fields.mime ?? mp.file!.mime), filename: String(mp.fields.name ?? mp.file!.filename) }) });
     }
     const uploadMatch = path.match(/^\/api\/uploads\/([\w-]+)$/);
     if (uploadMatch && req.method === 'GET') return serveUpload(req, uploadMatch[1]);
@@ -676,20 +696,10 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
       let bytes: Uint8Array;
       let mime: string;
       if ((req.headers.get('content-type') ?? '').toLowerCase().includes('multipart/form-data')) {
-        let mp: MultipartResult | null = null;
-        try {
-          mp = await parseMultipartCapped(req.body!, req.headers.get('content-type'), MAX_UPLOAD_BYTES, ['audio', 'file'], join(uploadDir(), 'incoming'));
-        } catch (e) {
-          if (e instanceof UserError && e.status === 413) return err(413, e.message);
-          return err(400, 'send the recording in an "audio" field');
-        }
-        if (!mp.file) return err(400, 'send the recording in an "audio" field');
-        try {
-          bytes = new Uint8Array(readFileSync(mp.file.path));
-          mime = normalizeMime(mp.file.mime);
-        } finally {
-          rmSync(mp.file.path, { force: true });
-        }
+        const parsed = await readMultipart(req, ['audio', 'file'], 'send the recording in an "audio" field');
+        if ('error' in parsed) return parsed.error;
+        bytes = parsed.bytes;
+        mime = normalizeMime(parsed.mp.file!.mime);
       } else {
         try {
           bytes = await readBytesCapped(req, MAX_UPLOAD_BYTES);
@@ -709,13 +719,7 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
       // The memo is kept even when transcription is unavailable, so it can be replayed and retried later.
       const attachment = saveUpload({ bytes, mime, filename: 'Voice memo' });
       const row = attachments.get(attachment.id)!;
-      try {
-        const text = await transcribeFile(row.path, row.mime);
-        return json({ text, attachment });
-      } catch (e: any) {
-        if (!(e instanceof UserError)) console.error('[audio] transcribe failed', e?.stack ?? e);
-        return json({ error: safeAudioError(e), attachment, text: '' }, 503);
-      }
+      return transcribeResponse(row.path, row.mime, attachment, '[audio] transcribe failed');
     }
 
     const transcribeIdMatch = path.match(/^\/api\/audio\/transcribe\/([\w-]+)$/);
@@ -726,14 +730,7 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
       if (!row) return err(404, 'attachment not found');
       if (!isAudioMime(row.mime)) return err(400, 'attachment is not audio');
       if (!existsSync(row.path)) return err(404, 'attachment file not found');
-      const attachment = toAttachment(row);
-      try {
-        const text = await transcribeFile(row.path, row.mime);
-        return json({ text, attachment });
-      } catch (e: any) {
-        if (!(e instanceof UserError)) console.error('[audio] transcribe retry failed', e?.stack ?? e);
-        return json({ error: safeAudioError(e), attachment, text: '' }, 503);
-      }
+      return transcribeResponse(row.path, row.mime, toAttachment(row), '[audio] transcribe retry failed');
     }
 
     // "Listen" on the morning brief: synthesized once, then served from data/tts.
@@ -1029,9 +1026,8 @@ function isFile(path: string): boolean {
   }
 }
 
-async function serveStatic(req: Request, path: string): Promise<Response> {  // `decodeURIComponent` throws on a malformed escape (`/%`, `/%zz`). This runs before the route try/catch, so an
-  // unhandled throw here reached Bun's error page — a 500 carrying a stack and a source path, for a URL anyone can
-  // type. A bad escape is simply not a file we have.
+async function serveStatic(req: Request, path: string): Promise<Response> {
+  // Reject malformed URL escapes before routing so bad paths return 400 rather than Bun's 500 stack trace.
   let decoded: string;
   try {
     decoded = decodeURIComponent(path);
@@ -1043,8 +1039,7 @@ async function serveStatic(req: Request, path: string): Promise<Response> {  // 
   const webDirRoot = config.webDir.endsWith(sep) ? config.webDir : `${config.webDir}${sep}`;
   const rawUrlPath = rel.replaceAll('\\', '/');
   const urlPath = rawUrlPath.startsWith('/') ? rawUrlPath : `/${rawUrlPath}`;
-  // `isFile`, not `existsSync`: a directory passes existence and a nonzero stat size, so `GET /assets/` used to be
-  // served as a body and died with EISDIR instead of falling back to the app shell.
+  // Require a regular file (directories pass existsSync and fail with EISDIR) so directory paths fall back to index.html.
   if ((candidate === config.webDir || candidate.startsWith(webDirRoot)) && urlPath !== '/' && isFile(candidate)) {
     // The build writes `.br`/`.gz` siblings; serve one when the client accepts it. The type comes from the original
     // path, not the `.br` sibling (Bun would otherwise infer application/octet-stream).

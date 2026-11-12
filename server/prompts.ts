@@ -74,7 +74,7 @@ function taskLines(list: Task[]) {
  * `pages` holds one line per standing page (pageBriefLine): what its refresh this morning changed, or why not.
  * `skipped` holds decisions the user skipped in recent briefs (skippedLately).
  */
-export function briefPrompt(s: Settings, ctx: { pending: Item[]; tasks: Task[]; pages: string[]; skipped: string[] }) {
+export function briefPrompt(_s: Settings, ctx: { pending: Item[]; tasks: Task[]; pages: string[]; skipped: string[] }) {
   const pages = ctx.pages.length
     ? `\n\nStanding pages (rebuilt shortly before this brief; the user checks them every morning):\n${ctx.pages.join('\n')}`
     : '';
@@ -101,7 +101,7 @@ ${taskLines(ctx.tasks)}${pages}${skipped}`;
 }
 
 /** `raised` is what today's briefs already showed the user (raisedToday). */
-export function checkinPrompt(s: Settings, ctx: { since: string; pending: Item[]; tasks: Task[]; raised: { decisions: string[]; watching: string[] } }) {
+export function checkinPrompt(_s: Settings, ctx: { since: string; pending: Item[]; tasks: Task[]; raised: { decisions: string[]; watching: string[] } }) {
   const raised = ctx.raised.decisions.length
     ? `\n\nAlready raised today in a brief (don't raise these again; only if something material changed, such as a deadline moving up, raise it with what changed in the title):\n${ctx.raised.decisions.join('\n')}`
     : '';

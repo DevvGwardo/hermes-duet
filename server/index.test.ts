@@ -8,7 +8,7 @@ import { MAX_EDIT_BYTES } from '../shared/edit';
 import type { FileEntry } from '../shared/types';
 import { createPairCode, deviceCookie, internalToken, redeemPairCode } from './auth';
 import { config } from './config';
-import { attachments, channels, files, items, kv, newId, pages, tasks } from './db';
+import { attachments, channels, files, items, kv, newId, tasks } from './db';
 import { UserError } from './errors';
 import { hermes } from './hermes';
 import { GENERAL_CHANNEL } from './schema';

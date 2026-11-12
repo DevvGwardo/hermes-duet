@@ -5,6 +5,7 @@ import { existsSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import type { Connector } from '../shared/types';
 import { config } from './config';
+import { execCommand, hasCommand } from './exec';
 
 export interface CalendarEvent {
   title: string;
@@ -20,7 +21,7 @@ const CLI: Record<string, string> = {
 };
 
 /** The AppleScript that lists the next few hours of events. Tab-separated, ISO dates, one event per line. */
-export const CALENDAR_SCRIPT = `set out to ""
+const CALENDAR_SCRIPT = `set out to ""
 set horizon to (current date) + 6 * hours
 tell application "Calendar"
   repeat with cal in calendars
@@ -33,7 +34,7 @@ tell application "Calendar"
 end tell
 return out`;
 
-export const MAIL_SCRIPT = `set out to ""
+const MAIL_SCRIPT = `set out to ""
 tell application "Mail"
   set msgs to (messages of inbox whose read status is false)
   repeat with m in msgs
@@ -101,24 +102,7 @@ const STATUS_REASON: Record<Connector['status'], string> = {
   unsupported: 'Not available on this system',
 };
 
-function hasCommand(cmd: string) {
-  try {
-    return !!Bun.which(cmd);
-  } catch {
-    return false;
-  }
-}
-
-async function run(cmd: string, args: string[], timeout = 12_000): Promise<{ out: string; err: string; code: number }> {
-  const proc = Bun.spawn([cmd, ...args], { stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' });
-  const timer = setTimeout(() => proc.kill(), timeout);
-  try {
-    const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
-    return { out, err, code };
-  } finally {
-    clearTimeout(timer);
-  }
-}
+const run = (cmd: string, args: string[]) => execCommand(cmd, args, { timeoutMs: 12_000 });
 
 /** macOS gates Calendar, Reminders and Mail behind automation permission; -1743 is the "not authorized" code. */
 function permissionDenied(err: string): boolean {
@@ -136,7 +120,7 @@ export async function calendarEvents(): Promise<CalendarEvent[]> {
   return parseCalendarOutput(r.out);
 }
 
-export async function unreadMail(): Promise<MailItem[]> {
+async function unreadMail(): Promise<MailItem[]> {
   if (process.platform !== 'darwin') return [];
   const r = await script(MAIL_SCRIPT);
   if (r.code !== 0) throw new Error(permissionDenied(r.err) ? 'Mail access is not allowed (System Settings → Privacy & Security → Automation)' : r.err.trim().slice(0, 200) || `osascript exited ${r.code}`);
@@ -144,7 +128,7 @@ export async function unreadMail(): Promise<MailItem[]> {
 }
 
 /** Today's reminders through remindctl, when it is installed. */
-export async function remindersToday(): Promise<string[]> {
+async function remindersToday(): Promise<string[]> {
   if (!hasCommand(CLI.reminders)) return [];
   const r = await run(CLI.reminders, ['today', '--json']).catch(() => run(CLI.reminders, ['today']));
   if (r.code !== 0) throw new Error(r.err.trim().slice(0, 200) || `remindctl exited ${r.code}`);
@@ -225,7 +209,7 @@ async function probe(id: string): Promise<Connector> {
   throw new Error(`no connector ${id}`);
 }
 
-export const CONNECTOR_IDS = ['calendar', 'reminders', 'mail', 'folder', 'webhook'] as const;
+const CONNECTOR_IDS = ['calendar', 'reminders', 'mail', 'folder', 'webhook'] as const;
 
 /** Status of every connector. Sequential on purpose: three AppleScript permission prompts at once is a bad first run. */
 export async function listConnectors(): Promise<Connector[]> {

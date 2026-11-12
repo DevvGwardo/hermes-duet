@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { CardData } from '../shared/types';
 import { config } from './config';
-import { UserError } from './errors';
 import {
   __setAudioHas,
   __setAudioRunner,
@@ -142,7 +141,7 @@ describe('briefSpeech', () => {
   });
 
   test('caps very long briefs', () => {
-    const long = brief({ entries: Array.from({ length: 5 }, (_, i) => ({ title: 'x'.repeat(2000), detail: 'y'.repeat(2000) })) });
+    const long = brief({ entries: Array.from({ length: 5 }, () => ({ title: 'x'.repeat(2000), detail: 'y'.repeat(2000) })) });
     expect(briefSpeech(long).length).toBeLessThanOrEqual(4000);
   });
 });

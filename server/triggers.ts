@@ -109,13 +109,8 @@ export interface FolderPass {
 }
 
 /**
- * One poll of the watched folder, as a decision over two snapshots.
- *
- * The snapshot may only advance past a file once something has been decided about it — announced, or dropped because
- * quiet hours say so. Advancing past a file that is merely *new but not ready* loses it for good: the poll (15 s) is
- * faster than the settle window (20 s), so the first sighting of every download is always too fresh, and `previous`
- * swallowing it there meant nothing downloaded while the app was running was ever announced. A batch held back by the
- * gap between two announcements has the same shape, and is kept the same way.
+ * One watched-folder poll pass. Only advances `next` past files that have been settled (fired or dropped for
+ * quiet hours); files that are too fresh to announce or held by gap throttling stay out of `next` for re-checking.
  */
 export function folderPass(
   previous: WatchedFile[],

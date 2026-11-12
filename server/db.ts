@@ -70,6 +70,9 @@ export function newId(): string {
  */
 export const tx = <T>(fn: () => T): T => db.transaction(fn)();
 
+const parseRow = <T>(row: { json: string } | null | undefined): T | null => (row ? (JSON.parse(row.json) as T) : null);
+const parseRows = <T>(rows: { json: string }[]): T[] => rows.map((r) => JSON.parse(r.json) as T);
+
 // ---------- kv ----------
 const kvGet = db.query<{ value: string }, [string]>('SELECT value FROM kv WHERE key = ?');
 const kvSet = db.query('INSERT INTO kv(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value');
@@ -311,30 +314,29 @@ export const items = {
     return item;
   },
   get(id: string): Item | null {
-    const row = itemGet.get(id);
-    return row ? (JSON.parse(row.json) as Item) : null;
+    return parseRow<Item>(itemGet.get(id));
   },
   /** Newest page of the thread, whole install when `channelId` is omitted. */
   latest(limit: number, channelId?: string): { items: Item[]; has_more: boolean } {
-    const rows = (channelId ? itemsLatestIn.all(channelId, limit + 1) : itemsLatest.all(limit + 1)).map((r) => JSON.parse(r.json) as Item);
+    const rows = parseRows<Item>(channelId ? itemsLatestIn.all(channelId, limit + 1) : itemsLatest.all(limit + 1));
     return { items: rows.slice(0, limit).reverse(), has_more: rows.length > limit };
   },
   before(id: string, limit: number, channelId?: string): { items: Item[]; has_more: boolean } {
     const ref = items.get(id);
     if (!ref) return { items: [], has_more: false };
-    const rows = (
+    const rows = parseRows<Item>(
       channelId
         ? itemsBeforeIn.all(channelId, ref.created_at, ref.created_at, ref.id, limit + 1)
-        : itemsBefore.all(ref.created_at, ref.created_at, ref.id, limit + 1)
-    ).map((r) => JSON.parse(r.json) as Item);
+        : itemsBefore.all(ref.created_at, ref.created_at, ref.id, limit + 1),
+    );
     return { items: rows.slice(0, limit).reverse(), has_more: rows.length > limit };
   },
   pendingCards(channelId?: string): Item[] {
-    return (channelId ? itemsPendingIn.all(channelId) : itemsPending.all()).map((r) => JSON.parse(r.json) as Item);
+    return parseRows<Item>(channelId ? itemsPendingIn.all(channelId) : itemsPending.all());
   },
   /** Brief cards (morning and check-in) posted at or after `since`, oldest first. */
   briefsSince(since: number): Item[] {
-    return itemsBriefsSince.all(since).map((r) => JSON.parse(r.json) as Item);
+    return parseRows<Item>(itemsBriefsSince.all(since));
   },
   channelOf(id: string): string {
     return items.get(id)?.channel_id ?? GENERAL_CHANNEL;
@@ -409,14 +411,13 @@ export const tasks = {
     return task;
   },
   get(id: string): Task | null {
-    const row = taskGet.get(id);
-    return row ? (JSON.parse(row.json) as Task) : null;
+    return parseRow<Task>(taskGet.get(id));
   },
   sessionOf(id: string): string | null {
     return taskGet.get(id)?.session_id ?? null;
   },
   recent(): Task[] {
-    return tasksRecent.all(Date.now() - 7 * 86400_000).map((r) => JSON.parse(r.json) as Task);
+    return parseRows<Task>(tasksRecent.all(Date.now() - 7 * 86400_000));
   },
 };
 
@@ -434,9 +435,7 @@ export const files = {
     return entry;
   },
   update(entry: FileEntry) {
-    // The row and its search row are one unit. Indexing outside the write meant a failed index left the file table
-    // updated with the error thrown at the caller, and an update for a file the table doesn't have used to leave a
-    // search hit that opens a 404.
+    // Row and search index stay atomic; updating a deleted file must not insert an orphaned search entry.
     tx(() => {
       if (fileUpdate.run(JSON.stringify(entry), entry.id).changes === 0) return;
       // Titles are searchable: a rename that didn't reach the index would keep the old title findable forever.
@@ -449,7 +448,7 @@ export const files = {
     return row ? { entry: JSON.parse(row.json) as FileEntry, path: row.path } : null;
   },
   all(): FileEntry[] {
-    return filesAll.all().map((r) => JSON.parse(r.json) as FileEntry);
+    return parseRows<FileEntry>(filesAll.all());
   },
 };
 
@@ -467,11 +466,10 @@ export const pages = {
     return page;
   },
   get(id: string): Page | null {
-    const row = pageGet.get(id);
-    return row ? (JSON.parse(row.json) as Page) : null;
+    return parseRow<Page>(pageGet.get(id));
   },
   all(): Page[] {
-    return pagesAll.all().map((r) => JSON.parse(r.json) as Page);
+    return parseRows<Page>(pagesAll.all());
   },
   remove(id: string) {
     // Row and index together: a page deleted from one and not the other is searchable but gone.
@@ -493,11 +491,10 @@ const routineUpsert = db.query(
 const routineDelete = db.query('DELETE FROM routines WHERE id = ?');
 export const routines = {
   all(): Routine[] {
-    return routineAll.all().map((r) => JSON.parse(r.json) as Routine);
+    return parseRows<Routine>(routineAll.all());
   },
   get(id: string): Routine | null {
-    const row = routineGet.get(id);
-    return row ? (JSON.parse(row.json) as Routine) : null;
+    return parseRow<Routine>(routineGet.get(id));
   },
   save(routine: Routine) {
     routineUpsert.run(routine.id, routine.enabled ? 1 : 0, routine.next_run ?? null, routine.created_at, JSON.stringify(routine));

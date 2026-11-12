@@ -1,7 +1,7 @@
 // Password vaults for the live browser. The point is not to store credentials: it is to stop the user typing a long
 // password on a phone keyboard into a streamed canvas while the agent waits. A local CLI (1Password `op`, Bitwarden
 // `bw`) hands the login to the server, which types it into Chrome as trusted input and forgets it.
-import { CARD_TTL_MS } from './payments';
+import { execCommand, hasCommand } from './exec';
 
 type Env = Record<string, string | undefined>;
 
@@ -31,23 +31,11 @@ export function parseLogin(json: any): { username: string; password: string } | 
   if (flat.password) return flat;
   const login = json.login;
   if (login && typeof login === 'object' && text(login.password)) return { username: text(login.username), password: text(login.password) };
-  if (Array.isArray(json.fields)) {
+  const fields = Array.isArray(json.fields) ? json.fields : Array.isArray(json) ? json : null;
+  if (fields) {
     let username = '';
     let password = '';
-    for (const f of json.fields) {
-      const key = String(f?.id ?? f?.label ?? f?.name ?? '').toLowerCase();
-      const value = text(f?.value);
-      if (!value) continue;
-      if (!username && /user|email|login/.test(key)) username = value;
-      if (!password && /pass/.test(key)) password = value;
-    }
-    if (password) return { username, password };
-  }
-  // 1Password's `--fields label=username,label=password` shape: [{ label, value }]
-  if (Array.isArray(json)) {
-    let username = '';
-    let password = '';
-    for (const f of json) {
+    for (const f of fields) {
       const key = String(f?.id ?? f?.label ?? f?.name ?? '').toLowerCase();
       const value = text(f?.value ?? f?.content);
       if (!value) continue;
@@ -130,14 +118,6 @@ export function safeDomain(raw: unknown): string | null {
   return host;
 }
 
-function hasCommand(cmd: string) {
-  try {
-    return !!Bun.which(cmd);
-  } catch {
-    return false;
-  }
-}
-
 /** Test seam: override the installed-command check so readLogin can be exercised without op/bw on PATH. */
 let planHas: (cmd: string) => boolean = hasCommand;
 export function __setVaultHas(next: (cmd: string) => boolean): (cmd: string) => boolean {
@@ -145,25 +125,8 @@ export function __setVaultHas(next: (cmd: string) => boolean): (cmd: string) => 
   planHas = next;
   return prev;
 }
-export function __resetVaultHas() {
-  planHas = hasCommand;
-}
 
-async function run(cmd: string, args: string[], env: Env = {}): Promise<{ out: string; err: string; code: number }> {
-  const proc = Bun.spawn([cmd, ...args], {
-    stdin: 'ignore',
-    stdout: 'pipe',
-    stderr: 'pipe',
-    env: { ...process.env, ...(env as Record<string, string>) },
-  });
-  const timer = setTimeout(() => proc.kill(), 15_000);
-  try {
-    const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
-    return { out, err, code };
-  } finally {
-    clearTimeout(timer);
-  }
-}
+const run = (cmd: string, args: string[], env: Env = {}) => execCommand(cmd, args, { timeoutMs: 15_000, env });
 
 /** Executor seam: production runs the real CLI; tests install a fake. */
 type Runner = (cmd: string, args: string[], env?: Env) => Promise<{ out: string; err: string; code: number }>;
@@ -238,6 +201,3 @@ export async function readLogin(domain: string, which?: VaultId): Promise<{ vaul
   }
   throw new Error(`No login found for ${host}. ${errors.join(' · ')}`);
 }
-
-/** The card is typed in immediately; nothing here waits around. Re-exported so callers keep one import. */
-export const cardTtlMs = CARD_TTL_MS;
