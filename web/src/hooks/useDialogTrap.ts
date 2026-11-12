@@ -1,9 +1,8 @@
-import { useEffect, type RefObject } from 'react';
+import { useEffect, useRef, type RefObject } from 'react';
 
 const TABBABLE = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
 
-/** Visible, enabled tab stops inside the container, in DOM order. */
-export function tabbables(root: HTMLElement): HTMLElement[] {
+function tabbables(root: HTMLElement): HTMLElement[] {
   return [...root.querySelectorAll<HTMLElement>(TABBABLE)].filter(
     (el) =>
       !(el as HTMLButtonElement).disabled &&
@@ -58,8 +57,6 @@ export function isTopDialog(root: HTMLElement | null): boolean {
   return top === root;
 }
 
-const FOCUS_ANCESTOR = 'button,[href],input,select,textarea,[tabindex]:not([tabindex="-1"])';
-
 function resolveOpener(root: HTMLElement): HTMLElement | null {
   const candidates: (Element | null)[] = [
     lastInteracted && lastInteracted.isConnected && !root.contains(lastInteracted) ? lastInteracted : null,
@@ -69,7 +66,7 @@ function resolveOpener(root: HTMLElement): HTMLElement | null {
   ];
   for (const raw of candidates) {
     if (!raw || !raw.isConnected || root.contains(raw)) continue;
-    const viaAncestor = (raw.closest(FOCUS_ANCESTOR) ?? null) as HTMLElement | null;
+    const viaAncestor = (raw.closest(TABBABLE) ?? null) as HTMLElement | null;
     for (const c of [raw as HTMLElement, viaAncestor]) {
       if (!c || root.contains(c) || !c.isConnected) continue;
       if ((c as HTMLButtonElement).disabled) continue;
@@ -81,22 +78,30 @@ function resolveOpener(root: HTMLElement): HTMLElement | null {
 
 /**
  * Keep keyboard focus inside the topmost open dialog: move focus in on open, wrap Tab at the edges,
- * and hand focus back to this dialog's own mount-time opener on close. Escape handling stays with each
- * dialog (using `isTopDialog` + capture-phase `stopPropagation` when appropriate).
+ * handle Escape via `onEscape` (return `false` to pass through), and restore focus to the opener on close.
  */
-export function useDialogTrap(ref: RefObject<HTMLElement | null>) {
+export function useDialogTrap(ref: RefObject<HTMLElement | null>, onEscape?: (e: KeyboardEvent) => boolean | void) {
+  const onEscapeRef = useRef(onEscape);
+  onEscapeRef.current = onEscape;
+
   useEffect(() => {
     const root = ref.current;
     if (!root) return;
     // Snapshot the opener at mount so nested dialogs opening later cannot clobber the parent's opener.
     const opener = resolveOpener(root);
-    // Let the dialog paint first; leave focus alone when a child (e.g. the search input's autoFocus) already claimed it.
+    // Let the dialog paint first; leave focus alone when a child (e.g. an autoFocus input) already claimed it.
     const t = requestAnimationFrame(() => {
       if (!root.contains(document.activeElement)) tabbables(root)[0]?.focus();
     });
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Tab') return;
       if (!isTopDialog(root)) return;
+      if (e.key === 'Escape' && onEscapeRef.current) {
+        if (onEscapeRef.current(e) === false) return;
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+      if (e.key !== 'Tab') return;
       const at = document.activeElement as HTMLElement | null;
       const stops = tabbables(root);
       if (!stops.length) return;
@@ -119,7 +124,7 @@ export function useDialogTrap(ref: RefObject<HTMLElement | null>) {
       cancelAnimationFrame(t);
       window.removeEventListener('keydown', onKey, true);
       if (!opener || !opener.isConnected || root.contains(opener)) return;
-      const viaAncestor = (opener.closest(FOCUS_ANCESTOR) ?? null) as HTMLElement | null;
+      const viaAncestor = (opener.closest(TABBABLE) ?? null) as HTMLElement | null;
       for (const c of [opener, viaAncestor]) {
         if (!c || root.contains(c) || !c.isConnected) continue;
         c.focus();

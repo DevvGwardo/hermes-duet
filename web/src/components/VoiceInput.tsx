@@ -4,14 +4,13 @@ import { api, HttpError } from '../api';
 import {
   audioFileExtension,
   clockLabel,
+  computeTimeDomainRms,
   insertTranscript,
   shouldDiscardTake,
   useAudioRecorder,
   type TextSelection,
 } from '../hooks/useAudioRecorder';
 import { Icon } from '../ui';
-
-export { insertTranscript, shouldDiscardTake, type TextSelection };
 
 const HOLD_THRESHOLD_MS = 250;
 const SLIDE_CANCEL_PX = 60;
@@ -23,10 +22,10 @@ function getSpeechRecognitionCtor(): any {
   return (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 }
 
-export type VoiceMode = 'idle' | 'holding' | 'locked' | 'listening' | 'transcribing';
-export type HoldFeedback = 'none' | 'cancel' | 'lock';
+type VoiceMode = 'idle' | 'holding' | 'locked' | 'listening' | 'transcribing';
+type HoldFeedback = 'none' | 'cancel' | 'lock';
 
-export interface FailedVoiceTake {
+interface FailedVoiceTake {
   blob: Blob;
   mimeType: string;
   objectUrl: string;
@@ -35,27 +34,8 @@ export interface FailedVoiceTake {
   retrying: boolean;
 }
 
-function TrashIcon({ size = 18 }: { size?: number }) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={1.8}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M4 7h16M9 7V4.5a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 .5.5V7M6 7l1 12.5A1.5 1.5 0 0 0 8.5 21h7a1.5 1.5 0 0 0 1.5-1.5L18 7" />
-      <path d="M10 11v6M14 11v6" />
-    </svg>
-  );
-}
-
 /** Live 60fps <canvas> audio level meter driven directly from AnalyserNode with zero React state updates. */
-export function VoiceMeter({
+function VoiceMeter({
   analyser,
   active,
   className,
@@ -111,12 +91,7 @@ export function VoiceMeter({
       if (!hasFreq && analyser && timeData) {
         try {
           analyser.getByteTimeDomainData(timeData);
-          let sum = 0;
-          for (let i = 0; i < timeData.length; i++) {
-            const c = (timeData[i] - 128) / 128;
-            sum += c * c;
-          }
-          timeRms = Math.min(1, Math.sqrt(sum / timeData.length) * 3.2);
+          timeRms = Math.min(1, computeTimeDomainRms(timeData) * 3.2);
         } catch {}
       }
 
@@ -162,7 +137,7 @@ export function VoiceMeter({
   return <canvas ref={canvasRef} className={className ? `voice-meter ${className}` : 'voice-meter'} aria-hidden="true" />;
 }
 
-export interface UseVoiceDictationOptions {
+interface UseVoiceDictationOptions {
   text: string;
   setText: React.Dispatch<React.SetStateAction<string>>;
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
@@ -319,6 +294,48 @@ export function useVoiceDictation({
     }
   }, [clearHoldTimer, recorder, stopSpeechRecognition]);
 
+  const applyTranscribeResult = useCallback(
+    (
+      res: { text: string; attachment: Attachment; error?: string },
+      take: { blob: Blob; mimeType: string; objectUrl?: string },
+      retry: boolean,
+    ) => {
+      const said = res.text.trim();
+      if (res.error && !said) {
+        replaceFailedTake({
+          blob: take.blob,
+          mimeType: take.mimeType,
+          objectUrl: take.objectUrl ?? URL.createObjectURL(take.blob),
+          attachment: res.attachment,
+          error: res.error,
+          retrying: false,
+        });
+        if (!retry) setError(null);
+        setStatusMessage(retry ? 'Retry failed.' : 'Transcription failed. You can retry, play back, or discard.');
+        return;
+      }
+      if (!said) {
+        replaceFailedTake({
+          blob: take.blob,
+          mimeType: take.mimeType,
+          objectUrl: take.objectUrl ?? URL.createObjectURL(take.blob),
+          attachment: res.attachment,
+          error: "Couldn't make out any words.",
+          retrying: false,
+        });
+        if (!retry) setError(null);
+        setStatusMessage(retry ? 'No words detected.' : 'No words detected. You can retry, play back, or discard.');
+        return;
+      }
+      if (res.error) setError(res.error);
+      applyTranscriptToDraft(said);
+      if (retry) replaceFailedTake(null);
+      setStatusMessage('Transcription inserted.');
+      void api.deleteUpload(res.attachment.id).catch(() => {});
+    },
+    [applyTranscriptToDraft, replaceFailedTake],
+  );
+
   const confirm = useCallback(async () => {
     clearHoldTimer();
     pointerIdRef.current = null;
@@ -373,40 +390,7 @@ export function useVoiceDictation({
 
       try {
         const res = await api.transcribe(result.blob, result.mimeType);
-        const said = res.text.trim();
-        if (res.error && !said) {
-          const objectUrl = URL.createObjectURL(result.blob);
-          replaceFailedTake({
-            blob: result.blob,
-            mimeType: result.mimeType,
-            objectUrl,
-            attachment: res.attachment,
-            error: res.error,
-            retrying: false,
-          });
-          setError(null);
-          setStatusMessage('Transcription failed. You can retry, play back, or discard.');
-          return;
-        }
-        if (!said) {
-          const objectUrl = URL.createObjectURL(result.blob);
-          replaceFailedTake({
-            blob: result.blob,
-            mimeType: result.mimeType,
-            objectUrl,
-            attachment: res.attachment,
-            error: "Couldn't make out any words.",
-            retrying: false,
-          });
-          setError(null);
-          setStatusMessage('No words detected. You can retry, play back, or discard.');
-          return;
-        }
-        // Dictation succeeded: insert text and clean up temporary upload on the server.
-        if (res.error) setError(res.error);
-        applyTranscriptToDraft(said);
-        setStatusMessage('Transcription inserted.');
-        void api.deleteUpload(res.attachment.id).catch(() => {});
+        applyTranscribeResult(res, result, false);
       } catch (e: any) {
         const objectUrl = URL.createObjectURL(result.blob);
         replaceFailedTake({
@@ -424,7 +408,7 @@ export function useVoiceDictation({
     } finally {
       stoppingRef.current = false;
     }
-  }, [applyTranscriptToDraft, cancel, clearHoldTimer, recorder, replaceFailedTake, showNotice, stopSpeechRecognition, textareaRef]);
+  }, [applyTranscribeResult, cancel, clearHoldTimer, recorder, replaceFailedTake, showNotice, stopSpeechRecognition, textareaRef]);
 
   const startSpeechFallback = useCallback(() => {
     if (!SpeechRecognitionCtor) {
@@ -579,32 +563,7 @@ export function useVoiceDictation({
         res = await api.transcribe(take.blob, take.mimeType);
       }
 
-      const said = res.text.trim();
-      if (res.error && !said) {
-        replaceFailedTake({
-          ...take,
-          attachment: res.attachment,
-          error: res.error,
-          retrying: false,
-        });
-        setStatusMessage('Retry failed.');
-        return;
-      }
-      if (!said) {
-        replaceFailedTake({
-          ...take,
-          attachment: res.attachment,
-          error: "Couldn't make out any words.",
-          retrying: false,
-        });
-        setStatusMessage('No words detected.');
-        return;
-      }
-      if (res.error) setError(res.error);
-      applyTranscriptToDraft(said);
-      replaceFailedTake(null);
-      setStatusMessage('Transcription inserted.');
-      void api.deleteUpload(res.attachment.id).catch(() => {});
+      applyTranscribeResult(res, take, true);
     } catch (e: any) {
       replaceFailedTake({
         ...take,
@@ -613,7 +572,7 @@ export function useVoiceDictation({
       });
       setStatusMessage('Retry failed.');
     }
-  }, [applyTranscriptToDraft, failedTake, replaceFailedTake]);
+  }, [applyTranscribeResult, failedTake, replaceFailedTake]);
 
   const attachFailed = useCallback(async () => {
     const take = failedTake;
@@ -841,8 +800,6 @@ export function useVoiceDictation({
     interimText,
     seconds: recorder.seconds,
     analyser: recorder.analyser,
-    isRecording: mode === 'holding' || mode === 'locked' || recorder.state === 'recording',
-    isListening: mode === 'listening',
     isActive: mode === 'holding' || mode === 'locked' || mode === 'listening',
     isTranscribing: mode === 'transcribing',
     notice,
@@ -857,8 +814,35 @@ export function useVoiceDictation({
     retryFailed,
     attachFailed,
     discardFailed,
-    clearError: () => setError(null),
   };
+}
+
+export function handleVoiceShortcut(
+  e: KeyboardEvent,
+  voice: Pick<ReturnType<typeof useVoiceDictation>, 'voiceVisible' | 'isTranscribing' | 'isActive' | 'mode' | 'toggle' | 'cancel' | 'confirm'>,
+  disabled: boolean,
+): boolean {
+  if ((e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'm') {
+    if (!voice.voiceVisible || disabled || voice.isTranscribing) return false;
+    e.preventDefault();
+    voice.toggle();
+    return true;
+  }
+  if (e.key === 'Escape' && voice.isActive) {
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation?.();
+    voice.cancel();
+    return true;
+  }
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && (voice.mode === 'locked' || voice.mode === 'listening')) {
+    const target = e.target as HTMLElement | null;
+    if (target?.closest?.('button')) return false;
+    e.preventDefault();
+    void voice.confirm();
+    return true;
+  }
+  return false;
 }
 
 export function VoiceHoldHud({
@@ -903,7 +887,7 @@ export function VoiceLockedBar({
   return (
     <div className="voice-locked-bar" role="region" aria-label={isSpeech ? 'Dictation controls' : 'Recording controls'}>
       <button type="button" className="icon-btn voice-cancel-btn" onClick={onCancel} aria-label="Discard recording" title="Discard (Esc)">
-        <TrashIcon size={18} />
+        <Icon.trash size={18} />
       </button>
       <span className="voice-rec-timer">
         <span className="rec-dot" aria-hidden="true" />

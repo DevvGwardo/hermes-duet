@@ -702,52 +702,24 @@ export function SourceChips({ sources, onOpenFile }: { sources: Source[]; onOpen
       <div className="sources" aria-label="Sources">
         {sources.map((s, i) => {
           const hint = s.quote ?? s.label;
-          if (s.kind === 'file' && s.id) {
-            const btn = (
-              <button type="button" className="chip source" title={hint} onClick={() => onOpenFile(s.id!)} aria-label={`Open source ${s.label}`}>
-                {s.label}
-              </button>
-            );
+          const fileId = s.kind === 'file' ? s.id : s.kind === 'page' && s.id ? pages.find((p) => p.id === s.id)?.file_id : undefined;
+          const chip = fileId ? (
+            <button type="button" className="chip source" title={hint} onClick={() => onOpenFile(fileId)} aria-label={`Open source ${s.label}`}>
+              {s.label}
+            </button>
+          ) : s.kind === 'url' && isSafeSourceUrl(s.url) ? (
+            <a className="chip source" href={s.url} target="_blank" rel="noreferrer noopener" title={hint}>
+              {s.label}
+            </a>
+          ) : null;
+          if (chip) {
             return s.quote ? (
               <span key={i} className="source-pair">
-                {btn}
+                {chip}
                 {quoteBtn(i, s.label)}
               </span>
             ) : (
-              <span key={i}>{btn}</span>
-            );
-          }
-          if (s.kind === 'page' && s.id) {
-            const fileId = pages.find((p) => p.id === s.id)?.file_id;
-            if (fileId) {
-              const btn = (
-                <button type="button" className="chip source" title={hint} onClick={() => onOpenFile(fileId)} aria-label={`Open source ${s.label}`}>
-                  {s.label}
-                </button>
-              );
-              return s.quote ? (
-                <span key={i} className="source-pair">
-                  {btn}
-                  {quoteBtn(i, s.label)}
-                </span>
-              ) : (
-                <span key={i}>{btn}</span>
-              );
-            }
-          }
-          if (s.kind === 'url' && isSafeSourceUrl(s.url)) {
-            const link = (
-              <a className="chip source" href={s.url} target="_blank" rel="noreferrer noopener" title={hint}>
-                {s.label}
-              </a>
-            );
-            return s.quote ? (
-              <span key={i} className="source-pair">
-                {link}
-                {quoteBtn(i, s.label)}
-              </span>
-            ) : (
-              <span key={i}>{link}</span>
+              <span key={i}>{chip}</span>
             );
           }
           if (s.quote) {

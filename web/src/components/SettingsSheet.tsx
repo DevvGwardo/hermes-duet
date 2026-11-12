@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { Connector, Settings } from '../../../shared/types';
 import { api, enablePush, isStandalone, pushSupported } from '../api';
 import { useStore } from '../store';
-import { isTopDialog, useDialogTrap } from '../hooks/useDialogTrap';
+import { useDialogTrap } from '../hooks/useDialogTrap';
 import { Icon } from '../ui';
 import { ConnectorsSheet } from './ConnectorsSheet';
 import { MemorySheet } from './MemorySheet';
@@ -30,23 +30,14 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
   // The hard-block policy is informational only; older servers don't serve it, so a failure just hides the section.
   const [policy, setPolicy] = useState<{ id: string; title: string; detail: string }[] | null>(null);
   const dialog = useRef<HTMLDivElement | null>(null);
-  useDialogTrap(dialog);
+  useDialogTrap(dialog, () => {
+    if (routinesOpen || showConnectors || memoryOpen) return false;
+    onClose();
+  });
 
   useEffect(() => {
     if (settings) setMaxPushes(String(settings.max_pushes_per_day ?? 0));
   }, [settings?.max_pushes_per_day]);
-
-  useEffect(() => {
-    // Escape closes the routines, connectors or memory sheet first when one is open on top of this one.
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || routinesOpen || showConnectors || memoryOpen || !isTopDialog(dialog.current)) return;
-      e.preventDefault();
-      e.stopPropagation();
-      onClose();
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [onClose, routinesOpen, showConnectors, memoryOpen]);
 
   // Probes run local checks on the host, so they load when the sheet opens rather than with every snapshot.
   useEffect(() => {

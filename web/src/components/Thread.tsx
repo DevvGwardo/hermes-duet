@@ -338,7 +338,7 @@ function Activity({ item }: { item: Item }) {
   );
 }
 
-export function prettyTool(name: string) {
+function prettyTool(name: string) {
   const n = name.replace(/^mcp_+/, '').replace(/^duet_+/, '').replace(/[_-]+/g, ' ');
   return n.charAt(0).toUpperCase() + n.slice(1);
 }

@@ -3,8 +3,10 @@ import type { FileEntry } from '../../../shared/types';
 import { api } from '../api';
 import { isEditableMime } from '../edit';
 import { applyEvent, useStore } from '../store';
-import { isTopDialog, useDialogTrap } from '../hooks/useDialogTrap';
+import { useDialogTrap } from '../hooks/useDialogTrap';
 import { Icon, Markdown, bytesLabel } from '../ui';
+
+const FRAME_SANDBOX = 'allow-scripts allow-popups allow-popups-to-escape-sandbox allow-downloads allow-modals';
 
 /**
  * The viewer: a delivered file on its phone. HTML runs in a sandboxed frame (no cookies, no API access) with the
@@ -47,7 +49,7 @@ export function Viewer({ fileId, compareId, onClose }: { fileId: string; compare
   const [svgPreviewUrl, setSvgPreviewUrl] = useState<string | null>(null);
   const frame = useRef<HTMLIFrameElement | null>(null);
   const dialog = useRef<HTMLDivElement | null>(null);
-  useDialogTrap(dialog);
+  useDialogTrap(dialog, () => attemptClose());
   const src = `/api/files/${encodeURIComponent(currentId)}`;
   const isHtml = file?.mime === 'text/html';
   const isSvg = file?.mime === 'image/svg+xml';
@@ -142,18 +144,6 @@ export function Viewer({ fileId, compareId, onClose }: { fileId: string; compare
     setSvgPreviewUrl(url);
     return () => URL.revokeObjectURL(url);
   }, [draft, editing, isSvg, showPreview]);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || !isTopDialog(dialog.current)) return;
-      e.preventDefault();
-      e.stopPropagation();
-      if (dirty && !window.confirm('Discard unsaved edits?')) return;
-      onClose();
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [onClose, dirty]);
 
   // A dashboard's buttons: only messages from *this* frame count, and only the two shapes the bridge sends.
   useEffect(() => {
@@ -309,22 +299,19 @@ export function Viewer({ fileId, compareId, onClose }: { fileId: string; compare
                 </button>
               </div>
             ) : null}
-            {isHtml || isSvg ? (
-              showPreview ? (
-                isHtml ? (
-                  <iframe
-                    srcDoc={draft}
-                    title={`${file?.title ?? 'File'} preview`}
-                    sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-downloads allow-modals"
-                  />
-                ) : (
-                  svgPreviewUrl && <img src={svgPreviewUrl} alt={file?.title ?? 'File preview'} />
-                )
+            {(isHtml || isSvg) && showPreview ? (
+              isHtml ? (
+                <iframe srcDoc={draft} title={`${file?.title ?? 'File'} preview`} sandbox={FRAME_SANDBOX} />
               ) : (
-                <textarea value={draft} onChange={(e) => setDraft(e.target.value)} spellCheck={false} aria-label="File source" />
+                svgPreviewUrl && <img src={svgPreviewUrl} alt={file?.title ?? 'File preview'} />
               )
             ) : (
-              <textarea value={draft} onChange={(e) => setDraft(e.target.value)} spellCheck={false} aria-label="File text" />
+              <textarea
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                spellCheck={false}
+                aria-label={isHtml || isSvg ? 'File source' : 'File text'}
+              />
             )}
             <div className="viewer-edit-bar">
               <span className="viewer-edit-error" role="alert">
@@ -343,12 +330,7 @@ export function Viewer({ fileId, compareId, onClose }: { fileId: string; compare
             <div className="compare-stage">
               <div className="compare-pane">
                 {kind === 'frame' ? (
-                  <iframe
-                    ref={frame}
-                    src={src}
-                    title={file?.title ?? 'Current version'}
-                    sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-downloads allow-modals"
-                  />
+                  <iframe ref={frame} src={src} title={file?.title ?? 'Current version'} sandbox={FRAME_SANDBOX} />
                 ) : kind === 'markdown' ? (
                   text !== null && <Markdown text={text} className="doc" />
                 ) : (
@@ -381,16 +363,19 @@ export function Viewer({ fileId, compareId, onClose }: { fileId: string; compare
             {kind === 'image' && <img src={src} alt={file!.title} />}
             {/* HTML deliverables run sandboxed without same-origin, so they can't reach the API. The server appends the
                 Duet bridge; its buttons post messages that this component turns into agent turns or approval cards. */}
-            {kind === 'frame' && (
-              <iframe
-                ref={frame}
-                src={src}
-                title={file!.title}
-                sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-downloads allow-modals"
-              />
-            )}
-            {kind === 'markdown' && (loadFailed ? <p className="card-error pad">{text}</p> : text !== null ? <Markdown text={text} className="doc" /> : <p className="muted pad">Loading…</p>)}
-            {kind === 'text' && (loadFailed ? <p className="card-error pad">{text}</p> : text !== null ? <pre className="doc-pre">{text}</pre> : <p className="muted pad">Loading…</p>)}
+            {kind === 'frame' && <iframe ref={frame} src={src} title={file!.title} sandbox={FRAME_SANDBOX} />}
+            {(kind === 'markdown' || kind === 'text') &&
+              (loadFailed ? (
+                <p className="card-error pad">{text}</p>
+              ) : text !== null ? (
+                kind === 'markdown' ? (
+                  <Markdown text={text} className="doc" />
+                ) : (
+                  <pre className="doc-pre">{text}</pre>
+                )
+              ) : (
+                <p className="muted pad">Loading…</p>
+              ))}
             {kind === 'download' && <p className="muted pad">No preview for this type. Use Download.</p>}
           </div>
         )}

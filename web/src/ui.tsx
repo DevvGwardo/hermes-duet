@@ -220,6 +220,12 @@ export const Icon = {
     </>,
   ),
   pencil: svg(<path d="m14.5 5.5 4 4L8 20l-5 1 1-5z" />),
+  trash: svg(
+    <>
+      <path d="M4 7h16M9 7V4.5a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 .5.5V7M6 7l1 12.5A1.5 1.5 0 0 0 8.5 21h7a1.5 1.5 0 0 0 1.5-1.5L18 7" />
+      <path d="M10 11v6M14 11v6" />
+    </>,
+  ),
 };
 
 export function fileIcon(mime: string, name: string) {

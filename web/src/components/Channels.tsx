@@ -2,11 +2,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Channel, SearchHit } from '../../../shared/types';
 import { openChannel, api } from '../api';
 import { useStore } from '../store';
-import { isTopDialog, useDialogTrap } from '../hooks/useDialogTrap';
+import { useDialogTrap } from '../hooks/useDialogTrap';
 import { Icon } from '../ui';
 
 /** True when the channel has activity the user has not opened yet. The open channel never shows one. */
-export function isUnread(c: Channel, active: string | null): boolean {
+function isUnread(c: Channel, active: string | null): boolean {
   return c.id !== active && (c.last_at ?? 0) > (c.seen_at ?? 0);
 }
 
@@ -89,18 +89,7 @@ export function ChannelsSheet({ onClose }: { onClose: () => void }) {
   const [eRepo, setERepo] = useState('');
   const [eInstructions, setEInstructions] = useState('');
   const dialog = useRef<HTMLDivElement | null>(null);
-  useDialogTrap(dialog);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || !isTopDialog(dialog.current)) return;
-      e.preventDefault();
-      e.stopPropagation();
-      onClose();
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [onClose]);
+  useDialogTrap(dialog, onClose);
 
   // Group headings only when at least one channel is grouped; the general channel stays pinned first.
   const sections = useMemo(() => {
@@ -250,25 +239,16 @@ export function ChannelsSheet({ onClose }: { onClose: () => void }) {
               void saveEdit(c.id);
             }}
           >
-            <input value={eTopic} onChange={(e) => setETopic(e.target.value)} placeholder="What it is for (optional)" aria-label="Channel topic" maxLength={200} />
-            <input value={eGroup} onChange={(e) => setEGroup(e.target.value)} placeholder="Group (optional)" aria-label="Channel group" maxLength={40} />
-            <input
-              value={eRepo}
-              onChange={(e) => setERepo(e.target.value)}
-              placeholder="Repo (owner/name or GitHub URL, optional)"
-              aria-label="Channel repo"
-              maxLength={200}
-              autoCapitalize="off"
-              autoCorrect="off"
-              spellCheck={false}
-            />
-            <textarea
-              value={eInstructions}
-              onChange={(e) => setEInstructions(e.target.value)}
-              placeholder="Standing instructions for this channel (optional)"
-              aria-label="Channel instructions"
-              maxLength={2000}
-              rows={3}
+            <ChannelFields
+              topic={eTopic}
+              onTopic={setETopic}
+              group={eGroup}
+              onGroup={setEGroup}
+              repo={eRepo}
+              onRepo={setERepo}
+              instructions={eInstructions}
+              onInstructions={setEInstructions}
+              instructionsPlaceholder="Standing instructions for this channel (optional)"
             />
             <span className="channel-edit-btns">
               <button className="btn btn-primary small" disabled={busy} type="submit">
@@ -323,25 +303,16 @@ export function ChannelsSheet({ onClose }: { onClose: () => void }) {
             <h3>New channel</h3>
             <form className="channel-form" onSubmit={create}>
               <input value={name} onChange={(e) => setName(e.target.value)} placeholder="taxes" aria-label="Channel name" maxLength={40} autoCapitalize="off" />
-              <input value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="What it is for (optional)" aria-label="Channel topic" maxLength={200} />
-              <input value={group} onChange={(e) => setGroup(e.target.value)} placeholder="Group (optional)" aria-label="Channel group" maxLength={40} />
-              <input
-                value={repo}
-                onChange={(e) => setRepo(e.target.value)}
-                placeholder="Repo (owner/name or GitHub URL, optional)"
-                aria-label="Channel repo"
-                maxLength={200}
-                autoCapitalize="off"
-                autoCorrect="off"
-                spellCheck={false}
-              />
-              <textarea
-                value={instructions}
-                onChange={(e) => setInstructions(e.target.value)}
-                placeholder="Standing instructions (optional)"
-                aria-label="Channel instructions"
-                maxLength={2000}
-                rows={3}
+              <ChannelFields
+                topic={topic}
+                onTopic={setTopic}
+                group={group}
+                onGroup={setGroup}
+                repo={repo}
+                onRepo={setRepo}
+                instructions={instructions}
+                onInstructions={setInstructions}
+                instructionsPlaceholder="Standing instructions (optional)"
               />
               <button className="btn btn-primary small" disabled={busy || !name.trim()}>
                 {busy ? 'Creating…' : 'Create'}
@@ -386,21 +357,10 @@ export function SearchOverlay({
   const [active, setActive] = useState(0);
   const seq = useRef(0);
   const dialog = useRef<HTMLDivElement | null>(null);
-  useDialogTrap(dialog);
+  useDialogTrap(dialog, onClose);
   const pages = useStore((s) => s.pages);
   const items = useStore((s) => s.items);
   const findChannel = (id: string) => items.find((i) => i.id === id)?.channel_id;
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || !isTopDialog(dialog.current)) return;
-      e.preventDefault();
-      e.stopPropagation();
-      onClose();
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [onClose]);
 
   useEffect(() => {
     const text = q.trim();
@@ -542,6 +502,53 @@ function highlight(text: string, terms: string[]) {
     ) : (
       part
     ),
+  );
+}
+
+function ChannelFields({
+  topic,
+  onTopic,
+  group,
+  onGroup,
+  repo,
+  onRepo,
+  instructions,
+  onInstructions,
+  instructionsPlaceholder,
+}: {
+  topic: string;
+  onTopic: (v: string) => void;
+  group: string;
+  onGroup: (v: string) => void;
+  repo: string;
+  onRepo: (v: string) => void;
+  instructions: string;
+  onInstructions: (v: string) => void;
+  instructionsPlaceholder: string;
+}) {
+  return (
+    <>
+      <input value={topic} onChange={(e) => onTopic(e.target.value)} placeholder="What it is for (optional)" aria-label="Channel topic" maxLength={200} />
+      <input value={group} onChange={(e) => onGroup(e.target.value)} placeholder="Group (optional)" aria-label="Channel group" maxLength={40} />
+      <input
+        value={repo}
+        onChange={(e) => onRepo(e.target.value)}
+        placeholder="Repo (owner/name or GitHub URL, optional)"
+        aria-label="Channel repo"
+        maxLength={200}
+        autoCapitalize="off"
+        autoCorrect="off"
+        spellCheck={false}
+      />
+      <textarea
+        value={instructions}
+        onChange={(e) => onInstructions(e.target.value)}
+        placeholder={instructionsPlaceholder}
+        aria-label="Channel instructions"
+        maxLength={2000}
+        rows={3}
+      />
+    </>
   );
 }
 

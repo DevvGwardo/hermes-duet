@@ -8,7 +8,7 @@ import { STATUS_LABEL } from '../labels';
 import { useStore } from '../store';
 import { Icon, Markdown, relLabel, timeLabel } from '../ui';
 import { FileRow, SourceChips } from './CardView';
-import { VoiceHints, VoiceHoldHud, VoiceLockedBar, VoiceRetryCard, useVoiceDictation } from './VoiceInput';
+import { VoiceHints, VoiceHoldHud, VoiceLockedBar, VoiceRetryCard, handleVoiceShortcut, useVoiceDictation } from './VoiceInput';
 
 export function TasksView({
   onJump,
@@ -112,7 +112,10 @@ function confirmLabel(task: Task): string {
  */
 function TaskSheet({ task, onClose, onOpenFile }: { task: Task; onClose: () => void; onOpenFile: (id: string) => void }) {
   const dialog = useRef<HTMLDivElement | null>(null);
-  useDialogTrap(dialog);
+  useDialogTrap(dialog, () => {
+    if (dialog.current?.querySelector('.task-composer-row.listening')) return false;
+    onClose();
+  });
   const files = useStore((s) => s.files);
   const storeHandover = useStore((s) => s.items.find((i) => i.id === task.handover_id));
   const [fetchedHandover, setFetchedHandover] = useState<Item | null>(null);
@@ -144,18 +147,6 @@ function TaskSheet({ task, onClose, onOpenFile }: { task: Task; onClose: () => v
   }, [task.handover_id, !!storeHandover]);
   const handover = storeHandover ?? (fetchedHandover?.id === task.handover_id ? fetchedHandover : undefined);
   const own = visibleFiles(files.filter((f) => f.task_id === task.id));
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || !isTopDialog(dialog.current)) return;
-      if (dialog.current?.querySelector('.task-composer-row.listening')) return;
-      e.preventDefault();
-      e.stopPropagation();
-      onClose();
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [onClose]);
 
   const done = task.steps.filter((s) => s.done).length;
   const live = task.status === 'running' || task.status === 'waiting';
@@ -336,35 +327,7 @@ function TaskComposer({ taskId, dialogRef }: { taskId: string; dialogRef: RefObj
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!isTopDialog(dialogRef.current)) return;
-      const v = voiceRef.current;
-
-      if (e.key === 'Escape' && v.isActive) {
-        e.preventDefault();
-        e.stopPropagation();
-        e.stopImmediatePropagation?.();
-        v.cancel();
-        return;
-      }
-
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'm') {
-        if (!v.voiceVisible || busyRef.current || v.isTranscribing) return;
-        e.preventDefault();
-        v.toggle();
-        return;
-      }
-
-      if (
-        e.key === 'Enter' &&
-        !e.shiftKey &&
-        !e.isComposing &&
-        (v.mode === 'locked' || v.mode === 'listening')
-      ) {
-        const target = e.target as HTMLElement | null;
-        if (target?.closest?.('button')) return;
-        e.preventDefault();
-        void v.confirm();
-      }
+      if (isTopDialog(dialogRef.current)) handleVoiceShortcut(e, voiceRef.current, busyRef.current);
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);

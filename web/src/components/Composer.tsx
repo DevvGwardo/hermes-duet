@@ -4,7 +4,7 @@ import { api } from '../api';
 import { useStore } from '../store';
 import { Icon } from '../ui';
 import { Attachments } from './Attachments';
-import { VoiceHints, VoiceHoldHud, VoiceLockedBar, VoiceRetryCard, useVoiceDictation } from './VoiceInput';
+import { VoiceHints, VoiceHoldHud, VoiceLockedBar, VoiceRetryCard, handleVoiceShortcut, useVoiceDictation } from './VoiceInput';
 
 export interface ComposerHandle {
   prefill: (text: string) => void;
@@ -67,34 +67,7 @@ export const Composer = forwardRef<ComposerHandle, { onSent?: () => void; hidden
   useEffect(() => {
     if (hidden) return;
     const onKey = (e: KeyboardEvent) => {
-      const dialogOpen = !!document.querySelector('.sheet, .browser-pane');
-      if (dialogOpen) return;
-
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'm') {
-        if (!voice.voiceVisible || sending || voice.isTranscribing) return;
-        e.preventDefault();
-        voice.toggle();
-        return;
-      }
-
-      if (e.key === 'Escape' && voice.isActive) {
-        e.preventDefault();
-        e.stopPropagation();
-        voice.cancel();
-        return;
-      }
-
-      if (
-        e.key === 'Enter' &&
-        !e.shiftKey &&
-        !e.isComposing &&
-        (voice.mode === 'locked' || voice.mode === 'listening')
-      ) {
-        const target = e.target as HTMLElement | null;
-        if (target?.closest?.('button')) return;
-        e.preventDefault();
-        void voice.confirm();
-      }
+      if (!document.querySelector('.sheet, .browser-pane')) handleVoiceShortcut(e, voice, sending);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
