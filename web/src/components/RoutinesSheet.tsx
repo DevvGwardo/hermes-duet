@@ -3,7 +3,7 @@ import type { Routine, RoutineSchedule } from '../../../shared/types';
 import { scheduleLabel } from '../../../server/routines';
 import { api } from '../api';
 import { useStore } from '../store';
-import { isTopDialog, useDialogTrap } from '../hooks/useDialogTrap';
+import { useDialogTrap } from '../hooks/useDialogTrap';
 import { Icon } from '../ui';
 
 const DAY_LABELS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
@@ -29,18 +29,7 @@ export function RoutinesSheet({ onClose }: { onClose: () => void }) {
   const channels = useStore((s) => s.channels);
   const timezone = useStore((s) => s.settings?.timezone) ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
   const dialog = useRef<HTMLDivElement | null>(null);
-  useDialogTrap(dialog);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || !isTopDialog(dialog.current)) return;
-      e.preventDefault();
-      e.stopPropagation();
-      onClose();
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [onClose]);
+  useDialogTrap(dialog, onClose);
 
   const [editing, setEditing] = useState<Routine | null>(null);
   const [title, setTitle] = useState('');

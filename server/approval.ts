@@ -26,11 +26,9 @@ export function approvalDecision(card: CardData, action: string, value: unknown)
 }
 
 /**
- * The push for an approval card, Duet or Hermes-native. The notification shows only the title, so a card whose
- * substance is in the card itself gets `must_read`: the service worker then offers "Read it first" (opens the
- * card) instead of a one-tap Approve. That covers a Duet draft (text the user never saw would be sent) and every
- * Hermes-native approval (a flagged command would run unseen; the command is only in the card body). Neither
- * the draft nor the command goes into the payload.
+ * Build the push payload for an approval card. Cards with a Duet draft or Hermes command set `must_read`
+ * so the service worker requires opening the card rather than allowing a one-tap unseen approval; neither
+ * draft nor command text is placed in the payload.
  */
 export function approvalPush(card: Item): PushPayload {
   const c = card.card!;
@@ -54,11 +52,8 @@ export function approvalPush(card: Item): PushPayload {
 export const OPEN_ASKS_MAX = 30;
 
 /**
- * What every push carries so the service worker can take settled asks off the lock screen without the app open:
- * `ask` marks a push about a pending approval or question, and `open` lists every ask still pending when it was sent.
- * On arrival the worker closes earlier ask banners whose card is not in `open` (decided on another device, replaced,
- * expired). It rides on pushes that are sent anyway; a push only to clear one would be a silent push on iOS. With too
- * many open asks to fit, `open` is omitted and the worker leaves every banner alone.
+ * Piggyback `ask`/`open` metadata on outgoing pushes so the service worker can dismiss settled lock-screen
+ * banners without sending silent pushes (which iOS disallows). Omits `open` if above OPEN_ASKS_MAX.
  */
 export function askMarks(p: Pick<PushPayload, 'card_id'>, pending: Item[], now: number): Pick<PushPayload, 'ask' | 'open' | 'sent_at'> {
   const open = pending
@@ -73,12 +68,7 @@ export function askMarks(p: Pick<PushPayload, 'card_id'>, pending: Item[], now: 
 
 export const PROMPT_ENDED = 'Its run ended';
 
-/**
- * Hermes-native prompts (approval or clarify) whose run is no longer live. Hermes holds the run open while it waits,
- * so once the run has ended (stopped, timed out, interrupted by a restart) nothing can answer the prompt any more,
- * and it must leave "Needs you" and the brief's waiting list. Duet's own cards are not tied to a live run: their
- * answer resumes the session as a new turn, so they stay pending.
- */
+/** Hermes-native prompts whose owning run is no longer live (their answer can no longer be delivered). */
 export function deadPrompts(pending: Item[], live: ReadonlySet<string>): Item[] {
   return pending.filter((i) => i.card?.status === 'pending' && i.card.hermes && !live.has(i.card.hermes.run_id));
 }
@@ -86,10 +76,8 @@ export function deadPrompts(pending: Item[], live: ReadonlySet<string>): Item[] 
 export const REPLACED = 'Replaced by a newer version';
 
 /**
- * Why the card a `request_approval` / `ask` names in `replaces` can't be withdrawn, or null if it can. A redraft
- * ("make it shorter") otherwise leaves the old card live beside the new one: both sit in "Needs you", and approving
- * the old one tells the agent to send the old draft. Only a Duet card of the same kind, still pending, from the
- * calling session qualifies, so a task can't withdraw the main thread's card and Duet's own cards stay put.
+ * Return a refusal reason if `target` cannot be replaced by `replaces`, or null if valid.
+ * Scoped to pending Duet-native cards of the same kind in the calling session.
  */
 export function replaceRefusal(target: Item | null | undefined, type: 'approval' | 'choice', sessionId: string): string | null {
   const c = target?.kind === 'card' ? target.card : undefined;
@@ -103,11 +91,7 @@ export function replaceRefusal(target: Item | null | undefined, type: 'approval'
 
 export const WITHDRAWN = 'Withdrawn';
 
-/**
- * Why `withdraw_card` can't take this card down, or null if it can: the same rules as a redraft's `replaces`, for
- * either kind of ask. The user often settles a card in chat instead of tapping ("don't send that", "the second one");
- * left pending, it stays in "Needs you" and the brief, and a tap days later resumes the agent as if it were fresh.
- */
+/** Return a refusal reason if `withdraw_card` cannot withdraw `target` from `sessionId`, or null if allowed. */
 export function withdrawRefusal(target: Item | null | undefined, sessionId: string): string | null {
   const type = target?.card?.type;
   if (type !== 'approval' && type !== 'choice') return target?.card ? 'it is not an approval or question card' : 'there is no such card';
@@ -117,11 +101,7 @@ export function withdrawRefusal(target: Item | null | undefined, sessionId: stri
 /** Above this many, the turn's note lists only the newest waiting cards. */
 const WAITING_NOTE_MAX = 5;
 
-/**
- * Prefixed to a chat message while this session's own approvals or questions are still waiting, so a reply that
- * settles one in words also takes the card down (withdraw_card) instead of leaving it tappable. An approval is
- * still only given by its button: a "yes" in chat gets pointed at the card, which holds the exact draft.
- */
+/** Prefix for chat turns listing pending asks so text replies can withdraw settled cards (approvals still require tapping Approve). */
 export function waitingNote(pending: Item[], sessionId: string): string {
   const mine = pending.filter((i) => !withdrawRefusal(i, sessionId)).sort((a, b) => b.created_at - a.created_at);
   if (!mine.length) return '';
@@ -129,21 +109,12 @@ export function waitingNote(pending: Item[], sessionId: string): string {
   return `(Cards of yours still waiting on the user's tap:\n${lines.join('\n')}\nIf this message declines one, answers one, or makes one moot, call withdraw_card with its id before going on, so it can't be tapped later. If it asks for changes to an approval, redraft with replaces instead. If it says yes to an approval, don't act on that: ask them to tap the card's button, which has the exact draft.)\n\n`;
 }
 
-/**
- * The waiting-cards note for a user message going into `run`: a fresh chat turn, or text steered into a live one
- * (Hermes hands steer text to the model verbatim inside its own marker, so the prefix arrives the same way). Briefs,
- * check-ins and tasks get none: the user's words don't reach them as a chat message.
- */
+/** Waiting-cards note for chat turns and steers (omitted for briefs, check-ins, and tasks). */
 export function turnNote(pending: Item[], run: { kind: string; sessionId: string }): string {
   return run.kind === 'chat' ? waitingNote(pending, run.sessionId) : '';
 }
 
-/**
- * What an approval or answer that arrives long after its card was posted must check first (`age` from askAge).
- * The agent is told to stop and say so rather than adjust anything itself: the user approved the exact text, so a
- * changed date or a done errand needs a fresh card, not a silent edit. An edited draft was rewritten by the user just
- * now, so only "already done" applies to it.
- */
+/** Staleness check appended when an approval or answer arrives long after the card was posted (`age` from askAge). */
 export function oldAskNote(age: string | null | undefined, kind: 'approval' | 'edited' | 'answer'): string {
   if (!age) return '';
   if (kind === 'answer') {

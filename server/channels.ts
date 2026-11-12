@@ -59,9 +59,9 @@ export function channelInput(raw: unknown): ChannelInput {
   if (name.length > CHANNEL_NAME_MAX) throw new UserError(`channel names are at most ${CHANNEL_NAME_MAX} characters`);
   if (!/[a-z0-9]/i.test(name)) throw new UserError('a channel name needs at least one letter or number');
   if (slugFor(name) === 'general') throw new UserError('there is already a general channel');
-  const topic = cleanTopic(String(src.topic ?? ''));
-  const instructions = cleanInstructions(src.instructions);
-  const group = cleanGroup(src.group);
+  const topic = cleanText(src.topic, CHANNEL_TOPIC_MAX);
+  const instructions = cleanText(src.instructions, CHANNEL_INSTRUCTIONS_MAX);
+  const group = cleanText(src.group, CHANNEL_GROUP_MAX);
   const repo = cleanRepo(src.repo);
   return {
     name,
@@ -72,31 +72,12 @@ export function channelInput(raw: unknown): ChannelInput {
   };
 }
 
-/** Topic-length text: collapse every whitespace run (newlines included) to one space, then cap. */
-function cleanTopic(raw: unknown): string {
+/** Collapse whitespace runs (including newlines) to single spaces and cap length. */
+function cleanText(raw: unknown, max: number): string {
   return String(raw ?? '')
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(0, CHANNEL_TOPIC_MAX);
-}
-
-/**
- * Standing instructions: collapsed to one line like the topic, so a pasted multi-line list stays one bounded
- * block in the prompt instead of blowing up the context line count.
- */
-export function cleanInstructions(raw: unknown): string {
-  return String(raw ?? '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, CHANNEL_INSTRUCTIONS_MAX);
-}
-
-/** Group label: a short strip heading ("Work", "Home"). Trimmed; overlong is capped, empty clears. */
-export function cleanGroup(raw: unknown): string {
-  return String(raw ?? '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, CHANNEL_GROUP_MAX);
+    .slice(0, max);
 }
 
 /** "owner/name" with the characters GitHub actually allows in either half. */
@@ -146,9 +127,9 @@ export function cleanRepo(raw: unknown): string | null {
 export function channelPatch(raw: unknown): ChannelPatch {
   const src = (raw ?? {}) as Record<string, unknown>;
   const out: ChannelPatch = {};
-  if ('topic' in src) out.topic = cleanTopic(src.topic) || null;
-  if ('instructions' in src) out.instructions = cleanInstructions(src.instructions) || null;
-  if ('group' in src) out.group = cleanGroup(src.group) || null;
+  if ('topic' in src) out.topic = cleanText(src.topic, CHANNEL_TOPIC_MAX) || null;
+  if ('instructions' in src) out.instructions = cleanText(src.instructions, CHANNEL_INSTRUCTIONS_MAX) || null;
+  if ('group' in src) out.group = cleanText(src.group, CHANNEL_GROUP_MAX) || null;
   if ('repo' in src) out.repo = cleanRepo(src.repo);
   return out;
 }

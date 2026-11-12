@@ -38,7 +38,7 @@ View the [full-size infographic](docs/brand/what-it-does.png), or expand the det
 - **Talk, photograph, or type.** Tap the mic to record a voice memo — transcribed on your machine by whisper.cpp, so it works offline — or take a photo / attach a PDF of a receipt, a whiteboard or a form. Attachments are stored under `data/uploads` and handed to the agent as file paths, so a vision model can read them. Every brief has a **Listen** button that reads it aloud (macOS `say`, Piper, or any OpenAI-compatible TTS) with a lock-screen player.
 - **Channels.** Long projects get their own thread (`#taxes`, `#home`, `#launch`) with its own Hermes session, while memory and files are shared. The general channel keeps briefs, check-ins and task results. Everything — every channel, task, delivered file and standing page — is indexed in SQLite FTS5 and searchable from the magnifier (⌘K).
 - **Spending needs a receipt.** `request_payment` posts an itemized payment card with a total that must add up and sit under `DUET_MAX_TRANSACTION_LIMIT`, bound to the exact checkout page (`merchant_url`). Approving it can issue a single-use virtual card from Privacy.com, Stripe Issuing or Revolut, capped at exactly that total for one hour, and type it into the agent's browser — but only while the tab is still on that merchant's host. The card number never reaches the model, the database or a log line.
-- **Event-driven, not just scheduled.** A webhook URL (GitHub, Stripe, Zapier, `curl`) wakes the agent with the payload; a new receipt in `~/Downloads` gets looked at; a meeting entering the next 15 minutes gets a prep card. Quiet hours still apply.
+- **Event-driven, not just scheduled.** A webhook URL (GitHub, Stripe, Zapier, `curl`) wakes the agent with the payload; new documents, spreadsheets, images, or emails dropped into `~/Downloads` get looked at; a meeting entering the next 15 minutes gets a prep card. Quiet hours still apply.
 - **Deliverables that answer back.** HTML the agent builds gets a `window.Duet.sendAction()` / `requestApproval()` bridge, so a dashboard's buttons reach it. Standing pages get a **Compare** slider that wipes between yesterday's version and today's.
 - **Lighter logins.** The live pane can autofill a saved login through the 1Password or Bitwarden CLI instead of you typing a password on a phone keyboard, and can render the page at 390×844 so mobile sites behave.
 
@@ -68,14 +68,15 @@ View the [full-size infographic](docs/brand/what-it-does.png), or expand the det
   | `post_card` | Posts a checklist, metrics or note, and can update it in place. |
   | `deliver_file` | Hands over a doc, sheet, deck or dashboard. HTML renders live but sandboxed. |
   | `save_page` | Makes a delivered file a standing page ("one page I can check every morning"). Every day, 30 minutes before the brief, a background task rebuilds it from the saved instructions and its new file replaces the old one. The refresh never pushes; only a failed refresh leaves a card. It reports one line on what changed (`update_task` `changed`), which is pinned on the page at the top of Make and called out in the brief, where tapping that line opens the page; a brief that comes due while a refresh is still running waits for it, up to 30 minutes, and so does a brief queued during a Hermes outage, for up to 30 minutes after Hermes is back ("Run it now" never waits). The user can stop a page from Make ("Stop refreshing"), which also cancels a refresh in flight; its files stay. |
+  | `save_routine` / `remove_routine` | Saves or removes a user-defined recurring routine (daily, weekly, or interval in minutes). Each run launches a background task with its own session and posts its handover card to the configured channel (or general). |
   | `start_task` / `update_task` | Starts background work and keeps the Tasks tab current. When the task is done, its result, files and up to three follow-ups come back as one handover card in the thread. A task that fails or stops gets the same card, muted, with its reason, any files so far, and a "Try again" button that restarts it from the same instructions. |
   | `notify` | Sends a push notification and posts it as a "Heads up" note in the thread, which the notification opens. During quiet hours the push is held for "While you were away". Check-ins and the morning brief can't use it; they reach you only through `post_brief`. |
 
 ## Quick start
 
 You need:
-- macOS for the launchd service and the native connectors (Calendar, Reminders, Mail). The server itself runs anywhere Bun does — see [docs/DEPLOY.md](docs/DEPLOY.md) for Linux (`hermes-duet install-systemd`) and Docker.
-- [Bun](https://bun.sh) 1.2 or newer.
+- macOS for the launchd service and the native connectors (Calendar, Reminders, Mail). The server itself runs anywhere Bun does — see [docs/DEPLOY.md](docs/DEPLOY.md) for Linux (`hermes-duet install-systemd`), Windows, and Docker.
+- [Bun](https://bun.sh) 1.2.21 or newer.
 - A running [Hermes agent](https://github.com/NousResearch/hermes-agent) gateway with its API server enabled (`API_SERVER_ENABLED=true` and `API_SERVER_KEY` in `~/.hermes/.env`).
 
 ```sh
@@ -152,18 +153,18 @@ All settings are optional. Put them in `.env`; see [`.env.example`](.env.example
 | `DUET_CONTEXT_FILE` | `./context.local.md` | |
 | `DUET_USER_NAME` | (none) | How the agent refers to you. |
 | `DUET_MAX_BACKGROUND` | `2` | Number of background tasks allowed to run at once. |
-| `DUET_CHROME_BIN` | Chrome in `/Applications` | Browser to drive for the live pane. |
+| `DUET_CHROME_BIN` | auto-probed Chrome/Chromium | Browser to drive for the live pane across macOS, Windows, and Linux. |
 | `DUET_CHROME_PORT` | `9333` | DevTools port Duet launches Chrome on. |
 | `DUET_CHROME_PROFILE` | `$HERMES_HOME/duet-chrome` | Persistent profile, so your logins survive restarts. |
 | `DUET_CHROME_WIDTH` / `_QUALITY` / `_FPS_GAP` | `760` / `45` / `110` | Frame size, JPEG quality, and minimum ms between frames. Lower them on a bad connection. |
-| `DUET_CHROME_DEBUG` | (unset) | Log CDP connection and reconnect events. |
+| `DUET_CHROME_DEBUG` | (unset) | `1` logs CDP connection and reconnect events. |
 | `DUET_MAX_TRANSACTION_LIMIT` | `500` | Dollars per `request_payment`; `_CENTS` for an exact amount. |
-| `DUET_CARD_PROVIDER` / `DUET_CARD_KEY` / `DUET_CARD_URL` | (none) | Virtual-card provider for approved payments. |
-| `DUET_STT_URL` / `DUET_STT_CMD` | whisper.cpp on `PATH` | Local speech-to-text for voice memos. |
+| `DUET_CARD_PROVIDER` / `DUET_CARD_KEY` / `DUET_CARD_URL` | `privacy` (when key set) | Virtual-card provider (`privacy`, `stripe`, `revolut`, `generic`) for approved payments. |
+| `DUET_STT_URL` / `DUET_STT_CMD` | whisper.cpp on `PATH` | Local speech-to-text for voice memos (`ffmpeg` required for non-WAV local STT). |
 | `DUET_TTS_URL` / `DUET_TTS_CMD` | `say` on macOS | Spoken briefs. |
 | `DUET_WATCH_DIR` / `DUET_WATCH_DOWNLOADS` | `~/Downloads` / on | The folder trigger. |
-| `DUET_MEETING_LEAD_MIN` | `15` | How early a calendar event gets a prep card; `0` off. |
-| `DUET_OP_CMD` / `DUET_BW_CMD` | `op` / `bw` | Login autofill in the live pane. |
+| `DUET_MEETING_LEAD_MIN` | `15` | How early (positive minutes) a calendar event gets a prep card. |
+| `DUET_OP_CMD` / `DUET_BW_CMD` | `op item get {domain} --format json` / `bw get item {domain} --raw` | Login autofill in the live pane (Bitwarden uses `BW_SESSION`). |
 
 The full table, including speech setup and container variables, is in [docs/DEPLOY.md](docs/DEPLOY.md).
 
@@ -189,7 +190,7 @@ Hermes Duet controls an agent that can run commands on your computer. Treat the 
 - **The internal API** (MCP shim and CLI) listens on loopback with its own bearer token and refuses proxied requests.
 - **Deliverables**: HTML files are served with `Content-Security-Policy: sandbox`, so they can run scripts but can't read your session or call the API. `deliver_file` refuses paths that look like secrets (`.ssh`, `.env`, keys, credentials). The postMessage bridge they get is one-way into a validator: a button becomes a chat turn, and `requestApproval` becomes a normal approval card — never a direct action.
 - **Spending**: `request_payment` enforces a per-transaction ceiling, requires the receipt to add up, and (with a provider configured) issues a single-use card capped at the approved total for at most an hour. Card numbers are never put on a card, in SQLite, in the prompt or in a log; only the last four digits are reported.
-- **Uploads** are written under `data/uploads` with a server-generated name and `0600`, accepted only for a fixed list of image/PDF/text/audio types, and served with `nosniff` and a sandbox CSP. Phones pair with a cookie; the camera images never leave the machine.
+- **Uploads** are written under `data/uploads` with a server-generated name and `0600` (NTFS profile ACLs on Windows), accepted only for a fixed list of image/PDF/text/audio/`video/mp4` types (up to 25 MB), and served with `nosniff` and a sandbox CSP (`default-src 'none'; style-src 'unsafe-inline'; sandbox`). Phones pair with a cookie; camera images and voice memos never leave the machine unless `DUET_STT_URL` is configured.
 - **Webhooks** are gated by an unguessable token in the URL (Settings → Triggers), rate-limited, and only ever create a chat turn — the payload is passed to the agent as text, not executed.
 - **Approvals are an instruction, not a sandbox.** The approval gate is a tool the model is told to use. For hard guarantees, also turn on Hermes's own `approvals.mode`. Its prompts show up as Duet cards too.
 - **Your data** (`data/`: thread, device tokens, push keys, uploads) and `.env` are gitignored.

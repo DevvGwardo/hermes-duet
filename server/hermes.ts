@@ -101,7 +101,7 @@ export const hermes = {
   /** Toolsets the API-server agent exposes: `{ data: [{ name, label, enabled, ... }] }`. */
   toolsets: () => req<{ data?: unknown }>('GET', '/v1/toolsets'),
 
-  startRun(p:{ input: string; session_id: string; instructions: string; idempotencyKey: string }) {
+  startRun(p: { input: string; session_id: string; instructions: string; idempotencyKey: string }) {
     return req<{ run_id: string; status: string }>(
       'POST',
       '/v1/runs',
@@ -159,8 +159,7 @@ export const hermes = {
       }
       if (!ev.event && name) ev.event = name;
       if (ev.seq === undefined && id !== undefined && !Number.isNaN(id)) ev.seq = id;
-      // Deliberately outside the parse try: a throwing handler used to be swallowed while `lastSeq` had already
-      // advanced, so the event was lost with no trace. It still surfaces to `consume`, which reconnects.
+      // Outside the parse try so handler errors propagate to `consume` for reconnect rather than being swallowed.
       onEvent(ev);
     };
     const drainFrames = () => {
@@ -186,5 +185,3 @@ export const hermes = {
     }
   },
 };
-
-export const TERMINAL = new Set(['run.completed', 'run.failed', 'run.cancelled', 'run.interrupted']);

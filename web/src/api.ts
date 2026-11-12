@@ -129,10 +129,8 @@ export const api = {
       'GET',
       '/api/triggers',
     ),
-  vaults: () => call<{ vaults: { id: string; name: string; installed: boolean; ready: boolean; detail: string; hint?: string }[] }>('GET', '/api/browser/vaults'),
   autofill: (provider?: string) => call<{ host: string; vault: string; filled: { user: boolean; pass: boolean } }>('POST', '/api/browser/autofill', { provider }),
   viewport: (mode: 'mobile' | 'desktop') => call<{ mode: string }>('POST', '/api/browser/viewport', { mode }),
-  channels: () => call<{ channels: Channel[] }>('GET', '/api/channels'),
   createChannel: (name: string, topic?: string, extra?: { instructions?: string; group?: string; repo?: string }) =>
     call<{ channel: Channel }>('POST', '/api/channels', { name, topic, ...extra }),
   updateChannel: (id: string, patch: { topic?: string; instructions?: string; group?: string; repo?: string }) =>
@@ -145,7 +143,6 @@ export const api = {
   search: (q: string) => call<{ hits: SearchHit[]; terms: string[] }>('GET', `/api/search?q=${encodeURIComponent(q)}`),
   /** Save an edited deliverable as a new version; the original file is kept. */
   saveFileVersion: (id: string, text: string) => call<{ file: FileEntry }>('POST', `/api/files/${encodeURIComponent(id)}/versions`, { text }),
-  routines: () => call<{ routines: Routine[] }>('GET', '/api/routines'),
   /** Create a routine, or update it when `routine_id` (or `id`) is passed. */
   saveRoutine: (input: { routine_id?: string; id?: string; title: string; prompt: string; schedule: RoutineSchedule; channel_id?: string; enabled?: boolean }) =>
     call<{ routine: Routine }>('POST', '/api/routines', input),

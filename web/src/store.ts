@@ -2,7 +2,7 @@ import { useSyncExternalStore } from 'react';
 import { trackPending } from '../../shared/pending';
 import type { AgentState, Channel, FileEntry, Item, Page, Routine, ServerEvent, Settings, Snapshot, Task } from '../../shared/types';
 
-export interface State {
+interface State {
   ready: boolean;
   authed: boolean | null; // null = unknown yet
   connected: boolean;
@@ -118,7 +118,7 @@ export function applySnapshot(s: Snapshot) {
 }
 
 /** The paging key for the thread the Chat tab is showing ('' when there are no channels). */
-export const pagingKey = (s: State) => s.channelId ?? '';
+const pagingKey = (s: State) => s.channelId ?? '';
 
 /** Whether the channel being read still has unloaded older history. */
 export function hasMoreFor(s: State): boolean {
@@ -137,7 +137,7 @@ export function channelItems(s: State): Item[] {
 }
 
 export function prependItems(older: Item[], channelId: string, hasMore: boolean) {
-  setState((s) => ({ items: [...older.filter((o) => !s.items.some((i) => i.id === o.id)), ...s.items, ...[]].sort(byCreated), hasMoreBy: { ...s.hasMoreBy, [channelId]: hasMore } }));
+  setState((s) => ({ items: [...older.filter((o) => !s.items.some((i) => i.id === o.id)), ...s.items].sort(byCreated), hasMoreBy: { ...s.hasMoreBy, [channelId]: hasMore } }));
 }
 
 /** Record a channel page's has_more (openChannel) without folding items twice. */

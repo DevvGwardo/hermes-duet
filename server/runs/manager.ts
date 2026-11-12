@@ -138,9 +138,7 @@ async function launch(l: Lane, spec: RunSpec) {
   l.active = run;
   broadcastAgent();
 
-  // `pumpAll` skips any lane whose `active` is set, and this call is fire-and-forget, so anything thrown below would
-  // strand the thread for the life of the process: there is no consume loop yet, so no watchdog either, and nothing
-  // would ever clear `l.active`. Everything funnels through `finish`, which is idempotent and always releases the lane.
+  // Fire-and-forget launch after claiming l.active; any error must reach finish() so the lane is always released.
   try {
     await launchRun(l, run, spec);
   } catch (e: any) {
@@ -149,11 +147,8 @@ async function launch(l: Lane, spec: RunSpec) {
   }
 }
 
-/** The rest of a launch, once the lane is claimed. Split out so a throw here cannot leave the lane held. */
 async function launchRun(l: Lane, run: ActiveRun, spec: RunSpec) {
-  // A brief can wait behind a long chat turn or a Hermes outage, and a check-in behind an outage. Meanwhile cards
-  // get decided and page refreshes finish, so the waiting list and page lines are read now, not when it was queued.
-  // A transient start failure re-queues the spec and this runs again on the next launch.
+  // Build brief/check-in prompts at launch (not enqueue) so pending cards and page states are current.
   if (spec.kind === 'brief') spec.input = briefInput();
   else if (spec.kind === 'checkin') spec.input = checkinInput(spec.since);
 
@@ -161,9 +156,7 @@ async function launchRun(l: Lane, run: ActiveRun, spec: RunSpec) {
   const consumedNotes = l.main && spec.kind === 'chat' ? kv.get<string[]>('context_notes', []) : [];
   const notes = formatContextNotes(consumedNotes);
   const channelId = channelOfSpec(spec);
-  // Read fresh at launch, not at enqueue, so a card decided while this message sat in the queue isn't listed.
-  // `turnNote` already picks only cards from the run's own session, so every channel's chat turns get it; gating it on
-  // the main lane left approvals posted in a channel tappable long after the user had settled them in words.
+  // Read fresh at launch so cards decided while queued aren't re-listed; turnNote scopes to the run's session.
   const waiting = turnNote(items.pendingCards(channelId), spec);
   const input = notes + waiting + spec.input;
 
@@ -331,11 +324,7 @@ async function hydratePendingSteer(run: ActiveRun) {
   } catch {}
 }
 
-/**
- * End a run the watchdog called hung. The stop is confirmed, within a bound, before the "Try again" card goes up: if
- * the gateway never acknowledges it the run may still be finishing on its own, and a retry would put a second agent on
- * the same turn. That case is said plainly on the card instead of being hidden.
- */
+/** End a hung run after confirming stop (within a bound) so retry cards note unconfirmed stops. */
 async function stopHung(l: Lane, run: ActiveRun) {
   run.stopRequested = true;
   const how = await requestStop(run.id);
@@ -450,7 +439,7 @@ function autoProgress(taskId: string, label: string) {
   putTask({ ...t, progress: `· ${label}` });
 }
 
-export function runTitle(spec: RunSpec): string {
+function runTitle(spec: RunSpec): string {
   if (spec.kind === 'brief') return 'Morning brief';
   if (spec.kind === 'decision') {
     const m = spec.input.match(/^\[(approval|answer) [^\]]+\] (APPROVED(?: with edits)?|NOT NOW)?:?\s*(?:To )?"([^"]+)"/);
@@ -856,18 +845,13 @@ async function requestStop(id: string): Promise<'stopped' | 'gone' | 'unknown'> 
 }
 
 /**
- * Stop one run and always release its lane. Hermes is asked to stop, and its terminal event normally finishes the run
- * for us, but a gateway that is down — or a run it has already forgotten and answers 404 for — never sends that
- * event, and the lane would stay blocked until the 45-minute watchdog, holding everything queued behind it. So the
- * lane is finished on our own bounded clock instead; a terminal event that arrives later is a no-op, because
- * `finish` is idempotent.
+ * Stop a run and ensure its lane releases within STOP_GRACE_MS even if the gateway is down or returned 404.
+ * A late terminal event is a no-op because `finish` is idempotent.
  */
 async function stopRun(l: Lane, run: ActiveRun): Promise<void> {
   if (run.finished) return;
   run.stopRequested = true;
-  // Hermes has not answered with a run_id yet, so there is nothing to cancel. Remember the request instead of
-  // returning silently: `launchRun` honours it the moment the id lands. This is the Stop tapped in the first seconds
-  // of a turn — the one window where a cancel used to be dropped and the agent kept working anyway.
+  // Run id not yet assigned; launchRun checks stopRequested right after startRun returns.
   if (!run.id) return;
   // Unreachable, refused or too slow: there is nothing left to wait for.
   if ((await requestStop(run.id)) !== 'stopped') {
@@ -914,49 +898,43 @@ export async function cancelTask(id: string) {
   }
 }
 
-/**
- * Steer a running task mid-flight: the text goes to its live Hermes run through the same `hermes.steer` path chat
- * uses, with the same pending_steer replay semantics (a steer Hermes never delivers is matched and replayed when the
- * run ends, never sent twice). Returns whether Hermes took it; a refused steer is queued as its own turn in the
- * task's session instead, so it still runs against the same conversation.
- *
- * A task with no live run refuses outright: queueing the text anywhere else would answer from a different turn while
- * looking like steering, so the client hears a 409 it can say plainly.
- */
+function steerRun(run: ActiveRun, sessionId: string, channelId: string, msg: string): Promise<boolean> {
+  // Go through turnNote on every steer so pending_steer replay in finish() matches chat's format.
+  const steer: Steer = { sent: turnNote(items.pendingCards(channelId), run.spec) + msg, raw: msg };
+  run.steers.push(steer);
+  // Persist before sending so a restart mid-request does not drop the message.
+  saveRunMeta(run);
+  return hermes
+    .steer(run.id, steer.sent)
+    .then((r) => {
+      if (!r?.accepted) throw new Error('not accepted');
+      return true;
+    })
+    .catch(() => {
+      // Only one path (this fallback or finish() replaying pending_steer) may enqueue the message.
+      if (steer.queued || run.finished) return false;
+      steer.queued = true;
+      saveRunMeta(run);
+      enqueue({ kind: 'chat', sessionId, channelId, input: msg });
+      return false;
+    });
+}
+
+/** Steer a running task mid-flight via `hermes.steer`, falling back to a session chat turn on refusal (409 if not live). */
 export async function steerTask(taskId: string, text: string): Promise<{ delivered: boolean }> {
   const t = tasks.get(taskId);
   if (!t) throw new UserError('no such task', 404);
   const msg = text.trim();
   if (!msg) throw new UserError('empty message');
   if (msg.length > TASK_MESSAGE_MAX) throw new UserError('message too long');
-  // Only a live run can be steered. A queued task has no run yet, and a finished one has nothing left to steer.
   if (t.status !== 'running' && t.status !== 'waiting') throw new UserError(`that task is ${t.status}, so there is nothing to steer right now`, 409);
   const sid = tasks.sessionOf(taskId);
   const run = (sid ? lanes.get(sid)?.active : undefined) ?? null;
   if (!run || run.finished || run.stopRequested || !run.id || run.spec.taskId !== taskId) {
     throw new UserError('that task is not running right now', 409);
   }
-  const channelId = channelOfSpec(run.spec);
-  // `turnNote` is empty for task runs (only chat turns carry the waiting-cards note), but going through it keeps the
-  // steer shaped exactly like chat's, including the pending_steer replay in finish().
-  const steer: Steer = { sent: turnNote(items.pendingCards(channelId), run.spec) + msg, raw: msg };
-  run.steers.push(steer);
-  // On disk before it is sent: a restart between these two lines would otherwise lose the message entirely.
-  saveRunMeta(run);
-  try {
-    const r = await hermes.steer(run.id, steer.sent);
-    if (!r?.accepted) throw new Error('not accepted');
-    return { delivered: true };
-  } catch {
-    // Mirrors submitUser: whichever path claimed it — this one, or finish() replaying what Hermes reported as
-    // undelivered — wins, so the text goes out once. The fallback turn keeps the task's session (and channel) so the
-    // words still land on the same conversation, but carries no task id, so its ending can't complete or fail the task.
-    if (steer.queued || run.finished) return { delivered: false };
-    steer.queued = true;
-    saveRunMeta(run);
-    enqueue({ kind: 'chat', sessionId: run.spec.sessionId, channelId, input: msg });
-    return { delivered: false };
-  }
+  const delivered = await steerRun(run, run.spec.sessionId, channelOfSpec(run.spec), msg);
+  return { delivered };
 }
 
 // ---------------------------------------------------------------------------
@@ -1032,26 +1010,9 @@ export function submitUser(text: string, input?: string, channelId?: string, att
   const l = lane(channel.session_id);
   for (const c of movedOn(items.pendingCards(channel.id), l.sessionId)) put({ ...c, card: { ...c.card!, status: 'expired', decision: MOVED_ON, decided_at: Date.now() } });
   const active = l.active;
-  // Mid-run messages steer the live turn. One that lands too late comes back as `pending_steer`, and finish replays it.
+  // Mid-run messages steer the live turn; undelivered ones come back as `pending_steer` and replay in finish().
   if (active && active.id && !active.finished && !active.stopRequested && l.queue.length === 0) {
-    // The note goes only on the steer: a refused or replayed one is queued raw, and launch gives it a fresh note.
-    const steer: Steer = { sent: turnNote(items.pendingCards(channel.id), active.spec) + t, raw: t };
-    active.steers.push(steer);
-    // On disk before it is sent: a restart between these two lines would otherwise lose the message entirely.
-    saveRunMeta(active);
-    hermes
-      .steer(active.id, steer.sent)
-      .then((r) => {
-        if (!r?.accepted) throw new Error('not accepted');
-      })
-      .catch(() => {
-        // `queued` is set by whichever path claimed it: this one, or finish() replaying what Hermes reported as
-        // undelivered. A run that has already finished has had that chance, so queueing here would send it twice.
-        if (steer.queued || active.finished) return;
-        steer.queued = true;
-        saveRunMeta(active);
-        enqueue({ kind: 'chat', sessionId: l.sessionId, channelId: channel.id, input: t });
-      });
+    void steerRun(active, l.sessionId, channel.id, t);
   } else {
     enqueue({ kind: 'chat', sessionId: l.sessionId, channelId: channel.id, input: t });
   }
@@ -1247,12 +1208,9 @@ export function recoverOrphans() {
     }
     const activity = meta.activityId ? items.get(meta.activityId) : null;
     const segments = segmentsOf(row.id);
-    // A run saved with a cursor resumes where it stopped: the segment it was writing continues rather than being
-    // rebuilt from a replay that will no longer include its earlier deltas. A run saved before cursors existed (or
-    // one with no segments) still replays from the start and reuses the segments in order, as it always has.
+    // Resume from saved cursor if present; otherwise replay from seq 0 reusing existing segments.
     const resumed = typeof meta.lastSeq === 'number' && meta.lastSeq > 0;
     const last = resumed ? segments[segments.length - 1] : undefined;
-    // Only a segment that was still streaming when the run stopped is continued; a closed one stays closed.
     const open = last?.streaming ? last : undefined;
     const lastNonEmpty = resumed ? [...segments].reverse().find((s) => !s.streaming && (s.text ?? '').trim()) : undefined;
     const run: ActiveRun = {
@@ -1265,8 +1223,7 @@ export function recoverOrphans() {
       segText: open?.text ?? '',
       lastText: lastNonEmpty?.text ?? '',
       pendingWs: '',
-      // Seeded from the saved activity so a run Hermes no longer knows still shows (and reports) its steps;
-      // a replay that does arrive matches them by tool_call_id instead of adding duplicates.
+      // Seed saved steps so finished runs still show progress and replayed tool events dedupe by tool_call_id.
       steps: (activity?.activity?.steps ?? []).map((s) => ({ ...s })),
       lastSeq: resumed ? meta.lastSeq : 0,
       cards: typeof meta.cards === 'number' ? meta.cards : 0,
@@ -1280,11 +1237,8 @@ export function recoverOrphans() {
       stopRequested: false,
       reuse: resumed ? [] : segments,
       fgTaskId: meta.fgTaskId ?? null,
-      // A steer Hermes has not delivered yet comes back as `pending_steer`; keeping the list across a restart is what
-      // lets it be matched and replayed instead of silently dropped.
       steers: Array.isArray(meta.steers) ? meta.steers : [],
       leftoverSteer: '',
-      // The silence clock survives too, so a run that was already wedged before the restart is not given a fresh hour.
       lastEventAt: typeof meta.lastEventAt === 'number' ? meta.lastEventAt : Date.now(),
     };
     l.active = run;

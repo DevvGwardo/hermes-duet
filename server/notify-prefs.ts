@@ -4,8 +4,6 @@ import type { Settings } from '../shared/types';
 
 export type NotifyCategory = 'approval' | 'question' | 'brief' | 'checkin' | 'task_done' | 'task_failed' | 'agent' | 'system';
 
-export const NOTIFY_CATEGORIES: readonly NotifyCategory[] = ['approval', 'question', 'brief', 'checkin', 'task_done', 'task_failed', 'agent', 'system'];
-
 export interface PushDecision {
   send: boolean;
   /** Why a push was held back, for the log; absent when it sends. */

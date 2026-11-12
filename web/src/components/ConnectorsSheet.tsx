@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Connector, ConnectorSuggestion } from '../../../shared/types';
 import { api } from '../api';
-import { isTopDialog, useDialogTrap } from '../hooks/useDialogTrap';
+import { useDialogTrap } from '../hooks/useDialogTrap';
 import { Icon } from '../ui';
 
 interface SuggestionsResponse {
@@ -18,18 +18,7 @@ export function ConnectorsSheet({ onClose }: { onClose: () => void }) {
   const [data, setData] = useState<SuggestionsResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const dialog = useRef<HTMLDivElement | null>(null);
-  useDialogTrap(dialog);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || !isTopDialog(dialog.current)) return;
-      e.preventDefault();
-      e.stopPropagation();
-      onClose();
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [onClose]);
+  useDialogTrap(dialog, onClose);
 
   useEffect(() => {
     api.suggestions().then(setData, (e) => setErr(e?.message ?? 'Could not load connectors.'));

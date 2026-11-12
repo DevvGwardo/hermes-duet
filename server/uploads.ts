@@ -1,7 +1,7 @@
 // Files the user hands over from the composer: a photo of a receipt, a screenshot, a PDF, a voice memo. Uploads are
 // stored under data/uploads with a generated name and 0600, and stay on this machine.
 import { chmodSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { basename, extname, join } from 'node:path';
+import { basename, join } from 'node:path';
 import { type Attachment, attachmentKind } from '../shared/types';
 import { config } from './config';
 import { attachments, db, newId, prune as dbPrune, toAttachment, tx } from './db';
@@ -99,13 +99,7 @@ export function checkBodySize(bytes: number): void {
   if (!Number.isFinite(bytes) || bytes > MAX_UPLOAD_BYTES) throw new UserError(`files are limited to ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)} MB`, 413);
 }
 
-/** The extension a stored upload has; used only to keep a name the user recognizes. */
-export const uploadExtOf = (name: string) => extname(name).toLowerCase();
-
-/**
- * Remove an unlinked upload (`item_id IS NULL`) from SQLite and disk. Linked attachments belong to thread history
- * and return 409 so a client cannot delete a file already referenced by a message or task.
- */
+/** Remove an unlinked upload (`item_id IS NULL`) from SQLite and disk; linked ones return 409. */
 export function deleteUnlinkedUpload(id: string): void {
   const row = attachments.get(id);
   if (!row) throw new UserError('upload not found', 404);

@@ -1,4 +1,5 @@
 import { type RefObject, useCallback, useEffect, useRef, useState } from 'react';
+import { isIOS } from '../platform';
 
 /**
  * Voice memos through MediaRecorder + Web Audio metering.
@@ -8,9 +9,9 @@ import { type RefObject, useCallback, useEffect, useRef, useState } from 'react'
  * The microphone is only opened on an explicit user gesture, and every track, timer, AudioContext, and animation
  * frame is torn down on stop, cancel, unmount, or page hide.
  */
-export type RecorderState = 'idle' | 'recording';
+type RecorderState = 'idle' | 'recording';
 
-export interface RecordingResult {
+interface RecordingResult {
   blob: Blob;
   mimeType: string;
   durationMs: number;
@@ -18,7 +19,7 @@ export interface RecordingResult {
   hadSpeech: boolean;
 }
 
-export interface AudioRecorder {
+interface AudioRecorder {
   state: RecorderState;
   seconds: number;
   error: string | null;
@@ -41,8 +42,8 @@ export const RECORDER_MIME_CANDIDATES = [
 ] as const;
 
 /** Minimum normalized RMS (~ -36 dBFS) to count as speech rather than silence/ambient hiss. */
-export const SPEECH_RMS_THRESHOLD = 0.015;
-export const MIN_TAKE_DURATION_MS = 300;
+const SPEECH_RMS_THRESHOLD = 0.015;
+const MIN_TAKE_DURATION_MS = 300;
 
 export interface TextSelection {
   start: number;
@@ -101,11 +102,10 @@ export function recorderMime(): string {
   return '';
 }
 
-export function isSafariOrIOS(nav?: { userAgent?: string; platform?: string; maxTouchPoints?: number }): boolean {
+function isSafariOrIOS(nav?: { userAgent?: string; platform?: string; maxTouchPoints?: number }): boolean {
   if (!nav) return false;
+  if (isIOS(nav)) return true;
   const ua = nav.userAgent ?? '';
-  if (/iPhone|iPad|iPod/i.test(ua)) return true;
-  if (nav.platform === 'MacIntel' && (nav.maxTouchPoints ?? 0) > 1) return true;
   return /AppleWebKit/i.test(ua) && !/Chrome|CriOS|Chromium|Edg|Firefox|FxiOS|OPR/i.test(ua);
 }
 
@@ -140,18 +140,18 @@ export function computeTimeDomainRms(samples: Uint8Array): number {
   return Math.sqrt(sumSq / samples.length);
 }
 
-export function isRecorderSupported(): boolean {
+function isRecorderSupported(): boolean {
   return typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia && typeof MediaRecorder !== 'undefined';
 }
 
-export interface RecorderEngineCallbacks {
+interface RecorderEngineCallbacks {
   onState?: (state: RecorderState) => void;
   onSeconds?: (seconds: number | ((prev: number) => number)) => void;
   onError?: (error: string | null) => void;
   onAnalyser?: (analyser: AnalyserNode | null) => void;
 }
 
-export interface RecorderEngine {
+interface RecorderEngine {
   readonly analyser: AnalyserNode | null;
   readonly isActiveOrStarting: boolean;
   start: () => Promise<boolean>;

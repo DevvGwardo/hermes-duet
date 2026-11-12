@@ -1,5 +1,8 @@
 # Audit loop log
 
+Historical run log from the 2026-11-04 to 2026-11-05 automated audit loop (`docs/AUDIT_LOOP_PROMPT.md`). Subsequent
+dependency, parity, cross-platform, and structural passes (2026-11-06 onward) are recorded in [`GAPS.md`](../GAPS.md).
+
 One line per wake, newest last. Used to enforce the iteration cap and the empty-iteration streak across sessions.
 
 ```text

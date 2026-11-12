@@ -9,6 +9,7 @@ import { basename, dirname, extname, join } from 'node:path';
 import type { CardData } from '../shared/types';
 import { config } from './config';
 import { UserError } from './errors';
+import { execCommand, hasCommand } from './exec';
 import { normalizeMime } from './uploads';
 import { splitArgs } from './vault';
 
@@ -140,31 +141,10 @@ export function briefSpeech(card: CardData): string {
 // Runtime: spawning the engine, caching the audio
 // ---------------------------------------------------------------------------
 
-function hasCommand(cmd: string) {
-  try {
-    return !!Bun.which(cmd);
-  } catch {
-    return false;
-  }
-}
-
 /** A local engine must not hang a request forever. */
 const STT_TIMEOUT_MS = 180_000;
 
-async function runCommand(cmd: string, args: string[], stdin?: string): Promise<{ out: string; err: string; code: number }> {
-  const proc = Bun.spawn([cmd, ...args], {
-    stdin: stdin === undefined ? 'ignore' : new TextEncoder().encode(stdin),
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
-  const timer = setTimeout(() => proc.kill(), STT_TIMEOUT_MS);
-  try {
-    const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
-    return { out, err, code };
-  } finally {
-    clearTimeout(timer);
-  }
-}
+const runCommand = (cmd: string, args: string[], stdin?: string) => execCommand(cmd, args, { timeoutMs: STT_TIMEOUT_MS, stdin });
 
 let audioHas: (cmd: string) => boolean = hasCommand;
 let audioRunner: (cmd: string, args: string[], stdin?: string) => Promise<{ out: string; err: string; code: number }> = runCommand;
@@ -179,10 +159,6 @@ export function __setAudioRunner(next: typeof runCommand): typeof runCommand {
   const prev = audioRunner;
   audioRunner = next;
   return prev;
-}
-
-export function hasFfmpeg(): boolean {
-  return audioHas('ffmpeg');
 }
 
 export function audioDiagnostics(env: Env = process.env, platform: string = process.platform) {

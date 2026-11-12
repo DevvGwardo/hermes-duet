@@ -120,9 +120,9 @@ export function sameOrigin(req: Request): boolean {
 }
 
 export function internalToken(): string {
-  const row = db.query<{ value: string }, [string]>('SELECT value FROM kv WHERE key = ?').get('internal_token');
-  if (row) return JSON.parse(row.value);
+  const existing = kv.get<string>('internal_token', '');
+  if (existing) return existing;
   const t = randomToken();
-  db.query('INSERT INTO kv(key, value) VALUES (?, ?)').run('internal_token', JSON.stringify(t));
+  kv.set('internal_token', t);
   return t;
 }

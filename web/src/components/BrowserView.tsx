@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api';
-import { isTopDialog, useDialogTrap } from '../hooks/useDialogTrap';
+import { useDialogTrap } from '../hooks/useDialogTrap';
 import { Icon } from '../ui';
 
 type Tab = { id: string; title: string; url: string; active: boolean };
@@ -21,7 +21,6 @@ export function BrowserView({ onClose }: { onClose: () => void }) {
   const lastScroll = useRef(0);
   const gesture = useRef<{ x: number; y: number; at: number; moved: boolean } | null>(null);
   const dialog = useRef<HTMLDivElement | null>(null);
-  useDialogTrap(dialog);
 
   const [status, setStatus] = useState<'connecting' | 'live' | 'idle' | 'error'>('connecting');
   const [notice, setNotice] = useState<string | null>(null);
@@ -34,6 +33,20 @@ export function BrowserView({ onClose }: { onClose: () => void }) {
   const [tabsOpen, setTabsOpen] = useState(false);
   const [mobile, setMobile] = useState(false);
   const [busy, setBusy] = useState<'fill' | 'viewport' | null>(null);
+
+  useDialogTrap(dialog, () => {
+    if (document.activeElement === keyRef.current) return false;
+    if (urlOpen) {
+      setUrl(activeTabUrlRef.current);
+      setUrlOpen(false);
+      return;
+    }
+    if (tabsOpen) {
+      setTabsOpen(false);
+      return;
+    }
+    onClose();
+  });
 
   /** Type the site's saved login in from 1Password or Bitwarden, so a password never has to cross the phone keyboard. */
   const autofill = async () => {
@@ -160,27 +173,6 @@ export function BrowserView({ onClose }: { onClose: () => void }) {
       wsRef.current = null;
     };
   }, []);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || !isTopDialog(dialog.current)) return;
-      if (document.activeElement === keyRef.current) return;
-      e.preventDefault();
-      e.stopPropagation();
-      if (urlOpen) {
-        setUrl(activeTabUrlRef.current);
-        setUrlOpen(false);
-        return;
-      }
-      if (tabsOpen) {
-        setTabsOpen(false);
-        return;
-      }
-      onClose();
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [onClose, urlOpen, tabsOpen]);
 
   /** Canvas pixels are the page's CSS pixels: scale the touch back into that space. */
   const toPage = (clientX: number, clientY: number) => {

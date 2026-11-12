@@ -1873,15 +1873,6 @@ li.done .tick {
 .row-dot.failed {
   background: var(--danger);
 }
-.chev {
-  transition: transform 0.15s;
-}
-.chev.open {
-  transform: rotate(90deg);
-}
-.task-detail {
-  padding: 0 16px 16px 37px;
-}
 .task-progress {
   margin: 0 0 6px;
   font: 400 12.5px var(--mono);
@@ -1892,9 +1883,6 @@ li.done .tick {
   font-size: 14px;
   color: var(--dim);
   white-space: pre-wrap;
-}
-.task-detail .btn {
-  margin-top: 12px;
 }
 
 /* The task detail sheet: the same sheet chrome as settings and the viewer, with the task's own sections inside. */
@@ -1935,30 +1923,6 @@ li.done .tick {
 }
 .task-actions .btn {
   margin-top: 0;
-}
-.task-sources {
-  list-style: none;
-  margin: 8px 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.task-sources li {
-  font-size: 13.5px;
-  color: var(--dim);
-  border-left: 2px solid var(--gold);
-  padding-left: 10px;
-}
-.task-source-label {
-  font-weight: 650;
-  color: var(--paper-2);
-}
-.task-source-quote {
-  display: block;
-  color: var(--faint);
-  font-style: italic;
-  margin-top: 2px;
 }
 .task-composer {
   border-top: 2px solid #000;
@@ -3152,10 +3116,9 @@ li.done .tick {
   height: auto;
   max-height: calc(100dvh - 60px);
 }
+/* The sheet row stacks the inline editor under the row itself. */
 .channel-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+  display: block;
   border-bottom: 1.5px dashed var(--line);
 }
 .channel-row.on {
@@ -3237,10 +3200,6 @@ li.done .tick {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--faint);
-}
-/* The sheet row stacks the inline editor under the row itself. */
-.channel-row {
-  display: block;
 }
 .channel-row-wrap {
   display: flex;
@@ -3490,12 +3449,6 @@ li.done .tick {
 .attachment.audio .attachment-remove {
   top: 50%;
   transform: translateY(-50%);
-}
-.composer-hint.recording {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--gold);
 }
 .rec-dot {
   width: 8px;

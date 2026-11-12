@@ -13,6 +13,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { config } from './config';
 import { UserError } from './errors';
+import { whichCommand } from './exec';
 
 const debugPort = () => Number(process.env.DUET_CHROME_PORT ?? 9333);
 const profileDir = () => process.env.DUET_CHROME_PROFILE ?? join(config.hermesHome, 'duet-chrome');
@@ -22,13 +23,7 @@ export function findChrome(
   env: Record<string, string | undefined> = process.env,
   platform: string = process.platform,
   exists: (p: string) => boolean = existsSync,
-  which: (cmd: string) => string | null = (cmd) => {
-    try {
-      return Bun.which(cmd);
-    } catch {
-      return null;
-    }
-  },
+  which: (cmd: string) => string | null = whichCommand,
 ): string {
   const custom = env.DUET_CHROME_BIN?.trim();
   if (custom) return custom;
@@ -426,7 +421,7 @@ export function onTabs(sink: TabInfo): () => void {
   return () => tabSinks.delete(sink);
 }
 
-export async function focusTab(tabId: string): Promise<void> {
+async function focusTab(tabId: string): Promise<void> {
   await connect();
   if (!sessions.has(tabId)) await attach(tabId);
   await startScreencast(tabId);
@@ -601,11 +596,6 @@ export async function input(raw: unknown): Promise<void> {
   }
 }
 
-/** Give Hermes a CDP URL it can drive, so agent and phone share one browser. */
-export function cdpUrl(): string {
-  return `http://127.0.0.1:${debugPort()}`;
-}
-
 export function status(): { running: boolean; port: number; profile: string; tabs: number } {
   return { running: !!ws && ws.readyState === WebSocket.OPEN, port: debugPort(), profile: profileDir(), tabs: sessions.size };
 }
@@ -638,8 +628,6 @@ export function close(): void {
     chrome = null;
   }
 }
-
-export const shutdown = close;
 
 // ---------------------------------------------------------------------------
 // Viewport emulation

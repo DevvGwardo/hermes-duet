@@ -39,8 +39,8 @@ hermes-duet doctor
 
 The unit runs `bun server/index.ts` from the checkout, so build the PWA once (`bun install && bun run build`) and
 `install-systemd` handles the rest. `hermes-duet doctor`, `pair`, `say`, `brief` and `checkin` work the same as on
-macOS. The connectors section reports Calendar, Reminders and Mail as unsupported on Linux; the agent can still use
-any CLI it finds on `PATH` and any MCP server Hermes has configured.
+macOS. The connectors section reports Calendar, Reminders and Mail as unsupported on Linux (while Watched folder and
+Webhooks still work); the agent can still use any CLI it finds on `PATH` and any MCP server Hermes has configured.
 
 ### Private access with Tailscale
 
@@ -141,7 +141,7 @@ docker exec hermes-duet bin/hermes-duet pair   # bash CLI; don't run it with `bu
 
 ### docker-compose (optional)
 
-[`docker-compose.example.yml`](docker-compose.example.yml) is a labelled starting point, not a required install
+[`docker-compose.example.yml`](../docker-compose.example.yml) is a labelled starting point, not a required install
 path: copy it to `docker-compose.yml`, edit the `.env` path and the Tailscale URL, then `docker compose up -d`. It
 uses the same volume, env file and restart policy, and publishes only 7456.
 
@@ -207,7 +207,7 @@ shows the file log directly.
 
 ## Environment
 
-Everything is optional except the Hermes key, which the server can also read from `~/.hermes/.env`.
+Everything is optional except the Hermes key, which the server can also read from `$HERMES_HOME/.env` (default `~/.hermes/.env`).
 
 | Variable | Default | What it does |
 |---|---|---|
@@ -217,26 +217,36 @@ Everything is optional except the Hermes key, which the server can also read fro
 | `DUET_PUBLIC_URL` | – | the URL the phone uses (needed for iOS push) |
 | `DUET_HERMES_URL` | `http://127.0.0.1:8642` | Hermes gateway |
 | `DUET_HERMES_KEY` / `API_SERVER_KEY` | – | Hermes API key |
-| `DUET_DATA_DIR` | `./data` | database, uploads, deliverables |
+| `HERMES_HOME` | `~/.hermes` | Hermes home directory (used for `.env` key fallback and default `duet-chrome` profile) |
+| `DUET_HERMES_MODEL` | `hermes-agent` | model name sent to Hermes `/v1/runs` |
+| `DUET_USER_NAME` | – | how the agent addresses you |
+| `DUET_CONTEXT_FILE` | `./context.local.md` | shared memory / context sources file |
+| `DUET_SESSION_SCOPE` | `hermes-duet` | Hermes memory scope (`X-Hermes-Session-Key`) |
+| `DUET_LEGACY_COOKIE` | – | extra device-cookie name accepted from older installs |
+| `DUET_LAUNCHD_LABEL` | `dev.hermes-duet.server` | launchd service label on macOS |
+| `DUET_DATA_DIR` | `./data` | database, uploads, deliverables (Docker sets `/data`) |
 | `DUET_LOG_DIR` | `~/Library/Logs/hermes-duet` (macOS), `${XDG_STATE_HOME:-~/.local/state}/hermes-duet` (Linux) | service log directory (launchd/systemd) |
 | `DUET_MAX_TRANSACTION_LIMIT` | `500` | **dollars** per `request_payment` |
 | `DUET_MAX_TRANSACTION_LIMIT_CENTS` | – | exact cents, overrides the above |
-| `DUET_CARD_PROVIDER` | `privacy` | `privacy`, `stripe`, `revolut` or `generic` |
+| `DUET_CARD_PROVIDER` | `privacy` (when `DUET_CARD_KEY` is set) | `privacy`, `stripe`, `revolut` or `generic` |
 | `DUET_CARD_KEY` | – | provider API key; without it, approval is a spend authorization with no virtual card |
 | `DUET_CARD_URL` | provider default | API base (required for `generic`) |
-| `DUET_STT_URL` / `DUET_STT_MODEL` / `DUET_STT_KEY` | – | OpenAI-compatible `/audio/transcriptions` |
-| `DUET_STT_CMD` | auto (`whisper-cli`) | local transcription command template, `{file}` |
+| `DUET_STT_URL` / `DUET_STT_MODEL` / `DUET_STT_KEY` | – | OpenAI-compatible `/audio/transcriptions` (takes precedence over `DUET_STT_CMD`) |
+| `DUET_STT_CMD` | auto (`whisper-cli` / `whisper-cpp`) | local transcription command template, `{file}` (non-WAV audio requires `ffmpeg` on `PATH`) |
 | `DUET_TTS_URL` / `DUET_TTS_MODEL` / `DUET_TTS_VOICE` / `DUET_TTS_KEY` | – | OpenAI-compatible speech endpoint |
 | `DUET_TTS_CMD` | `say` on macOS | TTS command template, `{text}` and `{out}` |
-| `DUET_TTS_EXT` | `.wav` | extension of what `DUET_TTS_CMD` writes |
-| `DUET_WATCH_DIR` | `~/Downloads` | folder watched for receipts and statements |
+| `DUET_TTS_EXT` | `.wav` | extension of what `DUET_TTS_CMD` writes (applies only to `DUET_TTS_CMD`) |
+| `DUET_WATCH_DIR` | `~/Downloads` | folder watched for new files |
 | `DUET_WATCH_DOWNLOADS` | on | `0` turns the folder watcher off |
-| `DUET_MEETING_LEAD_MIN` | `15` | how early a meeting triggers prep (0 disables) |
+| `DUET_MEETING_LEAD_MIN` | `15` | positive integer minutes before a meeting triggers prep (non-positive values fall back to `15`) |
 | `DUET_OP_CMD` | `op item get {domain} --format json` | 1Password lookup |
 | `DUET_BW_CMD` | `bw get item {domain} --raw` | Bitwarden lookup (`BW_SESSION` must be set) |
-| `DUET_CHROME_BIN` | auto-probed Chrome/Chromium | Chromium binary for the live browser |
+| `BW_SESSION` | – | Bitwarden CLI session token used when `DUET_BW_CMD` runs |
+| `DUET_CHROME_BIN` | auto-probed Chrome/Chromium | Chromium binary for the live browser (Docker sets `/usr/bin/chromium`) |
 | `DUET_CHROME_NO_SANDBOX` | off | `1` passes `--no-sandbox` for restricted containers |
-| `DUET_CHROME_PORT` / `DUET_CHROME_PROFILE` | `9333` / `~/.hermes/duet-chrome` | CDP port, browser profile |
+| `DUET_CHROME_PORT` / `DUET_CHROME_PROFILE` | `9333` / `$HERMES_HOME/duet-chrome` | CDP port, browser profile (Docker sets `/data/chrome`) |
+| `DUET_CHROME_WIDTH` / `_QUALITY` / `_FPS_GAP` | `760` / `45` / `110` | live browser stream width (px), JPEG quality (20–85), and minimum ms between frames |
+| `DUET_CHROME_DEBUG` | off | `1` logs CDP attach/disconnect diagnostics |
 | `DUET_RUN_TIMEOUT_MS` | 45 min | a run silent this long is stopped as hung |
 | `DUET_MAX_BACKGROUND` | `2` | background tasks allowed at once |
 
