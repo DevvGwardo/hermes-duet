@@ -8,9 +8,44 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  check:
-    name: typecheck, test, build
+  changes:
+    name: detect changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      all: ${{ steps.filter.outputs.all }}
+      typecheck: ${{ steps.filter.outputs.typecheck }}
+      test_server: ${{ steps.filter.outputs.test_server }}
+      test_web: ${{ steps.filter.outputs.test_web }}
+      test_shared: ${{ steps.filter.outputs.test_shared }}
+      test_scripts: ${{ steps.filter.outputs.test_scripts }}
+      build: ${{ steps.filter.outputs.build }}
+      audit: ${{ steps.filter.outputs.audit }}
+      windows: ${{ steps.filter.outputs.windows }}
+      windows_test_dirs: ${{ steps.filter.outputs.windows_test_dirs }}
+      docker: ${{ steps.filter.outputs.docker }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - id: filter
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          PUSH_AFTER_SHA: ${{ github.sha }}
+        run: node .github/scripts/detect-changes.mjs
+
+  typecheck:
+    name: typecheck
+    needs: changes
+    if: needs.changes.outputs.typecheck == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -19,6 +54,14 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.2.21
+
+      - name: Cache Bun dependencies
+        uses: actions/cache@v5
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
 
       # Same dependency tree every run: the lockfile is committed.
       - name: Install
@@ -27,18 +70,42 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
-      - name: Unit tests
-        run: bun test
+  test-server:
+    name: test server (${{ matrix.shard }}/2)
+    needs: changes
+    if: needs.changes.outputs.test_server == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    steps:
+      - uses: actions/checkout@v7
 
-      - name: Build web app
-        run: bun run build
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.21
 
-      - name: Dependency audit
-        run: bun audit --production --audit-level=high
+      - name: Cache Bun dependencies
+        uses: actions/cache@v5
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
 
-  windows:
-    name: windows (typecheck, test, build)
-    runs-on: windows-latest
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Server unit tests (shard ${{ matrix.shard }}/2)
+        run: bun .github/scripts/run-test-shard.mjs server ${{ matrix.shard }} 2
+
+  test-web:
+    name: test web
+    needs: changes
+    if: needs.changes.outputs.test_web == 'true'
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
@@ -47,25 +114,202 @@ jobs:
         with:
           bun-version: 1.2.21
 
+      - name: Cache Bun dependencies
+        uses: actions/cache@v5
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
       - name: Install
         run: bun install --frozen-lockfile
 
-      - name: Typecheck
-        run: bun run typecheck
+      - name: Web unit tests
+        run: bun test web
 
-      - name: Unit tests
-        run: bun test
+  test-shared-scripts:
+    name: test shared & scripts
+    needs: changes
+    if: needs.changes.outputs.test_shared == 'true' || needs.changes.outputs.test_scripts == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.21
+
+      - name: Cache Bun dependencies
+        uses: actions/cache@v5
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Shared & script unit tests
+        run: |
+          dirs=""
+          if [ "${{ needs.changes.outputs.test_shared }}" = "true" ]; then
+            dirs="$dirs shared"
+          fi
+          if [ "${{ needs.changes.outputs.test_scripts }}" = "true" ]; then
+            dirs="$dirs scripts"
+          fi
+          bun test $dirs
+
+  build:
+    name: build web app
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.21
+
+      - name: Cache Bun dependencies
+        uses: actions/cache@v5
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Install
+        run: bun install --frozen-lockfile
 
       - name: Build web app
         run: bun run build
 
+  audit:
+    name: dependency audit
+    needs: changes
+    if: needs.changes.outputs.audit == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.21
+
+      - name: Dependency audit
+        run: bun audit --production --audit-level=high
+
+  windows:
+    name: windows (typecheck, test, build)
+    needs: changes
+    if: needs.changes.outputs.windows == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.21
+
+      - name: Cache Bun dependencies
+        uses: actions/cache@v5
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        if: needs.changes.outputs.typecheck == 'true'
+        run: bun run typecheck
+
+      - name: Unit tests
+        if: needs.changes.outputs.windows_test_dirs != ''
+        shell: pwsh
+        run: |
+          if ('${{ needs.changes.outputs.windows_test_dirs }}' -eq '.') {
+            bun test
+          } else {
+            $dirs = '${{ needs.changes.outputs.windows_test_dirs }}'.Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries)
+            bun test @dirs
+          }
+
+      - name: Build web app
+        if: needs.changes.outputs.build == 'true'
+        run: bun run build
+
   docker:
     name: docker image builds
+    needs: changes
+    if: needs.changes.outputs.docker == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
       # The image is the documented Linux path; a broken Dockerfile must not first be discovered by a user.
       - name: Build image
-        run: docker build -t hermes-duet:ci .
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          tags: hermes-duet:ci
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  ci:
+    name: ci status
+    needs:
+      - changes
+      - typecheck
+      - test-server
+      - test-web
+      - test-shared-scripts
+      - build
+      - audit
+      - windows
+      - docker
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check job results
+        env:
+          RESULTS: |
+            changes=${{ needs.changes.result }}
+            typecheck=${{ needs.typecheck.result }}
+            test-server=${{ needs.test-server.result }}
+            test-web=${{ needs.test-web.result }}
+            test-shared-scripts=${{ needs.test-shared-scripts.result }}
+            build=${{ needs.build.result }}
+            audit=${{ needs.audit.result }}
+            windows=${{ needs.windows.result }}
+            docker=${{ needs.docker.result }}
+        run: |
+          echo "$RESULTS"
+          failed=0
+          while IFS='=' read -r job status; do
+            [ -z "$job" ] && continue
+            case "$status" in
+              success|skipped) ;;
+              *)
+                echo "Job $job ended with status: $status" >&2
+                failed=1
+                ;;
+            esac
+          done <<< "$RESULTS"
+          exit "$failed"

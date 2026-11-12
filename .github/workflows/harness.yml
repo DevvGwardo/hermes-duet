@@ -23,9 +23,22 @@ concurrency:
 
 jobs:
   harness:
-    name: sweep, dialogs, a11y, polish
+    name: ${{ matrix.group }} (${{ matrix.scripts }})
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Order inside each shard preserves seed state: sweep is read-only, channels adds #taxes,
+          # approvals decides pending cards while the background task badge is still 1; polish runs
+          # on a clean seed before dialogs cancels the running task.
+          - group: core
+            scripts: sweep channels approvals
+          - group: security-a11y
+            scripts: pairing a11y
+          - group: ui-dialogs
+            scripts: polish dialogs
     env:
       APP_URL: http://127.0.0.1:7466/
       BP_OUT: ${{ github.workspace }}/blueprint-out
@@ -40,6 +53,14 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.2.21
+
+      - name: Cache Bun dependencies
+        uses: actions/cache@v5
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
 
       - run: bun install --frozen-lockfile
       - run: bun run build
@@ -61,7 +82,7 @@ jobs:
       - name: Run the browser sweep
         run: |
           failed=""
-          for s in sweep channels pairing a11y approvals dialogs polish; do
+          for s in ${{ matrix.scripts }}; do
             echo "=== $s ==="
             if ! node "tools/blueprint/$s.mjs"; then
               failed="$failed $s"
@@ -76,6 +97,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: blueprint-evidence
+          name: blueprint-evidence-${{ matrix.group }}
           path: blueprint-out
           retention-days: 14
