@@ -4,7 +4,7 @@ A 10-agent audit of `hermes-duet` (architect, backend, frontend, api, data, test
 produced the findings below. This file is now the record of what happened to each one: **fixed**, **still open** (with
 why), or **rejected** (the crew was wrong — do not re-investigate without new evidence).
 
-**Baseline at audit time:** 348 tests pass, `tsc` clean. **After 2026-11-11 pass:** >= 735 tests across 61 files (Windows baseline failures resolved), `tsc` clean, `bun run build` clean.
+**Baseline at audit time:** 348 tests pass, `tsc` clean. **After 2026-11-11 pass:** >= 735 tests across 61 files (Windows baseline failures resolved), `tsc` clean, `bun run build` clean. *(Latest main on 2026-11-12: 771 tests across 62 files.)*
 
 Line numbers in the original findings refer to commit `8fbabc7`; they have moved.
 
@@ -224,10 +224,7 @@ form fields, revolut's and the generic proxy's totals, and a refusal surfacing a
 `server/vault.test.ts` now exercises `readLogin` via `__setVaultRunner`/`__setVaultHas` (including quoted Windows paths
 with spaces, injection guards, and credential redaction).
 
-**6.6 Partly fixed.** `.github/workflows/ci.yml` runs typecheck, unit tests, and build on both `ubuntu-latest` and
-`windows-latest`, verifies the Docker image build, and runs a blocking `bun audit --production --audit-level=high`;
-`.github/workflows/harness.yml` runs nightly/manual Playwright checks. Lint, formatting checks, and coverage reporting
-remain open, and `scripts/smoke.ts` still needs a live Hermes gateway so it belongs in a manual/nightly run rather than push CI.
+**6.6 Partly fixed.** `.github/workflows/ci.yml` runs changed-path detection (`.github/scripts/detect-changes.mjs`) and parallel jobs on `ubuntu-latest` (`typecheck`, 2-shard `test-server` via `.github/scripts/run-test-shard.mjs`, `test-web`, `test-shared-scripts`, `build`, blocking `bun audit --production --audit-level=high`, `docker` with Buildx cache), plus `windows-latest`, gated by a final `ci` status job with Bun install caching. `.github/workflows/harness.yml` runs the 7 portable Playwright scripts nightly/manually across 3 parallel shards (`core`, `security-a11y`, `ui-dialogs`). Lint, formatting checks, and CI coverage reporting remain open, and `scripts/smoke.ts` still needs a live Hermes gateway so it belongs in a manual/nightly run rather than push CI.
 
 ---
 
@@ -451,7 +448,7 @@ with a stubbed Hermes (it failed before), plus a `curl` smoke against the demo p
 
 ### What is deliberately still open
 
-- **5.5** reconnect snapshot trimming: measured on the live thread (`items: 136`, `tasks: 41`, `files: 6` → **76.7 KB raw / 22.9 KB gzipped** for the default 80-item/40-task snapshot slice), so aggressive trimming remains deferred as a product tradeoff until multi-channel or artifact-heavy threads grow substantially.
+- **5.5** reconnect snapshot trimming: measured on the live thread (`items: 136`, `tasks: 41`, `files: 6` → **76.7 KB raw / 22.9 KB gzipped** inside the server's 150-item / 60-task snapshot cap), so aggressive trimming remains deferred as a product tradeoff until multi-channel or artifact-heavy threads grow substantially.
 - **3.3** encryption at rest: still needs the key-holding decision (OS keychain vs passphrase, unattended boot).
 - **5.4** offline shell: needs cache invalidation designed for a LAN server; a wrong cache is worse than a spinner.
 - **6.6** linter choice: `ubuntu-latest` + `windows-latest` CI, Docker build verification, nightly browser harness, `bun test --coverage` (`94.79%` lines), and blocking `bun audit --production --audit-level=high` all run cleanly; adding an external ESLint/Biome config remains an optional tooling choice.

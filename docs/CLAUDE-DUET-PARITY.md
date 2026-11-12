@@ -2,7 +2,7 @@
 
 Research date: **2026-11-09** (updated after **Parity Pass 1** and **Parity Pass 2**, see [`GAPS.md`](../GAPS.md)). Claude Duet is a US-only research preview that changes quickly; this is a snapshot, not a permanent spec. Sources are listed at the bottom.
 
-The short version: after Parity Pass 1 (`71f25c7`–`7fe8e8b`) and Parity Pass 2 (`5975c79`–`6606434`), Hermes Duet reaches **parity or better** across structured approvals, outbound secret scanning, hard-blocked action policies, merchant-bound payment cards, dedicated task sheets with steering and user confirmation, grouped channels with standing instructions, source citations, user-defined routines, notification preferences, editable deliverables, complete FTS v3 indexing, in-app memory editing, read-only connector suggestions, channel repo binding, and always-on Linux/Docker deployment docs. It remains **behind or deliberately different** on cloud isolation, multi-gateway/multi-machine routing, automatic "Everything" channel triage, outbound-thread follow-up tracking, `"Don't ask again"` exceptions, connector OAuth/install flows, native mobile/iPad apps (§4.11), and in-app TTS speed controls.
+The short version: after Parity Pass 1 (`71f25c7`–`7fe8e8b`) and Parity Pass 2 (`5975c79`–`6606434`), Hermes Duet reaches **parity or better** across structured approvals, outbound secret scanning, hard-blocked action policies, merchant-bound payment cards, dedicated task sheets with steering and user confirmation, grouped channels with standing instructions, source citations, user-defined routines, notification preferences, editable deliverables, complete FTS indexing, in-app memory editing, read-only connector suggestions, channel repo binding, and always-on Linux/Docker deployment docs. It remains **behind or deliberately different** on cloud isolation, multi-gateway/multi-machine routing, automatic "Everything" channel triage, outbound-thread follow-up tracking, `"Don't ask again"` exceptions, connector OAuth/install flows, native mobile/iPad apps (§4.11), and in-app TTS speed controls.
 
 ---
 
@@ -55,7 +55,7 @@ piece is missing; **Missing** = no equivalent; **N/A** = different product bound
 |---|---|---|---|
 | Morning brief with prepared drafts | Yes | Yes; decisions, drafts, Watching, Skip | Parity / Ahead |
 | Checks through the day | Every few hours, configurable | Check-ins off / 3× daily / hourly + custom user routines | Parity / Partial — fixed check-in presets; arbitrary schedules via routines |
-| User controls what to hear and how often | Yes | `server/notify-prefs.ts`: per-category task pushes, `agent_notify`, per-channel mute, daily cap (`d68aefd`) | Parity (Pass 2) |
+| User controls what to hear and how often | Yes | `server/notify-prefs.ts`: per-category task pushes, `notify_agent`, per-channel mute, daily cap (`d68aefd`) | Parity (Pass 2) |
 | Follow up on threads that went quiet | Yes | No outbound-thread tracking | Missing |
 | User-defined recurring routines | Routines/scheduled tasks reported and implied | `routines` table + DST-aware scheduler + `save_routine`/`remove_routine` + Routines sheet (`986ad86`) | Parity (Pass 2) |
 | Event-driven triggers | Interval checks; no webhook/folder documented | Webhooks, watched folder, meeting proximity | Ahead |
@@ -70,7 +70,7 @@ piece is missing; **Missing** = no equivalent; **N/A** = different product bound
 | Source citation for numbers/summaries | Yes, names the email/file/sheet | `server/sources.ts` validates real ids & URLs across brief entries, watching, cards, task results (`5a072f6`) | Parity (Pass 1) |
 | Standing artifacts rebuilt on schedule | Implied via routines | Standing pages, compare slider, brief change line | Ahead |
 | Interactive deliverables | Not documented | `window.Duet` bridge to actions/approvals | Ahead |
-| Search your past chats | Yes, Duet + Claude chats outside projects | FTS schema v3 (`searchText`) across all items, card subfields, sources, tasks, files, pages (`6606434`) | Partial — Duet history fully indexed; external Hermes chats outside Duet not searched |
+| Search your past chats | Yes, Duet + Claude chats outside projects | FTS schema v4 (`searchText` + `taskSearchText`) across all items, card subfields, attachments, URLs, sources, tasks, files, pages (`6606434` + v4) | Partial — Duet history fully indexed; external Hermes chats outside Duet not searched |
 | Memory visible/resettable in app | Yes | `GET/PUT/DELETE /api/memory` + Settings > Memory sheet with 32 KB cap (`6606434`) | Parity (Pass 2) |
 | Skills/connectors from day one | Yes, inherited from Claude account | Connectors sheet + `GET /api/suggestions` + `Channel.repo`; no install/OAuth marketplace (`d01374c`) | Partial (Pass 2) |
 
@@ -95,7 +95,7 @@ piece is missing; **Missing** = no equivalent; **N/A** = different product bound
 |---|---|---|---|
 | Itemized approval with hard cap | Yes | Yes, items must add up; `DUET_MAX_TRANSACTION_LIMIT` | Ahead |
 | Single-use card | Yes | Privacy / Stripe Issuing / Revolut / generic | Parity |
-| Card scoped to **merchant and amount** | Yes | `merchant_url` → derived host checked via `sameLoginSite` & active element before `browser.fillCard` (`71f25c7`) | Parity (Pass 1) — host-checked at fill time; provider lock if supported |
+| Card scoped to **merchant and amount** | Yes | `merchant_url` → derived host checked via `sameOriginSite` & active element before `browser.fillCard` (`71f25c7`) | Parity (Pass 1) — host-checked at fill time; provider lock if supported |
 | Wallet app approves the spend | Link / Shop Pay | No wallet approval; approval is the card | Partial |
 | Recurring payments | Link cannot | Provider-dependent | N/A |
 
@@ -125,7 +125,7 @@ piece is missing; **Missing** = no equivalent; **N/A** = different product bound
   just "check every few hours".
 - **Approval drafts are editable on the card.** Claude Duet shows content for approval, but Hermes Duet lets the user
   fix a typo and sends their exact text.
-- **Search includes deliverables.** Tasks, files, cards and standing pages are in the same FTS v3 index; Claude Duet's
+- **Search includes deliverables.** Tasks, files, cards and standing pages are in the same FTS index; Claude Duet's
   search is chat-focused.
 - **Standing pages with a visual diff.** A rebuilt page can be compared against yesterday's version.
 - **Deliberate quietness.** Quiet hours, held pushes, "While you were away", per-category/channel notification
@@ -142,7 +142,8 @@ Do not copy the parts that are cloud-only tradeoffs: model lock-in, no local fil
 
 **Shipped (`d346b2a`, `7fe8e8b`):**
 - Structured `action`, `destination`, `recipients[]`, `content`, and `url` fields on `request_approval`, rendered
-  distinctly on approval cards and pinned into the resume prompt (`server/approval.ts`, `server/tools.ts`, `CardView.tsx`).
+  distinctly on approval cards and pinned into the resume prompt (`server/approval.ts`, `server/tools.ts`,
+  `server/tools/dispatch.ts`, `CardView.tsx`).
 - Deterministic outbound secret scanner (`server/safety.ts`) checking `never_share` (Luhn card numbers, SSNs, PEM
   keys, AWS/GitHub/API tokens) and `needs_consent` (IBANs) across approvals and `notify`.
 - Five hard-blocked categories (`HARD_BLOCKS`: bank/wire, securities/crypto, other people's accounts, password/2FA
@@ -159,7 +160,7 @@ Do not copy the parts that are cloud-only tradeoffs: model lock-in, no local fil
 - `request_payment` requires an absolute `http(s)` `merchant_url`, derives and stores `merchant_host`, and displays it
   on the payment card (`server/payments.ts`, `CardView.tsx`).
 - `browser.fillCard(card, expectedHost)` re-checks `currentHost()` / origin and active element right before typing via
-  `sameLoginSite`, refusing mismatches and hostless legacy cards (`server/browser.ts`).
+  `sameOriginSite`, refusing mismatches and hostless legacy cards (`server/browser.ts`).
 
 **Remaining:** Optional provider-side merchant lock controls and wallet approval parity (Link / Shop Pay).
 
@@ -203,9 +204,10 @@ task history pagination beyond the 60-task / 7-day window.
 
 ### 4.8 Search and memory (Shipped in Pass 2)
 
-**Shipped (`6606434`):**
-- FTS schema v3 (`server/search.ts`, `server/schema.ts`) via `searchText(item)` indexes card entries, drafts, watching,
-  follow-ups, checklist items, metrics, line items, approval recipients/content, and source quotes.
+**Shipped (`6606434`, expanded to schema v4 in `server/schema.ts`):**
+- FTS indexing (`server/search.ts`, `server/schema.ts`) via `searchText(item)` and `taskSearchText(task)` covers card
+  entries, drafts, watching, follow-ups, checklist items, metrics, line items, approval recipients/content, attachments,
+  URLs/hosts, task steps/changes, and source quotes, while omitting superseded `version_of` files from `fts_assets`.
 - Memory API (`GET/PUT/DELETE /api/memory`, `server/memory.ts`) and Settings > Memory sheet edit or clear
   `config.contextFile` with a 32 KB cap.
 

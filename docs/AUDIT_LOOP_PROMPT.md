@@ -1,5 +1,9 @@
 # Hermes Duet — continuous audit & fix loop
 
+> Historical maintainer runbook written for the 2026-11-04/05 audit loop (`docs/AUDIT_LOOP_LOG.md`) in the author's
+> local checkout (`/Users/devgwardo/hermes-duet`). Note that `server/runner.ts` referenced below was split on 2026-11-11
+> into `server/runs/`, `server/cards/`, and `server/tools/` (`17cf096`).
+
 Use this as the prompt for one loop iteration. It is written for a Claude Code session in
 `/Users/devgwardo/hermes-duet`. Each wake does **exactly one** finding, start to shipped, then records it
 so the next wake does not repeat it.
@@ -68,8 +72,7 @@ Rotate through these areas so the loop does not tunnel. If the last three iterat
 move to the next one:
 
 1. **HTTP edge** — `server/index.ts`: routing, auth, body caps, compression, headers, 405s, error shaping.
-2. **Runner** — `server/runner.ts`: lanes, stop/steer, restart recovery, watchdog, task lifecycle, queue
-   persistence.
+2. **Runner** — `server/runs/` (`state.ts`, `manager.ts`), `server/cards/actions.ts`, `server/tools/` (`deliver.ts`, `dispatch.ts`), and `server/runner.ts` facade: lanes, stop/steer, restart recovery, watchdog, task lifecycle, queue persistence.
 3. **Data** — `server/db.ts`, `server/schema.ts`, `server/search.ts`: transactions, FTS drift, indexes,
    pruning, migrations, attachment linking.
 4. **Web** — `web/src`: store identity, streaming renders, lazy chunks, focus traps, mobile width, contrast,
@@ -237,7 +240,7 @@ Stop and write the decision needed instead of guessing:
 - **Offline shell (5.4)** — cache invalidation for a LAN server; a wrong cache is worse than a spinner.
 - **Reconnect snapshot trimming (5.5)** — needs a measurement on a real thread; it changes what a returning
   phone has.
-- **`runner.ts` split** — a large structural change; do not combine it with a behavioural fix.
+- **`runner.ts` split** — *(completed 2026-11-11 in `17cf096`)* keep `server/runs/`, `server/cards/`, and `server/tools/` cycle-free; do not combine large structural moves with a behavioural fix.
 - **Major dependency upgrades** (TypeScript 5 → 7, Vite major, React major) — separate PR with a migration
   plan.
 - **Payment limits, auth, pairing, public exposure, destructive migrations** — never change these silently.
