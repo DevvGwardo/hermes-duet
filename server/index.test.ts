@@ -15,7 +15,7 @@ import { GENERAL_CHANNEL } from './schema';
 import { apiError, compressJson, handleApp, handleInternal, readBytesCapped, readTextCapped } from './index';
 import { resetIdempotency, resetLimits } from './limits';
 import * as browser from './browser';
-import { MAX_UPLOAD_BYTES } from './uploads';
+import { MAX_UPLOAD_BYTES, saveUpload } from './uploads';
 
 const BASE = 'http://127.0.0.1:7456';
 const INTERNAL_BASE = 'http://127.0.0.1:7457';
@@ -1017,5 +1017,247 @@ describe('phase 2 API & security hardening', () => {
       Promise.resolve(new Response(payload, { headers: { 'content-type': 'application/json' } })),
     );
     expect(compressed.headers.get('content-encoding')).toBe('gzip');
+  });
+});
+
+describe('voice retry, draft upload cleanup, range serving, rate limits & doctor audio checks', () => {
+  const savedEnv = {
+    sttUrl: process.env.DUET_STT_URL,
+    sttKey: process.env.DUET_STT_KEY,
+    sttCmd: process.env.DUET_STT_CMD,
+    ttsUrl: process.env.DUET_TTS_URL,
+    ttsKey: process.env.DUET_TTS_KEY,
+    ttsCmd: process.env.DUET_TTS_CMD,
+  };
+  const realFetch = globalThis.fetch;
+  const realErr = console.error;
+
+  afterEach(() => {
+    const restore = (k: string, v: string | undefined) => {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    };
+    restore('DUET_STT_URL', savedEnv.sttUrl);
+    restore('DUET_STT_KEY', savedEnv.sttKey);
+    restore('DUET_STT_CMD', savedEnv.sttCmd);
+    restore('DUET_TTS_URL', savedEnv.ttsUrl);
+    restore('DUET_TTS_KEY', savedEnv.ttsKey);
+    restore('DUET_TTS_CMD', savedEnv.ttsCmd);
+    globalThis.fetch = realFetch;
+    console.error = realErr;
+    resetLimits();
+  });
+
+  test('POST /api/audio/transcribe/:id handles 200, 404, 400, 405, and 503', async () => {
+    process.env.DUET_STT_URL = 'http://stt.local/v1/audio/transcriptions';
+    globalThis.fetch = (async () => new Response(JSON.stringify({ text: '[00:00.000 --> 00:01.000]  retried memo' }), { status: 200 })) as any;
+
+    const memo = saveUpload({ bytes: new Uint8Array([1, 2, 3, 4]), mime: 'audio/webm', filename: 'Voice memo.webm' });
+    const ok = await authed(`/api/audio/transcribe/${memo.id}`, { method: 'POST' });
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toMatchObject({ text: 'retried memo', attachment: { id: memo.id } });
+
+    // video/mp4 picked as audio container is also accepted for retry transcription.
+    const mp4Memo = saveUpload({ bytes: new Uint8Array([5, 6, 7, 8]), mime: 'video/mp4', filename: 'memo.mp4' });
+    const okMp4 = await authed(`/api/audio/transcribe/${mp4Memo.id}`, { method: 'POST' });
+    expect(okMp4.status).toBe(200);
+    expect(((await okMp4.json()) as any).text).toBe('retried memo');
+
+    // Missing attachment -> 404
+    expect((await authed('/api/audio/transcribe/no-such-attachment', { method: 'POST' })).status).toBe(404);
+
+    // Non-audio attachment -> 400
+    const img = saveUpload({ bytes: new Uint8Array([9, 10]), mime: 'image/png', filename: 'photo.png' });
+    const nonAudio = await authed(`/api/audio/transcribe/${img.id}`, { method: 'POST' });
+    expect(nonAudio.status).toBe(400);
+    expect(((await nonAudio.json()) as any).error).toContain('not audio');
+
+    // File missing on disk -> 404
+    const ghost = saveUpload({ bytes: new Uint8Array([1, 2]), mime: 'audio/ogg', filename: 'ghost.ogg' });
+    rmSync(attachments.get(ghost.id)!.path, { force: true });
+    expect((await authed(`/api/audio/transcribe/${ghost.id}`, { method: 'POST' })).status).toBe(404);
+
+    // Wrong method -> 405 with Allow: POST
+    const wrongMethod = await authed(`/api/audio/transcribe/${memo.id}`, { method: 'GET' });
+    expect(wrongMethod.status).toBe(405);
+    expect(wrongMethod.headers.get('allow')).toBe('POST');
+
+    // STT failure -> 503 with sanitized error and attachment preserved
+    console.error = () => {};
+    globalThis.fetch = (async () => new Response('upstream secret error', { status: 500 })) as any;
+    const fail = await authed(`/api/audio/transcribe/${memo.id}`, { method: 'POST' });
+    expect(fail.status).toBe(503);
+    expect(await fail.json()).toMatchObject({ error: 'Transcription failed (500)', text: '', attachment: { id: memo.id } });
+  });
+
+  test('DELETE /api/uploads/:id deletes unlinked drafts, rejects linked (409) and missing (404)', async () => {
+    const draft = saveUpload({ bytes: new Uint8Array([1, 2, 3, 4]), mime: 'audio/webm', filename: 'draft.webm' });
+    const draftPath = attachments.get(draft.id)!.path;
+    expect(existsSync(draftPath)).toBe(true);
+
+    const del = await authed(`/api/uploads/${draft.id}`, { method: 'DELETE' });
+    expect(del.status).toBe(200);
+    expect(await del.json()).toMatchObject({ ok: true, id: draft.id });
+    expect(attachments.get(draft.id)).toBeNull();
+    expect(existsSync(draftPath)).toBe(false);
+    expect((await authed(`/api/uploads/${draft.id}`)).status).toBe(404);
+
+    expect((await authed('/api/uploads/no-such-upload', { method: 'DELETE' })).status).toBe(404);
+
+    const kept = saveUpload({ bytes: new Uint8Array([5, 6, 7]), mime: 'audio/mp4', filename: 'kept.m4a' });
+    const msgRes = await authed('/api/messages', jsonPost({ text: 'here is a memo', attachment_ids: [kept.id] }));
+    expect(msgRes.status).toBe(200);
+    const conflict = await authed(`/api/uploads/${kept.id}`, { method: 'DELETE' });
+    expect(conflict.status).toBe(409);
+    expect(attachments.get(kept.id)).not.toBeNull();
+    expect(existsSync(attachments.get(kept.id)!.path)).toBe(true);
+
+    const wrong = await authed(`/api/uploads/${kept.id}`, { method: 'POST' });
+    expect(wrong.status).toBe(405);
+    expect(wrong.headers.get('allow')).toContain('DELETE');
+  });
+
+  test('GET /api/uploads/:id and GET /api/brief/:id/audio support HTTP Range / 206 Partial Content and 416', async () => {
+    const payload = new Uint8Array([10, 11, 12, 13, 14, 15, 16, 17, 18, 19]);
+    const audio = saveUpload({ bytes: payload, mime: 'audio/mp4', filename: 'range.m4a' });
+
+    const full = await authed(`/api/uploads/${audio.id}`);
+    expect(full.status).toBe(200);
+    expect(full.headers.get('accept-ranges')).toBe('bytes');
+    expect(full.headers.get('content-length')).toBe('10');
+    expect(Array.from(new Uint8Array(await full.arrayBuffer()))).toEqual(Array.from(payload));
+
+    const probe = await authed(`/api/uploads/${audio.id}`, { headers: { range: 'bytes=0-1' } });
+    expect(probe.status).toBe(206);
+    expect(probe.headers.get('accept-ranges')).toBe('bytes');
+    expect(probe.headers.get('content-range')).toBe('bytes 0-1/10');
+    expect(probe.headers.get('content-length')).toBe('2');
+    expect(Array.from(new Uint8Array(await probe.arrayBuffer()))).toEqual([10, 11]);
+
+    const openEnd = await authed(`/api/uploads/${audio.id}`, { headers: { range: 'bytes=7-' } });
+    expect(openEnd.status).toBe(206);
+    expect(openEnd.headers.get('content-range')).toBe('bytes 7-9/10');
+    expect(Array.from(new Uint8Array(await openEnd.arrayBuffer()))).toEqual([17, 18, 19]);
+
+    const suffix = await authed(`/api/uploads/${audio.id}`, { headers: { range: 'bytes=-3' } });
+    expect(suffix.status).toBe(206);
+    expect(suffix.headers.get('content-range')).toBe('bytes 7-9/10');
+    expect(Array.from(new Uint8Array(await suffix.arrayBuffer()))).toEqual([17, 18, 19]);
+
+    const clamped = await authed(`/api/uploads/${audio.id}`, { headers: { range: 'bytes=8-999' } });
+    expect(clamped.status).toBe(206);
+    expect(clamped.headers.get('content-range')).toBe('bytes 8-9/10');
+    expect(Array.from(new Uint8Array(await clamped.arrayBuffer()))).toEqual([18, 19]);
+
+    for (const badRange of ['bytes=10-12', 'bytes=6-2', 'bytes=-0', 'bytes=abc-def']) {
+      const r = await authed(`/api/uploads/${audio.id}`, { headers: { range: badRange } });
+      expect(r.status).toBe(416);
+      expect(r.headers.get('content-range')).toBe('bytes */10');
+    }
+
+    // Brief audio route + Range support
+    const briefId = newId();
+    const now = Date.now();
+    items.save({
+      id: briefId,
+      kind: 'card',
+      channel_id: GENERAL_CHANNEL,
+      created_at: now,
+      updated_at: now,
+      card: { type: 'brief', title: `Brief audio range test ${briefId}`, status: 'info' },
+    });
+    delete process.env.DUET_TTS_CMD;
+    process.env.DUET_TTS_URL = 'http://tts.local/v1/audio/speech';
+    const mp3Bytes = new Uint8Array([100, 101, 102, 103, 104, 105, 106, 107]);
+    globalThis.fetch = (async () => new Response(mp3Bytes, { status: 200 })) as any;
+
+    expect((await authed('/api/brief/no-such-brief/audio')).status).toBe(404);
+
+    const briefFull = await authed(`/api/brief/${briefId}/audio`);
+    expect(briefFull.status).toBe(200);
+    expect(briefFull.headers.get('content-type')).toBe('audio/mpeg');
+    expect(briefFull.headers.get('accept-ranges')).toBe('bytes');
+    expect(Array.from(new Uint8Array(await briefFull.arrayBuffer()))).toEqual(Array.from(mp3Bytes));
+
+    const briefPart = await authed(`/api/brief/${briefId}/audio`, { headers: { range: 'bytes=2-5' } });
+    expect(briefPart.status).toBe(206);
+    expect(briefPart.headers.get('content-range')).toBe('bytes 2-5/8');
+    expect(briefPart.headers.get('content-length')).toBe('4');
+    expect(Array.from(new Uint8Array(await briefPart.arrayBuffer()))).toEqual([102, 103, 104, 105]);
+
+    const briefOor = await authed(`/api/brief/${briefId}/audio`, { headers: { range: 'bytes=50-60' } });
+    expect(briefOor.status).toBe(416);
+    expect(briefOor.headers.get('content-range')).toBe('bytes */8');
+  });
+
+  test('per-device rate limits apply to uploads, transcribe, transcribe/:id, and brief audio', async () => {
+    resetLimits();
+    process.env.DUET_STT_URL = 'http://stt.local/v1/audio/transcriptions';
+    process.env.DUET_TTS_URL = 'http://tts.local/v1/audio/speech';
+    globalThis.fetch = (async (url: string) => {
+      if (String(url).includes('tts')) return new Response(new Uint8Array([1, 2, 3, 4]), { status: 200 });
+      return new Response(JSON.stringify({ text: 'ok' }), { status: 200 });
+    }) as any;
+
+    // 1. POST /api/uploads (limit 30/min)
+    for (let i = 0; i < 30; i++) {
+      const form = new FormData();
+      form.set('file', new File([new Uint8Array([1])], 'x.txt', { type: 'text/plain' }));
+      expect((await authed('/api/uploads', { method: 'POST', body: form })).status).toBe(200);
+    }
+    const up429 = await authed('/api/uploads', { method: 'POST', body: new FormData() });
+    expect(up429.status).toBe(429);
+    expect(((await up429.json()) as any).code).toBe('too_many');
+
+    // 2. POST /api/audio/transcribe and POST /api/audio/transcribe/:id share transcribe limit (20/min)
+    resetLimits();
+    const memo = saveUpload({ bytes: new Uint8Array([1, 2]), mime: 'audio/webm', filename: 'r.webm' });
+    for (let i = 0; i < 19; i++) {
+      expect((await authed(`/api/audio/transcribe/${memo.id}`, { method: 'POST' })).status).toBe(200);
+    }
+    expect((await authed('/api/audio/transcribe', { method: 'POST', headers: { 'content-type': 'audio/webm' }, body: new Uint8Array([1, 2]) })).status).toBe(200);
+    const stt429 = await authed(`/api/audio/transcribe/${memo.id}`, { method: 'POST' });
+    expect(stt429.status).toBe(429);
+    expect(stt429.headers.get('retry-after')).toBeTruthy();
+
+    // 3. GET /api/brief/:id/audio (limit 30/min)
+    resetLimits();
+    const briefId = newId();
+    const now = Date.now();
+    items.save({
+      id: briefId,
+      kind: 'card',
+      channel_id: GENERAL_CHANNEL,
+      created_at: now,
+      updated_at: now,
+      card: { type: 'brief', title: `Rate limit brief ${briefId}`, status: 'info' },
+    });
+    for (let i = 0; i < 30; i++) {
+      expect((await authed(`/api/brief/${briefId}/audio`)).status).toBe(200);
+    }
+    const brief429 = await authed(`/api/brief/${briefId}/audio`);
+    expect(brief429.status).toBe(429);
+    expect(((await brief429.json()) as any).code).toBe('too_many');
+  });
+
+  test('doctor() reports STT, TTS, and ffmpeg diagnostics without leaking API keys', async () => {
+    process.env.DUET_STT_URL = 'https://api.groq.com/openai/v1/audio/transcriptions';
+    process.env.DUET_STT_KEY = 'super-secret-stt-key';
+    process.env.DUET_TTS_URL = 'https://api.openai.com/v1/audio/speech';
+    process.env.DUET_TTS_KEY = 'super-secret-tts-key';
+
+    const res = await handleInternal(
+      new Request(`${INTERNAL_BASE}/internal/doctor`, {
+        headers: { authorization: `Bearer ${internalToken()}` },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { checks: { name: string; ok: boolean; detail: string; info?: boolean }[] };
+    const text = JSON.stringify(body);
+    expect(text).not.toContain('super-secret-stt-key');
+    expect(text).not.toContain('super-secret-tts-key');
+    expect(body.checks.find((c) => c.name === 'speech-to-text (STT)')).toMatchObject({ ok: true });
+    expect(body.checks.find((c) => c.name === 'text-to-speech (TTS)')).toMatchObject({ ok: true });
+    expect(body.checks.find((c) => c.name === 'ffmpeg (audio transcoding)')).toBeDefined();
   });
 });

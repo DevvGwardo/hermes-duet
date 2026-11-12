@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { join, normalize, sep } from 'node:path';
 import { brotliCompressSync, gzipSync } from 'node:zlib';
 import type { Item, Snapshot } from '../shared/types';
-import { briefSpeech, speak, transcribeFile } from './audio';
+import { audioDiagnostics, briefSpeech, speak, transcribeFile } from './audio';
 import { capabilities } from './capabilities';
 import { channelInput, channelPatch } from './channels';
 import { encodedPath, encodingHeaders, preferredEncoding } from './compress';
@@ -12,7 +12,7 @@ import { listConnectors, testConnector } from './connectors';
 import { sseResponse } from './bus';
 import { config } from './config';
 import { MAX_EDIT_BYTES } from '../shared/edit';
-import { type AttachmentRow, attachments, channels, db, devices, files, items, kv, newId, pages, prune, routines, settings, tasks, toAttachment, triggers } from './db';
+import { type AttachmentRow, attachments, channels, db, devices, files, items, kv, newId, pages, routines, settings, tasks, toAttachment, triggers } from './db';
 import { UserError } from './errors';
 import { saveFileVersion } from './fileversions';
 import { hermes } from './hermes';
@@ -27,7 +27,7 @@ import { startScheduler } from './scheduler';
 import { suggestedConnectors } from './suggestions';
 import { downloadsPrompt, inboundIp, meetingPrompt, webhookMatches, webhookPrompt, type WatchedFile } from './triggers';
 import { checkMeetings, meetingPrepEnabled, recordWebhook, recordWebhookIp, startFolderWatch, webhookIpReady, webhookReady, webhookToken } from './triggers-runtime';
-import { MAX_UPLOAD_BYTES, checkBodySize, normalizeMime, saveUpload, uploadDir } from './uploads';
+import { MAX_UPLOAD_BYTES, checkBodySize, deleteUnlinkedUpload, isAudioMime, normalizeMime, prune, saveUpload, uploadDir } from './uploads';
 import { parseMultipartCapped, type MultipartResult } from './multipart';
 import { readLogin, vaults } from './vault';
 import { broadcast } from './bus';
@@ -186,8 +186,9 @@ const API_METHODS: [RegExp, string[]][] = [
   [/^\/api\/tasks\/[\w-]+\/reopen$/, ['POST']],
   [/^\/api\/tasks\/[\w-]+\/message$/, ['POST']],
   [/^\/api\/uploads$/, ['POST']],
-  [/^\/api\/uploads\/[\w-]+$/, ['GET']],
+  [/^\/api\/uploads\/[\w-]+$/, ['GET', 'DELETE']],
   [/^\/api\/audio\/transcribe$/, ['POST']],
+  [/^\/api\/audio\/transcribe\/[\w-]+$/, ['POST']],
   [/^\/api\/cards\/[\w-]+\/act$/, ['POST']],
   [/^\/api\/deliverables\/[\w-]+\/(action|approval)$/, ['POST']],
   [/^\/api\/runs\/stop$/, ['POST']],
@@ -216,7 +217,7 @@ const kb = (n: number) => (n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024)
  */
 function attachmentNote(rows: AttachmentRow[]): string {
   if (!rows.length) return '';
-  const lines = rows.map((r) => `- ${r.path} (${r.mime}, ${kb(r.size)})${r.mime.startsWith('audio/') ? ' — a voice memo the user recorded' : ''}`);
+  const lines = rows.map((r) => `- ${r.path} (${r.mime}, ${kb(r.size)})${isAudioMime(r.mime) ? ' — a voice memo the user recorded' : ''}`);
   return `\n\nThe user attached ${rows.length === 1 ? 'a file' : `${rows.length} files`} with this message:\n${lines.join('\n')}\nLook at them with your file or vision tools before answering.`;
 }
 
@@ -641,6 +642,8 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
 
     // ---- uploads, voice memos and spoken briefs (see server/uploads.ts, server/audio.ts) ----
     if (path === '/api/uploads' && req.method === 'POST') {
+      const limited = tooMany(limits.uploads, device, 'uploads');
+      if (limited) return limited;
       // One limit: the same number uploads.ts enforces, checked WHILE the body streams (GAPS 2.3 —
       // a chunked body used to be fully buffered by formData() before any size check could run).
       if (tooLarge(req, MAX_UPLOAD_BYTES)) return err(413, 'that file is too large');
@@ -660,9 +663,15 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
       }
     }
     const uploadMatch = path.match(/^\/api\/uploads\/([\w-]+)$/);
-    if (uploadMatch && req.method === 'GET') return serveUpload(uploadMatch[1]);
+    if (uploadMatch && req.method === 'GET') return serveUpload(req, uploadMatch[1]);
+    if (uploadMatch && req.method === 'DELETE') {
+      deleteUnlinkedUpload(uploadMatch[1]);
+      return json({ ok: true, id: uploadMatch[1] });
+    }
 
     if (path === '/api/audio/transcribe' && req.method === 'POST') {
+      const limited = tooMany(limits.transcribe, device, 'transcriptions');
+      if (limited) return limited;
       if (tooLarge(req, MAX_UPLOAD_BYTES)) return err(413, 'that recording is too large');
       let bytes: Uint8Array;
       let mime: string;
@@ -696,12 +705,12 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
       } catch {
         return err(413, 'that recording is too large');
       }
-      if (!mime.startsWith('audio/')) return err(400, 'send an audio recording');
+      if (!isAudioMime(mime)) return err(400, 'send an audio recording');
       // The memo is kept even when transcription is unavailable, so it can be replayed and retried later.
       const attachment = saveUpload({ bytes, mime, filename: 'Voice memo' });
       const row = attachments.get(attachment.id)!;
       try {
-        const text = await transcribeFile(row.path);
+        const text = await transcribeFile(row.path, row.mime);
         return json({ text, attachment });
       } catch (e: any) {
         if (!(e instanceof UserError)) console.error('[audio] transcribe failed', e?.stack ?? e);
@@ -709,14 +718,36 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
       }
     }
 
+    const transcribeIdMatch = path.match(/^\/api\/audio\/transcribe\/([\w-]+)$/);
+    if (transcribeIdMatch && req.method === 'POST') {
+      const limited = tooMany(limits.transcribe, device, 'transcriptions');
+      if (limited) return limited;
+      const row = attachments.get(transcribeIdMatch[1]);
+      if (!row) return err(404, 'attachment not found');
+      if (!isAudioMime(row.mime)) return err(400, 'attachment is not audio');
+      if (!existsSync(row.path)) return err(404, 'attachment file not found');
+      const attachment = toAttachment(row);
+      try {
+        const text = await transcribeFile(row.path, row.mime);
+        return json({ text, attachment });
+      } catch (e: any) {
+        if (!(e instanceof UserError)) console.error('[audio] transcribe retry failed', e?.stack ?? e);
+        return json({ error: safeAudioError(e), attachment, text: '' }, 503);
+      }
+    }
+
     // "Listen" on the morning brief: synthesized once, then served from data/tts.
     const briefAudio = path.match(/^\/api\/brief\/([\w-]+)\/audio$/);
     if (briefAudio && req.method === 'GET') {
+      const limited = tooMany(limits.briefAudio, device, 'brief audio requests');
+      if (limited) return limited;
       const item = items.get(briefAudio[1]);
       if (!item?.card || item.card.type !== 'brief') return err(404, 'no such brief');
       const clip = await speak(briefSpeech(item.card));
-      return new Response(Bun.file(clip.path), {
-        headers: { 'content-type': clip.mime, 'cache-control': 'private, max-age=3600', 'x-content-type-options': 'nosniff' },
+      return serveRangedFile(req, clip.path, {
+        'content-type': clip.mime,
+        'cache-control': 'private, max-age=3600',
+        'x-content-type-options': 'nosniff',
       });
     }
 
@@ -891,19 +922,86 @@ const DELIVERABLE_BRIDGE = `<script>(function(){
 })()</script>`;
 
 /**
+ * Serve a file with HTTP byte-range support (`Accept-Ranges: bytes`, `206 Partial Content`, `416` on out-of-range)
+ * so iOS Safari / AVFoundation media playback and seeking work reliably.
+ */
+function serveRangedFile(req: Request, path: string, headers: Record<string, string>): Response {
+  const size = statSync(path).size;
+  const baseHeaders: Record<string, string> = { ...headers, 'accept-ranges': 'bytes' };
+  const rangeHeader = req.headers.get('range');
+  if (!rangeHeader) {
+    return new Response(Bun.file(path), {
+      status: 200,
+      headers: { ...baseHeaders, 'content-length': String(size) },
+    });
+  }
+  const trimmed = rangeHeader.trim();
+  if (!/^bytes=/i.test(trimmed)) {
+    return new Response(Bun.file(path), {
+      status: 200,
+      headers: { ...baseHeaders, 'content-length': String(size) },
+    });
+  }
+  const spec = trimmed.slice(6).trim();
+  if (spec.includes(',')) {
+    // Multi-range requests are optional under RFC 9110; serve the full representation when multiple ranges are requested.
+    return new Response(Bun.file(path), {
+      status: 200,
+      headers: { ...baseHeaders, 'content-length': String(size) },
+    });
+  }
+  const match = /^(\d*)-(\d*)$/.exec(spec);
+  if (!match || (match[1] === '' && match[2] === '') || size === 0) {
+    return new Response(null, {
+      status: 416,
+      headers: { ...baseHeaders, 'content-range': `bytes */${size}` },
+    });
+  }
+  let start: number;
+  let end: number;
+  if (match[1] === '') {
+    const suffix = Number(match[2]);
+    if (!Number.isSafeInteger(suffix) || suffix <= 0) {
+      return new Response(null, {
+        status: 416,
+        headers: { ...baseHeaders, 'content-range': `bytes */${size}` },
+      });
+    }
+    start = Math.max(0, size - suffix);
+    end = size - 1;
+  } else {
+    start = Number(match[1]);
+    end = match[2] === '' ? size - 1 : Math.min(Number(match[2]), size - 1);
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || start >= size || end < start) {
+      return new Response(null, {
+        status: 416,
+        headers: { ...baseHeaders, 'content-range': `bytes */${size}` },
+      });
+    }
+  }
+  const length = end - start + 1;
+  return new Response(Bun.file(path).slice(start, end + 1), {
+    status: 206,
+    headers: {
+      ...baseHeaders,
+      'content-range': `bytes ${start}-${end}/${size}`,
+      'content-length': String(length),
+    },
+  });
+}
+
+/**
  * An upload is served inline for the thread's thumbnails and the voice memo player, but sandboxed: an SVG is markup,
  * and it must never run script with this app's origin and cookie behind it.
  */
-async function serveUpload(id: string): Promise<Response> {
+async function serveUpload(req: Request, id: string): Promise<Response> {
   const row = attachments.get(id);
   if (!row || !existsSync(row.path)) return err(404, 'file not found');
-  return new Response(Bun.file(row.path), {
-    headers: {
-      'content-type': row.mime,
-      'cache-control': 'private, max-age=3600',
-      'x-content-type-options': 'nosniff',
-      'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
-    },
+  return serveRangedFile(req, row.path, {
+    'content-type': row.mime,
+    'cache-control': 'private, max-age=3600',
+    'x-content-type-options': 'nosniff',
+    'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
   });
 }
 
@@ -1006,6 +1104,35 @@ async function doctor() {
   add('context sources', existsSync(config.contextFile), existsSync(config.contextFile) ? config.contextFile : 'optional: copy context.example.md to context.local.md', true);
   const s = settings.get();
   add('morning brief', s.brief_enabled, s.brief_enabled ? `daily at ${s.brief_time} (${s.timezone}); the host must be awake` : 'off', true);
+  const audio = audioDiagnostics();
+  add(
+    'speech-to-text (STT)',
+    audio.stt.kind !== 'none',
+    audio.stt.kind === 'http'
+      ? `${audio.stt.url.split('?')[0]} (model: ${audio.stt.model})`
+      : audio.stt.kind === 'cmd'
+        ? `command: ${audio.stt.cmd}`
+        : audio.stt.reason,
+    true,
+  );
+  add(
+    'text-to-speech (TTS)',
+    audio.tts.kind !== 'none',
+    audio.tts.kind === 'http'
+      ? `${audio.tts.url.split('?')[0]} (model: ${audio.tts.model}, voice: ${audio.tts.voice})`
+      : audio.tts.kind === 'cmd'
+        ? `command: ${audio.tts.cmd}`
+        : audio.tts.kind === 'say'
+          ? 'macOS say + afconvert'
+          : audio.tts.reason,
+    true,
+  );
+  add(
+    'ffmpeg (audio transcoding)',
+    audio.ffmpeg,
+    audio.ffmpeg ? 'found on PATH' : 'not found on PATH (needed to transcode non-WAV audio for whisper-cli and remux Safari m4a)',
+    true,
+  );
   return { ok: checks.every((c) => c.ok || c.info), checks };
 }
 

@@ -54,6 +54,9 @@ export const limits = {
   tasks: new SlidingWindow(20, 60_000),
   briefs: new SlidingWindow(6, 10 * 60_000),
   pushTests: new SlidingWindow(5, 10 * 60_000),
+  uploads: new SlidingWindow(30, 60_000),
+  transcribe: new SlidingWindow(20, 60_000),
+  briefAudio: new SlidingWindow(30, 60_000),
 };
 
 export function resetLimits() {

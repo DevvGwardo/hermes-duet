@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { type RefObject, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { Item, Task } from '../../../shared/types';
 import { api } from '../api';
@@ -8,6 +8,7 @@ import { STATUS_LABEL } from '../labels';
 import { useStore } from '../store';
 import { Icon, Markdown, relLabel, timeLabel } from '../ui';
 import { FileRow, SourceChips } from './CardView';
+import { VoiceHints, VoiceHoldHud, VoiceLockedBar, VoiceRetryCard, useVoiceDictation } from './VoiceInput';
 
 export function TasksView({
   onJump,
@@ -147,6 +148,7 @@ function TaskSheet({ task, onClose, onOpenFile }: { task: Task; onClose: () => v
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || !isTopDialog(dialog.current)) return;
+      if (dialog.current?.querySelector('.task-composer-row.listening')) return;
       e.preventDefault();
       e.stopPropagation();
       onClose();
@@ -200,7 +202,7 @@ function TaskSheet({ task, onClose, onOpenFile }: { task: Task; onClose: () => v
     <div className="sheet-backdrop task-sheet-backdrop" onClick={onClose}>
       <div className="sheet task-sheet" role="dialog" aria-modal="true" aria-label={task.title} ref={dialog} onClick={(e) => e.stopPropagation()}>
         <div className="sheet-head">
-          <button className="icon-btn" onClick={onClose} aria-label="Back to tasks">
+          <button type="button" className="icon-btn" onClick={onClose} aria-label="Back to tasks">
             <Icon.close size={18} />
           </button>
           <div className="sheet-title">
@@ -301,7 +303,7 @@ function TaskSheet({ task, onClose, onOpenFile }: { task: Task; onClose: () => v
         </div>
 
         {live ? (
-          <TaskComposer taskId={task.id} />
+          <TaskComposer taskId={task.id} dialogRef={dialog} />
         ) : task.status === 'queued' ? (
           <p className="task-composer-hint">Starts soon — steering opens once it runs.</p>
         ) : null}
@@ -312,15 +314,65 @@ function TaskSheet({ task, onClose, onOpenFile }: { task: Task; onClose: () => v
 }
 
 /** Steer the task while it runs. The server refuses with a 409 when there is no live run, and that refusal is shown. */
-function TaskComposer({ taskId }: { taskId: string }) {
+function TaskComposer({ taskId, dialogRef }: { taskId: string; dialogRef: RefObject<HTMLDivElement | null> }) {
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const ta = useRef<HTMLTextAreaElement>(null);
+
+  const voice = useVoiceDictation({
+    text,
+    setText,
+    textareaRef: ta,
+    disabled: busy,
+    allowAttachmentFallback: false,
+  });
+
+  const voiceRef = useRef(voice);
+  voiceRef.current = voice;
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!isTopDialog(dialogRef.current)) return;
+      const v = voiceRef.current;
+
+      if (e.key === 'Escape' && v.isActive) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation?.();
+        v.cancel();
+        return;
+      }
+
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'm') {
+        if (!v.voiceVisible || busyRef.current || v.isTranscribing) return;
+        e.preventDefault();
+        v.toggle();
+        return;
+      }
+
+      if (
+        e.key === 'Enter' &&
+        !e.shiftKey &&
+        !e.isComposing &&
+        (v.mode === 'locked' || v.mode === 'listening')
+      ) {
+        const target = e.target as HTMLElement | null;
+        if (target?.closest?.('button')) return;
+        e.preventDefault();
+        void v.confirm();
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [dialogRef]);
 
   async function send() {
     const t = text.trim();
-    if (!t || busy) return;
+    if (!t || busy || voice.isActive || voice.isTranscribing) return;
     setBusy(true);
     setErr(null);
     setNote(null);
@@ -335,31 +387,84 @@ function TaskComposer({ taskId }: { taskId: string }) {
     }
   }
 
+  const lockedBarOpen = voice.mode === 'locked' || voice.mode === 'listening';
+
   return (
     <div className="task-composer">
       {note && <p className="composer-hint">{note}</p>}
-      {err && (
-        <p className="composer-hint error" role="alert">
-          {err}
-        </p>
-      )}
-      <div className="task-composer-row">
-        <textarea
-          aria-label="Steer this task"
-          placeholder="Steer it mid-run…"
-          value={text}
-          rows={1}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey && !(e.nativeEvent as any).isComposing) {
-              e.preventDefault();
-              void send();
-            }
-          }}
+      <VoiceHints
+        isTranscribing={voice.isTranscribing}
+        notice={voice.notice}
+        error={err || voice.error}
+        statusMessage={voice.statusMessage}
+      />
+      {voice.failedTake && (
+        <VoiceRetryCard
+          take={voice.failedTake}
+          onRetry={() => void voice.retryFailed()}
+          onDiscard={voice.discardFailed}
         />
-        <button className="btn btn-primary small" disabled={busy || !text.trim()} onClick={() => void send()}>
-          {busy ? 'Sending…' : 'Send'}
-        </button>
+      )}
+      <div className="composer-anchor">
+        {voice.mode === 'holding' && (
+          <VoiceHoldHud seconds={voice.seconds} analyser={voice.analyser} holdFeedback={voice.holdFeedback} />
+        )}
+        <div className={`task-composer-row ${voice.isActive ? 'listening' : ''} ${lockedBarOpen ? 'is-locked' : ''}`}>
+          <textarea
+            ref={ta}
+            aria-label="Steer this task"
+            placeholder="Steer it mid-run…"
+            value={text}
+            rows={1}
+            tabIndex={lockedBarOpen ? -1 : undefined}
+            aria-hidden={lockedBarOpen || undefined}
+            onChange={(e) => setText(e.target.value)}
+            onSelect={voice.snapshotSelection}
+            onKeyUp={voice.snapshotSelection}
+            onBlur={voice.snapshotSelection}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey && !(e.nativeEvent as any).isComposing) {
+                e.preventDefault();
+                if (voice.isActive) {
+                  void voice.confirm();
+                } else {
+                  void send();
+                }
+              }
+            }}
+          />
+          {voice.voiceVisible && (
+            <button
+              {...voice.micButtonProps}
+              tabIndex={lockedBarOpen ? -1 : undefined}
+              aria-hidden={lockedBarOpen || undefined}
+              className={`icon-btn mic mic-btn ${voice.isActive ? 'on' : ''}`}
+              title={voice.isActive ? 'Stop and transcribe (⌘⇧M / Ctrl+Shift+M)' : 'Dictate steering message'}
+            >
+              {voice.isActive ? <Icon.stop size={18} /> : <Icon.mic size={19} />}
+            </button>
+          )}
+          <button
+            type="button"
+            className="btn btn-primary small"
+            tabIndex={lockedBarOpen ? -1 : undefined}
+            aria-hidden={lockedBarOpen || undefined}
+            disabled={busy || !text.trim() || voice.isActive || voice.isTranscribing}
+            onClick={() => void send()}
+          >
+            {busy ? 'Sending…' : 'Send'}
+          </button>
+          {lockedBarOpen && (
+            <VoiceLockedBar
+              mode={voice.mode}
+              seconds={voice.seconds}
+              analyser={voice.analyser}
+              interimText={voice.interimText}
+              onCancel={voice.cancel}
+              onConfirm={() => void voice.confirm()}
+            />
+          )}
+        </div>
       </div>
     </div>
   );

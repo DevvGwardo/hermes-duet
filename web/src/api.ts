@@ -2,10 +2,21 @@ import { settledNotifications } from '../../shared/links';
 import type { Attachment, Capabilities, Channel, Connector, ConnectorSuggestion, FileEntry, Item, MemoryState, Routine, RoutineSchedule, SearchHit, ServerEvent, Settings, Snapshot, Task } from '../../shared/types';
 import { applyEvent, applySnapshot, channelItems, getState, hasMoreFor, mergeItems, prependItems, setChannel, setChannelMore, setState } from './store';
 
-class HttpError extends Error {
+export class HttpError extends Error {
   constructor(public status: number, message: string) {
     super(message);
   }
+}
+
+async function parseTranscribe(res: Response): Promise<{ text: string; attachment: Attachment; error?: string }> {
+  if (res.status === 503) {
+    const body = (await res.json().catch(() => null)) as { error?: string; attachment?: Attachment; text?: string } | null;
+    if (body?.attachment) {
+      return { text: body.text ?? '', attachment: body.attachment, error: body.error ?? 'Could not transcribe that memo.' };
+    }
+    throw new HttpError(503, body?.error || res.statusText || 'Transcription failed');
+  }
+  return parse<{ text: string; attachment: Attachment }>(res);
 }
 
 async function parse<T>(res: Response): Promise<T> {
@@ -51,21 +62,31 @@ export const api = {
   },
   /** Transcribe a recording locally. The server keeps the audio and returns the text plus the stored attachment.
    *  On 503 (transcription engine failed), the server still returns `{ error, attachment, text }` so the memo isn't lost. */
-  transcribe: async (blob: Blob): Promise<{ text: string; attachment: Attachment; error?: string }> => {
+  transcribe: async (blob: Blob, mimeType?: string): Promise<{ text: string; attachment: Attachment; error?: string }> => {
     const res = await fetch('/api/audio/transcribe', {
       method: 'POST',
       credentials: 'include',
-      headers: { 'content-type': blob.type || 'audio/webm' },
+      headers: { 'content-type': mimeType || blob.type || 'audio/webm' },
       body: blob,
     });
-    if (res.status === 503) {
-      const body = (await res.json().catch(() => null)) as { error?: string; attachment?: Attachment; text?: string } | null;
-      if (body?.attachment) {
-        return { text: body.text ?? '', attachment: body.attachment, error: body.error ?? 'Could not transcribe that memo.' };
-      }
-      throw new HttpError(503, body?.error || res.statusText || 'Transcription failed');
-    }
-    return parse<{ text: string; attachment: Attachment }>(res);
+    return parseTranscribe(res);
+  },
+  /** Retry transcription on an already-uploaded audio attachment by id. */
+  retryTranscribe: async (id: string): Promise<{ text: string; attachment: Attachment; error?: string }> => {
+    const res = await fetch(`/api/audio/transcribe/${encodeURIComponent(id)}`, {
+      method: 'POST',
+      credentials: 'include',
+    });
+    return parseTranscribe(res);
+  },
+  /** Delete an unlinked temporary upload (e.g. after dictation succeeds). Tolerates 404/409 gracefully. */
+  deleteUpload: async (id: string): Promise<{ ok: boolean }> => {
+    const res = await fetch(`/api/uploads/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      credentials: 'include',
+    });
+    if (res.status === 404 || res.status === 409) return { ok: false };
+    return parse<{ ok: true }>(res);
   },
   act: (cardId: string, action: string, value?: string) =>
     call<{ item: Item }>('POST', `/api/cards/${encodeURIComponent(cardId)}/act`, { action, value }),

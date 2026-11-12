@@ -4,11 +4,12 @@
 // at a URL you point us at); the morning brief can be listened to through macOS `say` (converted to AAC so phones can
 // play it), Piper, or an OpenAI-compatible TTS endpoint. Nothing is uploaded anywhere unless DUET_STT_URL /
 // DUET_TTS_URL says so.
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { basename, dirname, extname, join } from 'node:path';
 import type { CardData } from '../shared/types';
 import { config } from './config';
 import { UserError } from './errors';
+import { normalizeMime } from './uploads';
 import { splitArgs } from './vault';
 
 type Env = Record<string, string | undefined>;
@@ -65,29 +66,41 @@ export function ttsTarget(env: Env, platform: string): TtsTarget {
   return { kind: 'none', reason: 'No text-to-speech engine. Set DUET_TTS_CMD (Piper: "piper --model en_US-lessac-medium.onnx --output_file {out}") or DUET_TTS_URL.' };
 }
 
-const NOISE = /\[(blank_audio|silence|music|applause|inaudible|no speech)[^\]]*\]/gi;
+const NON_SPEECH_BODY =
+  '(?:blank[_ ]?audio|silence|music|applause|inaudible|no[_ ]?speech|laughter|laughing|laughs|sighs?|coughs?|coughing|clears?\\s+throat|noise|background\\s+noise|cheering|clapping|crying|sobbing|snoring|groans?|gasps?|panting|breathing|footsteps|static|beeps?|chimes?|ringing|buzzing|humming|whistling|wind|rain|thunder|unintelligible|indistinct|foreign|speaking\\s+foreign\\s+language|sound(?:\\s+of\\s+[^)\\]]+)?|♪+)';
+const BRACKET_NOISE = new RegExp(`\\[${NON_SPEECH_BODY}[^\\]]*\\]`, 'gi');
+const PAREN_NOISE = new RegExp(`\\(${NON_SPEECH_BODY}(?:\\s+[^)]*)?\\)`, 'gi');
+const MUSIC_NOTES = /♪+/g;
+const SUBTITLE_ARTIFACT =
+  /(?:^|\s)(?:subtitles?|captions?|transcribed|captioned)\s+by\b[^\n]*?(?=[.!?](?:\s|$)|$)[.!?]?|(?:^|(?<=[.!?]\s)|\n)(?:[^.!?\n]|\.(?!\s))*?\bamara\.org\b[^\n]*?(?=[.!?](?:\s|$)|$)[.!?]?/gi;
+const REPEATED_PHRASE = /(\b[\p{L}\p{N}']+(?:\s+[\p{L}\p{N}']+){0,7}\b)(?:[.,!?;]*\s+\1\b){2,}([.,!?]*)/giu;
 const TIMESTAMP = /^\s*\[?\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d{1,3})?\s*-->\s*\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d{1,3})?\]?\s*/;
 const BRACKET_TIME = /\[\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d{1,3})?\]/g;
 
 /**
- * Whisper output as something worth putting in the composer: drop timestamps and non-speech tags, then reflow into
- * one paragraph (a voice memo is one utterance, not a document). Empty means it heard nothing.
+ * Whisper output as something worth putting in the composer: drop timestamps, non-speech tags, subtitle artifacts,
+ * and repeated-phrase silence hallucinations, then reflow into paragraphs. Empty means it heard nothing.
  */
 export function cleanTranscript(raw: string): string {
-  const lines = String(raw ?? '')
+  const cleaned = String(raw ?? '')
     .split(/\r?\n/)
     .map((l) => l.replace(TIMESTAMP, '').replace(BRACKET_TIME, ''))
     .join('\n')
-    .replace(NOISE, '');
-  return lines
+    .replace(BRACKET_NOISE, ' ')
+    .replace(PAREN_NOISE, ' ')
+    .replace(MUSIC_NOTES, ' ')
+    .replace(SUBTITLE_ARTIFACT, ' ');
+  return cleaned
     .split(/\n{2,}/)
     .map((p) =>
       p
         .replace(/\s*\n\s*/g, ' ')
         .replace(/\s{2,}/g, ' ')
+        .replace(REPEATED_PHRASE, '$1$2')
+        .replace(/\s+([.,!?;:])/g, '$1')
         .trim(),
     )
-    .filter(Boolean)
+    .filter((p) => Boolean(p) && /[\p{L}\p{N}]/u.test(p))
     .join('\n\n')
     .trim();
 }
@@ -153,33 +166,137 @@ async function runCommand(cmd: string, args: string[], stdin?: string): Promise<
   }
 }
 
+let audioHas: (cmd: string) => boolean = hasCommand;
+let audioRunner: (cmd: string, args: string[], stdin?: string) => Promise<{ out: string; err: string; code: number }> = runCommand;
+
+export function __setAudioHas(next: (cmd: string) => boolean): (cmd: string) => boolean {
+  const prev = audioHas;
+  audioHas = next;
+  return prev;
+}
+
+export function __setAudioRunner(next: typeof runCommand): typeof runCommand {
+  const prev = audioRunner;
+  audioRunner = next;
+  return prev;
+}
+
+export function hasFfmpeg(): boolean {
+  return audioHas('ffmpeg');
+}
+
+export function audioDiagnostics(env: Env = process.env, platform: string = process.platform) {
+  return {
+    stt: sttTarget(env, audioHas),
+    tts: ttsTarget(env, platform),
+    ffmpeg: audioHas('ffmpeg'),
+  };
+}
+
+const EXT_TO_MIME: Record<string, string> = {
+  '.webm': 'audio/webm',
+  '.m4a': 'audio/mp4',
+  '.mp4': 'audio/mp4',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.ogg': 'audio/ogg',
+  '.aac': 'audio/aac',
+  '.flac': 'audio/flac',
+  '.3gp': 'audio/3gpp',
+};
+
+const MIME_TO_EXT: Record<string, string> = {
+  'audio/webm': '.webm',
+  'audio/mp4': '.m4a',
+  'audio/x-m4a': '.m4a',
+  'audio/m4a': '.m4a',
+  'video/mp4': '.mp4',
+  'audio/mpeg': '.mp3',
+  'audio/mp3': '.mp3',
+  'audio/wav': '.wav',
+  'audio/x-wav': '.wav',
+  'audio/wave': '.wav',
+  'audio/ogg': '.ogg',
+  'audio/aac': '.aac',
+  'audio/flac': '.flac',
+  'audio/3gpp': '.3gp',
+};
+
+const tempNonce = () => `${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`;
+
 /** Transcribe a stored audio file with whatever local engine is configured. Returns '' when it heard nothing. */
-export async function transcribeFile(path: string): Promise<string> {
-  const target = sttTarget(process.env, hasCommand);
+export async function transcribeFile(path: string, mime?: string): Promise<string> {
+  const target = sttTarget(process.env, audioHas);
   if (target.kind === 'none') throw new UserError(target.reason, 503);
+  const ext = extname(path).toLowerCase();
+
   if (target.kind === 'cmd') {
-    const args = target.args.map((a) => a.replaceAll('{file}', path));
-    const { out, err, code } = await runCommand(target.cmd, args);
-    if (code !== 0) throw new Error(`Transcription failed: ${(err || out).trim().slice(-200) || `exit ${code}`}`);
-    return cleanTranscript(out);
+    let inputPath = path;
+    let tmpWav: string | null = null;
+    try {
+      if (ext !== '.wav') {
+        if (!audioHas('ffmpeg')) {
+          throw new UserError(
+            'ffmpeg is required to transcode non-WAV audio for local STT. Install ffmpeg or use WAV audio or an HTTP STT endpoint (DUET_STT_URL).',
+            503,
+          );
+        }
+        tmpWav = join(dirname(path), `.stt-${basename(path, ext).replace(/^\.+/, '') || 'audio'}-${tempNonce()}.wav`);
+        const conv = await audioRunner('ffmpeg', ['-y', '-i', path, '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le', tmpWav]);
+        if (conv.code !== 0) {
+          throw new Error(`Audio transcoding failed: ${(conv.err || conv.out).trim().slice(-200) || `exit ${conv.code}`}`);
+        }
+        inputPath = tmpWav;
+      }
+      const args = target.args.map((a) => a.replaceAll('{file}', inputPath));
+      const { out, err, code } = await audioRunner(target.cmd, args);
+      if (code !== 0) throw new Error(`Transcription failed: ${(err || out).trim().slice(-200) || `exit ${code}`}`);
+      return cleanTranscript(out);
+    } finally {
+      if (tmpWav) rmSync(tmpWav, { force: true });
+    }
   }
-  const form = new FormData();
-  form.append('file', new Blob([readFileSync(path)]), basename(path));
-  form.append('model', target.model);
-  form.append('response_format', 'json');
-  const res = await fetch(target.url, {
-    method: 'POST',
-    headers: target.key ? { authorization: `Bearer ${target.key}` } : undefined,
-    body: form,
-    signal: AbortSignal.timeout(STT_TIMEOUT_MS),
-  });
-  const text = await res.text();
-  if (!res.ok) throw new Error(`Transcription failed (${res.status}): ${text.slice(0, 200)}`);
-  let json: any = null;
+
+  let sendPath = path;
+  let tmpM4a: string | null = null;
+  let remuxed = false;
   try {
-    json = JSON.parse(text);
-  } catch {}
-  return cleanTranscript(typeof json?.text === 'string' ? json.text : text);
+    if ((ext === '.m4a' || ext === '.mp4') && audioHas('ffmpeg')) {
+      tmpM4a = join(dirname(path), `.stt-remux-${basename(path, ext).replace(/^\.+/, '') || 'audio'}-${tempNonce()}.m4a`);
+      try {
+        const remux = await audioRunner('ffmpeg', ['-y', '-i', path, '-c', 'copy', '-movflags', '+faststart', tmpM4a]);
+        if (remux.code === 0 && existsSync(tmpM4a) && statSync(tmpM4a).size > 0) {
+          sendPath = tmpM4a;
+          remuxed = true;
+        }
+      } catch {
+        // Best-effort remux: fall back to the original file if ffmpeg errors.
+      }
+    }
+    const cleanMime = normalizeMime(mime);
+    const sendExt = remuxed ? '.m4a' : ext || MIME_TO_EXT[cleanMime] || '.webm';
+    const sendMime = remuxed ? 'audio/mp4' : cleanMime || EXT_TO_MIME[sendExt] || 'application/octet-stream';
+    const base = basename(path, ext).replace(/^\.+/, '') || 'audio';
+    const form = new FormData();
+    form.append('file', new Blob([readFileSync(sendPath)], { type: sendMime }), `${base}${sendExt}`);
+    form.append('model', target.model);
+    form.append('response_format', 'json');
+    const res = await fetch(target.url, {
+      method: 'POST',
+      headers: target.key ? { authorization: `Bearer ${target.key}` } : undefined,
+      body: form,
+      signal: AbortSignal.timeout(STT_TIMEOUT_MS),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`Transcription failed (${res.status}): ${text.slice(0, 200)}`);
+    let json: any = null;
+    try {
+      json = JSON.parse(text);
+    } catch {}
+    return cleanTranscript(typeof json?.text === 'string' ? json.text : text);
+  } finally {
+    if (tmpM4a) rmSync(tmpM4a, { force: true });
+  }
 }
 
 const ttsDir = () => join(config.dataDir, 'tts');
@@ -210,17 +327,17 @@ export async function speak(text: string): Promise<{ path: string; mime: string 
     const tmpAiff = join(dir, `.${key}.${nonce}.aiff.tmp`);
     try {
       if (target.kind === 'say') {
-        const said = await runCommand('say', ['-o', tmpAiff, spokenText]);
+        const said = await audioRunner('say', ['-o', tmpAiff, spokenText]);
         if (said.code !== 0) throw new Error(`say failed: ${said.err.trim().slice(-200) || `exit ${said.code}`}`);
         // AIFF is not reliably playable on phones; AAC/M4A is.
-        const conv = await runCommand('afconvert', ['-f', 'm4af', '-d', 'aac', '-b', '64000', tmpAiff, tmpOut]);
+        const conv = await audioRunner('afconvert', ['-f', 'm4af', '-d', 'aac', '-b', '64000', tmpAiff, tmpOut]);
         if (conv.code !== 0) throw new Error(`afconvert failed: ${conv.err.trim().slice(-200) || `exit ${conv.code}`}`);
       } else if (target.kind === 'cmd') {
         const hasOut = target.args.some((a) => a.includes('{out}'));
         const hasText = target.args.some((a) => a.includes('{text}'));
         const args = target.args.map((a) => a.replaceAll('{out}', tmpOut).replaceAll('{text}', spokenText));
         if (!hasOut) args.push(tmpOut);
-        const ran = await runCommand(target.cmd, args, hasText ? '' : spokenText);
+        const ran = await audioRunner(target.cmd, args, hasText ? '' : spokenText);
         if (ran.code !== 0) throw new Error(`TTS command failed: ${ran.err.trim().slice(-200) || `exit ${ran.code}`}`);
       } else {
         const res = await fetch(target.url, {

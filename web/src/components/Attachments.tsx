@@ -27,7 +27,7 @@ export function Attachments({ list, onRemove }: { list: Attachment[]; onRemove?:
             </a>
           )}
           {onRemove && (
-            <button className="attachment-remove" onClick={() => onRemove(a.id)} aria-label={`Remove ${a.name}`}>
+            <button type="button" className="attachment-remove" onClick={() => onRemove(a.id)} aria-label={`Remove ${a.name}`}>
               <Icon.close size={13} />
             </button>
           )}

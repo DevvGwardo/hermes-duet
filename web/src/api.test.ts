@@ -257,8 +257,72 @@ test('api.transcribe preserves the saved voice memo on 503 when attachment is re
     json: async () => ({ error: 'whisper missing', attachment: memo, text: '' }),
   }));
   try {
-    const res = await api.transcribe(new Blob(['audio'], { type: 'audio/webm' }));
+    const res = await api.transcribe(new Blob(['audio'], { type: 'audio/mp4' }), 'audio/mp4');
+    expect(s.calls[0].url).toBe('/api/audio/transcribe');
+    expect(s.calls[0].init.headers['content-type']).toBe('audio/mp4');
     expect(res).toEqual({ text: '', attachment: memo as any, error: 'whisper missing' });
+  } finally {
+    s.restore();
+  }
+});
+
+test('api.retryTranscribe posts to /api/audio/transcribe/:id and handles 200 and 503', async () => {
+  const memo = { id: 'att/1', name: 'Voice memo', mime: 'audio/mp4', size: 20, kind: 'audio', created_at: 1 };
+  let mode: 'ok' | '503' = 'ok';
+  const s = stubFetch(() =>
+    mode === 'ok'
+      ? ok({ text: 'hello world', attachment: memo })
+      : {
+          status: 503,
+          ok: false,
+          statusText: 'Service Unavailable',
+          text: async () => '',
+          json: async () => ({ error: 'still unavailable', attachment: memo, text: '' }),
+        },
+  );
+  try {
+    const okRes = await api.retryTranscribe('att/1');
+    expect(s.calls[0].url).toBe('/api/audio/transcribe/att%2F1');
+    expect(s.calls[0].init.method).toBe('POST');
+    expect(s.calls[0].init.credentials).toBe('include');
+    expect(okRes).toEqual({ text: 'hello world', attachment: memo as any });
+
+    mode = '503';
+    const failRes = await api.retryTranscribe('att/1');
+    expect(failRes).toEqual({ text: '', attachment: memo as any, error: 'still unavailable' });
+  } finally {
+    s.restore();
+  }
+});
+
+test('api.deleteUpload calls DELETE /api/uploads/:id and swallows 404/409 gracefully', async () => {
+  let status = 200;
+  const s = stubFetch(() => {
+    if (status === 200) return ok({ ok: true });
+    return {
+      status,
+      ok: false,
+      statusText: status === 404 ? 'Not Found' : status === 409 ? 'Conflict' : 'Server Error',
+      text: async () => JSON.stringify({ error: 'boom' }),
+      json: async () => ({ error: 'boom' }),
+    };
+  });
+  try {
+    expect(await api.deleteUpload('up 1')).toEqual({ ok: true });
+    expect(s.calls[0].url).toBe('/api/uploads/up%201');
+    expect(s.calls[0].init.method).toBe('DELETE');
+    expect(s.calls[0].init.credentials).toBe('include');
+
+    status = 404;
+    expect(await api.deleteUpload('up-missing')).toEqual({ ok: false });
+
+    status = 409;
+    expect(await api.deleteUpload('up-linked')).toEqual({ ok: false });
+
+    status = 500;
+    const err = await api.deleteUpload('up-err').catch((e) => e);
+    expect(err.status).toBe(500);
+    expect(err.message).toBe('boom');
   } finally {
     s.restore();
   }

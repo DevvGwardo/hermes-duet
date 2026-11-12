@@ -173,13 +173,20 @@ export function CardView({ item, onOpenFile }: { item: Item; onOpenFile: (id: st
   );
 }
 
-let activeMediaOwner: symbol | null = null;
+interface ActiveBriefAudio {
+  owner: symbol;
+  pause: () => void;
+}
+
+let activeBriefAudio: ActiveBriefAudio | null = null;
 
 function clearMediaSession(owner: symbol) {
-  if (activeMediaOwner !== owner) return;
-  activeMediaOwner = null;
+  if (activeBriefAudio?.owner === owner) {
+    activeBriefAudio = null;
+  }
   const session = (navigator as any).mediaSession;
   if (!session) return;
+  if (activeBriefAudio && activeBriefAudio.owner !== owner) return;
   try {
     session.setActionHandler?.('play', null);
     session.setActionHandler?.('pause', null);
@@ -195,13 +202,21 @@ function clearMediaSession(owner: symbol) {
 function ListenButton({ item }: { item: Item }) {
   const audio = useRef<HTMLAudioElement | null>(null);
   const loadingRef = useRef(false);
+  const needsReloadRef = useRef(true);
+  const mountedRef = useRef(true);
   const owner = useRef(Symbol('listen'));
   const [state, setState] = useState<'idle' | 'loading' | 'playing'>('idle');
   const [err, setErr] = useState<string | null>(null);
   const title = item.card?.title ?? 'Morning brief';
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    needsReloadRef.current = true;
+  }, [item.id]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
       loadingRef.current = false;
       const el = audio.current;
       if (el) {
@@ -212,63 +227,127 @@ function ListenButton({ item }: { item: Item }) {
         el.onerror = null;
         el.pause();
         el.removeAttribute('src');
+        el.load();
         audio.current = null;
       }
       clearMediaSession(owner.current);
-    },
-    [],
-  );
+    };
+  }, []);
+
+  function pauseFromController() {
+    loadingRef.current = false;
+    const el = audio.current;
+    if (el && !el.paused) {
+      el.pause();
+    }
+    if (mountedRef.current) setState('idle');
+  }
 
   function stop() {
+    loadingRef.current = false;
     const el = audio.current;
     if (el) {
       el.pause();
-      el.currentTime = 0;
+      try {
+        el.currentTime = 0;
+      } catch {}
     }
-    setState('idle');
+    clearMediaSession(owner.current);
+    if (mountedRef.current) setState('idle');
   }
 
   async function toggle() {
     if (loadingRef.current || state === 'loading') return;
     setErr(null);
+
+    // Prepare / reuse the HTMLAudioElement synchronously inside the tap gesture so iOS Safari stays unlocked.
     const el = audio.current ?? new Audio();
     audio.current = el;
+    (el as any).playsInline = true;
+
     if (state === 'playing' && !el.paused) {
       el.pause();
+      clearMediaSession(owner.current);
       setState('idle');
       return;
     }
+
+    // Pause any other brief currently playing before claiming Media Session.
+    if (activeBriefAudio && activeBriefAudio.owner !== owner.current) {
+      activeBriefAudio.pause();
+    }
+    activeBriefAudio = { owner: owner.current, pause: pauseFromController };
+
     loadingRef.current = true;
     setState('loading');
-    try {
-      if (el.src !== new URL(`/api/brief/${item.id}/audio`, location.href).href) {
-        el.src = `/api/brief/${item.id}/audio`;
-        el.preload = 'auto';
-      }
-      el.onplaying = () => setState('playing');
-      el.onplay = () => setState('playing');
-      el.onpause = () => {
-        if (!loadingRef.current) setState('idle');
-      };
-      el.onended = () => setState('idle');
-      el.onerror = () => {
-        loadingRef.current = false;
+
+    const audioPath = `/api/brief/${encodeURIComponent(item.id)}/audio`;
+    const targetUrl = new URL(audioPath, location.href).href;
+    let mediaErrorMsg: string | null = null;
+
+    el.onplaying = () => {
+      if (mountedRef.current && activeBriefAudio?.owner === owner.current) setState('playing');
+    };
+    el.onplay = () => {
+      if (mountedRef.current && activeBriefAudio?.owner === owner.current) setState('playing');
+    };
+    el.onpause = () => {
+      if (!loadingRef.current && mountedRef.current) setState('idle');
+    };
+    el.onended = () => {
+      clearMediaSession(owner.current);
+      if (mountedRef.current) setState('idle');
+    };
+    el.onerror = () => {
+      loadingRef.current = false;
+      needsReloadRef.current = true;
+      mediaErrorMsg = 'Could not play the brief. Set up speech on the host: hermes-duet doctor.';
+      clearMediaSession(owner.current);
+      if (mountedRef.current) {
         setState('idle');
-        setErr('Could not play the brief. Set up speech on the host: hermes-duet doctor.');
-      };
+        setErr(mediaErrorMsg);
+      }
+    };
+
+    try {
+      if (el.src !== targetUrl || needsReloadRef.current || el.error) {
+        el.src = audioPath;
+        el.preload = 'auto';
+        el.load();
+        needsReloadRef.current = false;
+      }
+
       const session = (navigator as any).mediaSession;
       if (session && typeof MediaMetadata !== 'undefined') {
-        activeMediaOwner = owner.current;
         session.metadata = new MediaMetadata({ title, artist: 'Hermes Duet', album: 'Morning brief' });
         session.setActionHandler?.('play', () => void el.play());
         session.setActionHandler?.('pause', () => el.pause());
         session.setActionHandler?.('stop', stop);
       }
-      await el.play();
-      setState('playing');
+
+      // Invoke play() synchronously in the tap gesture before awaiting.
+      const playPromise = el.play();
+      await playPromise;
+      if (mountedRef.current && activeBriefAudio?.owner === owner.current) {
+        setState('playing');
+      }
     } catch (e: any) {
+      if (!mountedRef.current) return;
+      const superseded = activeBriefAudio?.owner !== owner.current;
+      if (superseded && e?.name === 'AbortError') {
+        setState('idle');
+        return;
+      }
+      needsReloadRef.current = true;
+      clearMediaSession(owner.current);
       setState('idle');
-      setErr(/not allowed|gesture/i.test(String(e?.message)) ? 'Tap Listen again to allow audio.' : 'Could not play the brief.');
+      setErr(
+        mediaErrorMsg || el.error
+          ? mediaErrorMsg ?? 'Could not play the brief. Set up speech on the host: hermes-duet doctor.'
+          : /not allowed|gesture/i.test(String(e?.message ?? e?.name))
+            ? 'Tap Listen again to allow audio.'
+            : 'Could not play the brief.',
+      );
     } finally {
       loadingRef.current = false;
     }
@@ -277,9 +356,11 @@ function ListenButton({ item }: { item: Item }) {
   return (
     <>
       <button
+        type="button"
         className={`listen ${state}`}
         disabled={state === 'loading'}
-        onClick={toggle}
+        onClick={() => void toggle()}
+        aria-pressed={state === 'playing'}
         aria-label={state === 'playing' ? 'Pause the brief' : 'Listen to the brief'}
       >
         {state === 'playing' ? <Icon.stop size={14} /> : <Icon.play size={14} />}

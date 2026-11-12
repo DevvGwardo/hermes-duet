@@ -1,7 +1,21 @@
 import { describe, expect, test } from 'bun:test';
-import { readFileSync, statSync } from 'node:fs';
-import { attachments } from './db';
-import { MAX_UPLOAD_BYTES, UPLOAD_TYPES, checkBodySize, checkUpload, displayName, normalizeMime, saveUpload, uploadExt } from './uploads';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { attachments, db } from './db';
+import {
+  MAX_UPLOAD_BYTES,
+  ORPHAN_UPLOAD_TTL_MS,
+  UPLOAD_TYPES,
+  checkBodySize,
+  checkUpload,
+  deleteUnlinkedUpload,
+  displayName,
+  isAudioMime,
+  normalizeMime,
+  prune,
+  pruneOrphanUploads,
+  saveUpload,
+  uploadExt,
+} from './uploads';
 
 describe('normalizeMime', () => {
   test('drops codec parameters and case', () => {
@@ -111,5 +125,84 @@ describe("checkBodySize", () => {
   test("refuses oversized and non-finite buffers", () => {
     expect(() => checkBodySize(MAX_UPLOAD_BYTES + 1)).toThrow(/25 MB/);
     expect(() => checkBodySize(Number.NaN)).toThrow(/25 MB/);
+  });
+});
+
+describe('expanded audio formats, deleteUnlinkedUpload & orphan pruning', () => {
+  test('accepts all expanded audio MIME types and video/mp4, stripping parameters', () => {
+    const cases: [string, string][] = [
+      ['audio/webm;codecs=opus', '.webm'],
+      ['audio/mp4;codecs=mp4a.40.2', '.m4a'],
+      ['audio/x-m4a', '.m4a'],
+      ['audio/m4a', '.m4a'],
+      ['audio/mpeg', '.mp3'],
+      ['audio/mp3', '.mp3'],
+      ['audio/wav', '.wav'],
+      ['audio/x-wav', '.wav'],
+      ['audio/wave', '.wav'],
+      ['audio/ogg; codecs=opus', '.ogg'],
+      ['audio/aac', '.aac'],
+      ['audio/flac', '.flac'],
+      ['audio/3gpp', '.3gp'],
+      ['video/mp4', '.mp4'],
+    ];
+    for (const [mime, expectedExt] of cases) {
+      expect(uploadExt(mime)).toBe(expectedExt);
+      expect(() => checkUpload(mime, 128)).not.toThrow();
+      expect(isAudioMime(mime)).toBe(true);
+    }
+    expect(isAudioMime('image/png')).toBe(false);
+    expect(isAudioMime('application/pdf')).toBe(false);
+  });
+
+  test('deleteUnlinkedUpload deletes unlinked files from DB and disk, refuses linked (409) and missing (404)', () => {
+    const unlinked = saveUpload({ bytes: new Uint8Array([1, 2, 3]), mime: 'audio/ogg', filename: 'draft.ogg' });
+    const unlinkedPath = attachments.get(unlinked.id)!.path;
+    expect(existsSync(unlinkedPath)).toBe(true);
+    deleteUnlinkedUpload(unlinked.id);
+    expect(attachments.get(unlinked.id)).toBeNull();
+    expect(existsSync(unlinkedPath)).toBe(false);
+
+    expect(() => deleteUnlinkedUpload('no-such-upload-id')).toThrow(/not found/);
+
+    const linked = saveUpload({ bytes: new Uint8Array([4, 5, 6]), mime: 'audio/flac', filename: 'keep.flac' });
+    const linkedPath = attachments.get(linked.id)!.path;
+    attachments.link([linked.id], 'item-linked-test');
+    expect(() => deleteUnlinkedUpload(linked.id)).toThrow(/already attached/);
+    expect(attachments.get(linked.id)).not.toBeNull();
+    expect(existsSync(linkedPath)).toBe(true);
+  });
+
+  test('pruneOrphanUploads and prune delete unlinked uploads older than 24h while keeping recent or linked ones', () => {
+    const now = Date.now();
+    const staleUnlinked = saveUpload({ bytes: new Uint8Array([1, 2]), mime: 'audio/mp3', filename: 'stale.mp3' });
+    const freshUnlinked = saveUpload({ bytes: new Uint8Array([3, 4]), mime: 'audio/m4a', filename: 'fresh.m4a' });
+    const staleLinked = saveUpload({ bytes: new Uint8Array([5, 6]), mime: 'audio/3gpp', filename: 'linked.3gp' });
+    attachments.link([staleLinked.id], 'item-keep-old');
+
+    const oldTs = now - ORPHAN_UPLOAD_TTL_MS - 60_000;
+    db.query('UPDATE attachments SET created_at = ? WHERE id IN (?, ?)').run(oldTs, staleUnlinked.id, staleLinked.id);
+    db.query('UPDATE attachments SET created_at = ? WHERE id = ?').run(now - 60_000, freshUnlinked.id);
+
+    const stalePath = attachments.get(staleUnlinked.id)!.path;
+    const freshPath = attachments.get(freshUnlinked.id)!.path;
+    const linkedPath = attachments.get(staleLinked.id)!.path;
+
+    const removed = pruneOrphanUploads(now);
+    expect(removed).toBeGreaterThanOrEqual(1);
+    expect(attachments.get(staleUnlinked.id)).toBeNull();
+    expect(existsSync(stalePath)).toBe(false);
+
+    expect(attachments.get(freshUnlinked.id)).not.toBeNull();
+    expect(existsSync(freshPath)).toBe(true);
+    expect(attachments.get(staleLinked.id)).not.toBeNull();
+    expect(existsSync(linkedPath)).toBe(true);
+
+    // Calling unified prune() at now + 25h cleans up the remaining unlinked upload too.
+    const later = prune(now + ORPHAN_UPLOAD_TTL_MS + 120_000);
+    expect(later.orphanUploads).toBeGreaterThanOrEqual(1);
+    expect(attachments.get(freshUnlinked.id)).toBeNull();
+    expect(existsSync(freshPath)).toBe(false);
+    expect(existsSync(linkedPath)).toBe(true);
   });
 });
