@@ -370,6 +370,62 @@ export const TOOLS = [
       required: ['title', 'body'],
     },
   },
+  {
+    name: 'track_followup',
+    description:
+      'Track an outbound message, email, or request that is waiting on someone else\'s reply so it surfaces if the thread goes quiet. ' +
+      'Call this after sending an important email/message when the user expects a reply, or when the user asks you to follow up if someone does not respond. ' +
+      'Overdue follow-ups automatically surface in the morning brief, check-ins, and the Tasks tab.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'What we are waiting on, e.g. "Dana reply on Q3 lease renewal".' },
+        recipient: { type: 'string', description: 'Person or organization expected to reply.' },
+        destination: { type: 'string', description: 'Where the thread lives, e.g. "Gmail", "Slack #design", or email address.' },
+        due_hours: { type: 'number', description: 'Hours from now before this counts as quiet/overdue. Default 48 (max 2160).' },
+        due_at: { type: 'number', description: 'Optional explicit due timestamp in epoch milliseconds.' },
+        notes: { type: 'string', description: 'Optional context or draft nudge note (max 500 chars).' },
+        source_item_id: { type: 'string', description: 'Optional item/card id this outbound request came from.' },
+        task_id: taskId,
+      },
+      required: ['title'],
+    },
+  },
+  {
+    name: 'resolve_followup',
+    description:
+      'Mark a tracked follow-up as resolved (they replied or it is settled) or dismissed so it no longer surfaces in briefs or Tasks.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        followup_id: { type: 'string', description: 'The follow-up id.' },
+        status: { type: 'string', enum: ['resolved', 'dismissed'], description: 'Default "resolved".' },
+        task_id: taskId,
+      },
+      required: ['followup_id'],
+    },
+  },
+  {
+    name: 'assign_channel',
+    description:
+      'Route a task, thread item, or follow-on work from #general (or the current channel) into the matching topic channel, creating the channel if requested. ' +
+      'Use this when the user asks you to sort, file, or move work into a topic channel.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        channel_id: { type: 'string', description: 'Existing target channel id (e.g. "chan-taxes-ab12").' },
+        channel_name: { type: 'string', description: 'Target channel name or slug if channel_id is not known, e.g. "Taxes".' },
+        create_if_missing: { type: 'boolean', description: 'If true and channel_name does not exist yet, create it with topic.' },
+        topic: { type: 'string', description: 'Optional topic when creating a new channel.' },
+        task_id_to_move: { type: 'string', description: 'Optional task id to reassign (moves the task and its handover/task cards to the target channel).' },
+        item_id: { type: 'string', description: 'Optional thread item id to move into the target channel.' },
+        handoff_summary: { type: 'string', description: 'Optional short summary note posted in the target channel (and/or starts work there).' },
+        start_in_channel: { type: 'boolean', description: 'If true alongside handoff_summary, starts an agent turn with that summary in the target channel.' },
+        task_id: taskId,
+      },
+      required: [],
+    },
+  },
 ] as const;
 
 export type ToolName = (typeof TOOLS)[number]['name'];

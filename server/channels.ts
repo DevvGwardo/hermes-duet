@@ -2,6 +2,7 @@
 // thread it is talking in. The rows and sessions live in db.ts and runner.ts.
 import type { Channel } from '../shared/types';
 import { UserError } from './errors';
+import { TOOLS } from './tools';
 
 export interface ChannelInput {
   name: string;
@@ -9,6 +10,7 @@ export interface ChannelInput {
   instructions?: string;
   group?: string;
   repo?: string;
+  allowed_tools?: string[] | null;
 }
 
 /**
@@ -21,6 +23,7 @@ export interface ChannelPatch {
   instructions?: string | null;
   group?: string | null;
   repo?: string | null;
+  allowed_tools?: string[] | null;
 }
 
 export const CHANNEL_NAME_MAX = 40;
@@ -30,6 +33,24 @@ export const CHANNEL_GROUP_MAX = 40;
 export const CHANNEL_REPO_MAX = 200;
 /** The slug becomes the Hermes session id, so it stays short and boring. */
 const SLUG_MAX = 24;
+
+const KNOWN_TOOLS = new Set<string>(TOOLS.map((t) => t.name));
+
+/**
+ * Validate allowed_tools whitelist. Null or empty list means all tools are allowed (unrestricted).
+ */
+export function cleanAllowedTools(raw: unknown): string[] | null {
+  if (raw === null || raw === undefined) return null;
+  if (!Array.isArray(raw)) throw new UserError('allowed_tools must be a list of tool names or null');
+  const out: string[] = [];
+  for (const item of raw) {
+    const name = String(item ?? '').trim();
+    if (!name) continue;
+    if (!KNOWN_TOOLS.has(name)) throw new UserError(`unknown tool in allowed_tools: ${name}`);
+    if (!out.includes(name)) out.push(name);
+  }
+  return out.length ? out : null;
+}
 
 /**
  * "Taxes 2026!" → "taxes-2026". Accents are folded rather than dropped so "Cuánto" and "Cuanto" do not end up as
@@ -63,12 +84,14 @@ export function channelInput(raw: unknown): ChannelInput {
   const instructions = cleanText(src.instructions, CHANNEL_INSTRUCTIONS_MAX);
   const group = cleanText(src.group, CHANNEL_GROUP_MAX);
   const repo = cleanRepo(src.repo);
+  const allowed_tools = 'allowed_tools' in src ? cleanAllowedTools(src.allowed_tools) : undefined;
   return {
     name,
     ...(topic ? { topic } : {}),
     ...(instructions ? { instructions } : {}),
     ...(group ? { group } : {}),
     ...(repo ? { repo } : {}),
+    ...(allowed_tools !== undefined ? { allowed_tools } : {}),
   };
 }
 
@@ -131,11 +154,12 @@ export function channelPatch(raw: unknown): ChannelPatch {
   if ('instructions' in src) out.instructions = cleanText(src.instructions, CHANNEL_INSTRUCTIONS_MAX) || null;
   if ('group' in src) out.group = cleanText(src.group, CHANNEL_GROUP_MAX) || null;
   if ('repo' in src) out.repo = cleanRepo(src.repo);
+  if ('allowed_tools' in src) out.allowed_tools = cleanAllowedTools(src.allowed_tools);
   return out;
 }
 
 /** The line that tells the agent which thread it is in, and what that thread is for. */
-export function channelLine(channel: Pick<Channel, 'name' | 'topic' | 'instructions' | 'repo'>, isGeneral: boolean): string {
+export function channelLine(channel: Pick<Channel, 'name' | 'topic' | 'instructions' | 'repo' | 'allowed_tools'>, isGeneral: boolean): string {
   // The user's own standing rules for this thread, kept to one bounded block (the 2000-char cap in channelInput
   // is the bound). It sits before the topic so the specific rules read before the general description.
   const standing = channel.instructions
@@ -146,12 +170,15 @@ export function channelLine(channel: Pick<Channel, 'name' | 'topic' | 'instructi
   const repo = channel.repo
     ? ` This channel works in the repository ${channel.repo}. Use the connected GitHub tools if they are available; never push or open a pull request there without the user's explicit approval.`
     : '';
+  const toolScope = channel.allowed_tools?.length
+    ? ` Tool scope for this channel: only these Hermes Duet tools are permitted here: ${channel.allowed_tools.join(', ')}. Other Duet tools are blocked by channel policy.`
+    : '';
   if (isGeneral) {
     return `You are in the general channel: the user's main thread. Briefs, check-ins and background task results live here.${standing}${
       channel.topic ? ` Its topic: ${channel.topic}.` : ''
-    }${repo}`;
+    }${repo}${toolScope}`;
   }
   return `You are in the channel "#${channel.name}", a separate thread on this one topic that the user comes back to.${standing}${
     channel.topic ? ` Its topic: ${channel.topic}.` : ''
-  }${repo} Keep to it here; your memory is shared across every channel, so anything you learned elsewhere is still yours to use.`;
+  }${repo}${toolScope} Keep to it here; your memory is shared across every channel, so anything you learned elsewhere is still yours to use.`;
 }

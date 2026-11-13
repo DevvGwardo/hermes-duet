@@ -446,6 +446,21 @@ export function reopenTask(id: string): Task {
   return tasks.get(id)!;
 }
 
+/** Reassign a background task (and all its cards/thread items) to a live topic channel. */
+export function moveTaskChannel(taskId: string, channelId: string): Task {
+  const ch = liveChannel(channelId);
+  const t = tasks.get(taskId);
+  if (!t) throw new UserError('no such task', 404);
+  const updated = t.channel_id === ch.id ? t : putTask({ ...t, channel_id: ch.id });
+  for (const item of items.byTask(t.id)) {
+    const nextCard = item.card ? { ...item.card, channel_id: ch.id } : undefined;
+    if (item.channel_id !== ch.id || (nextCard && item.card?.channel_id !== ch.id)) {
+      put({ ...item, channel_id: ch.id, ...(nextCard ? { card: nextCard } : {}) });
+    }
+  }
+  return updated;
+}
+
 /**
  * Narrow double-work guard for the manual brief: two taps or a double network
  * retry within 10s collapse to one `runBrief` call. `runBrief` itself already

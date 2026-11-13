@@ -7,3 +7,8 @@ context.local.md
 docs/brand/.raw/
 blueprint-out/
 .workbuddy-ai/
+
+# Local Windows runner & helper scripts
+duet.cmd
+scripts/*.cmd
+scripts/*.vbs

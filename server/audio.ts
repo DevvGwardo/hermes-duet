@@ -4,6 +4,7 @@
 // at a URL you point us at); the morning brief can be listened to through macOS `say` (converted to AAC so phones can
 // play it), Piper, or an OpenAI-compatible TTS endpoint. Nothing is uploaded anywhere unless DUET_STT_URL /
 // DUET_TTS_URL says so.
+import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, extname, join } from 'node:path';
 import type { CardData } from '../shared/types';
@@ -278,16 +279,21 @@ export async function transcribeFile(path: string, mime?: string): Promise<strin
 const ttsDir = () => join(config.dataDir, 'tts');
 const inFlightSpeak = new Map<string, Promise<{ path: string; mime: string }>>();
 
+const TTS_VOICE_RE = /^[A-Za-z0-9._-]{1,40}$/;
+
 /**
- * Synthesize text to a cached audio file. The cache key covers the engine, so changing voice or model makes a new
- * file instead of replaying the old one.
+ * Synthesize text to a cached audio file. The cache key covers the engine and voice, so changing voice or model
+ * makes a new file instead of replaying the old one.
  */
-export async function speak(text: string): Promise<{ path: string; mime: string }> {
+export async function speak(text: string, opts?: { voice?: string }): Promise<{ path: string; mime: string }> {
   const target = ttsTarget(process.env, process.platform);
   if (target.kind === 'none') throw new UserError(target.reason, 503);
   const spokenText = spoken(text);
   if (!spokenText) throw new UserError('nothing to say', 400);
-  const key = Bun.hash(`${JSON.stringify(target)}\n${spokenText}`).toString(36);
+  const rawVoice = opts?.voice?.trim() ?? '';
+  if (rawVoice && !TTS_VOICE_RE.test(rawVoice)) throw new UserError('invalid tts voice', 400);
+  const voice = rawVoice || undefined;
+  const key = createHash('sha256').update(`${JSON.stringify(target)}\n${voice ?? ''}\n${spokenText}`).digest('hex').slice(0, 16);
   const dir = ttsDir();
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const ext = target.kind === 'http' ? '.mp3' : target.kind === 'say' ? '.m4a' : process.env.DUET_TTS_EXT?.trim() || '.wav';
@@ -303,7 +309,8 @@ export async function speak(text: string): Promise<{ path: string; mime: string 
     const tmpAiff = join(dir, `.${key}.${nonce}.aiff.tmp`);
     try {
       if (target.kind === 'say') {
-        const said = await audioRunner('say', ['-o', tmpAiff, spokenText]);
+        const sayArgs = voice ? ['-v', voice, '-o', tmpAiff, spokenText] : ['-o', tmpAiff, spokenText];
+        const said = await audioRunner('say', sayArgs);
         if (said.code !== 0) throw new Error(`say failed: ${said.err.trim().slice(-200) || `exit ${said.code}`}`);
         // AIFF is not reliably playable on phones; AAC/M4A is.
         const conv = await audioRunner('afconvert', ['-f', 'm4af', '-d', 'aac', '-b', '64000', tmpAiff, tmpOut]);
@@ -319,7 +326,7 @@ export async function speak(text: string): Promise<{ path: string; mime: string 
         const res = await fetch(target.url, {
           method: 'POST',
           headers: { 'content-type': 'application/json', ...(target.key ? { authorization: `Bearer ${target.key}` } : {}) },
-          body: JSON.stringify({ model: target.model, voice: target.voice, input: spokenText, response_format: 'mp3' }),
+          body: JSON.stringify({ model: target.model, voice: voice ?? target.voice, input: spokenText, response_format: 'mp3' }),
           signal: AbortSignal.timeout(STT_TIMEOUT_MS),
         });
         if (!res.ok) throw new Error(`TTS failed (${res.status}): ${(await res.text()).slice(0, 200)}`);

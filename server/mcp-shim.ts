@@ -1,12 +1,13 @@
-#!/usr/bin/env bun
+#!/usr/bin/env npx tsx
 // Minimal stdio MCP server that Hermes spawns. It holds no state: every tool call is
 // forwarded to the Hermes Duet server's loopback-only internal API.
 
 import { readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { TOOLS } from './tools';
 
-const dataDir = process.env.DUET_DATA_DIR ?? join(resolve(import.meta.dir, '..'), 'data');
+const dataDir = process.env.DUET_DATA_DIR ?? join(resolve(dirname(fileURLToPath(import.meta.url)), '..'), 'data');
 const base = `http://127.0.0.1:${process.env.DUET_INTERNAL_PORT ?? 7457}`;
 
 function token() {

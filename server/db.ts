@@ -1,7 +1,19 @@
-import { Database } from 'bun:sqlite';
+import { Database } from './sqlite';
 import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { type Attachment, type Channel, type FileEntry, type Item, type Page, type Routine, type Settings, type Task, attachmentKind } from '../shared/types';
+import {
+  type Attachment,
+  type Channel,
+  type FileEntry,
+  type Item,
+  type Page,
+  type Routine,
+  type Settings,
+  type Task,
+  type TrackedFollowUp,
+  type TrustRule,
+  attachmentKind,
+} from '../shared/types';
 import { type ChannelInput, type ChannelPatch, slugFor } from './channels';
 import { config } from './config';
 import { UserError } from './errors';
@@ -106,22 +118,45 @@ function createMainSession(): string {
   return id;
 }
 
-const channelGet = db.query<ChannelRow, [string]>(
-  'SELECT id, name, slug, topic, instructions, "group", repo, session_id, seen_at, archived_at, created_at, updated_at FROM channels WHERE id = ?',
+function parseAllowedTools(raw: unknown): string[] | null {
+  if (raw == null) return null;
+  if (Array.isArray(raw)) return raw.filter((v): v is string => typeof v === 'string');
+  if (typeof raw === 'string' && raw.trim()) {
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === 'string') : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function serializeAllowedTools(tools: string[] | null | undefined): string | null {
+  if (!tools || !tools.length) return null;
+  return JSON.stringify(tools);
+}
+
+function hydrateChannel(row: any): ChannelRow {
+  return { ...row, allowed_tools: parseAllowedTools(row.allowed_tools) };
+}
+
+const channelGet = db.query<any, [string]>(
+  'SELECT id, name, slug, topic, instructions, "group", repo, allowed_tools, session_id, seen_at, archived_at, created_at, updated_at FROM channels WHERE id = ?',
 );
-const channelAll = db.query<ChannelRow, [string]>(
-  `SELECT c.id, c.name, c.slug, c.topic, c.instructions, c."group", c.repo, c.session_id, c.seen_at, c.archived_at, c.created_at, c.updated_at,
+const channelAll = db.query<any, [string]>(
+  `SELECT c.id, c.name, c.slug, c.topic, c.instructions, c."group", c.repo, c.allowed_tools, c.session_id, c.seen_at, c.archived_at, c.created_at, c.updated_at,
           (SELECT MAX(i.created_at) FROM items i WHERE i.channel_id = c.id) AS last_at
    FROM channels c WHERE c.archived_at IS NULL
    ORDER BY CASE WHEN c.id = ? THEN 0 ELSE 1 END, coalesce(last_at, c.created_at) DESC`,
 );
-const channelBySlug = db.query<ChannelRow, [string]>('SELECT * FROM channels WHERE slug = ?');
+const channelBySlug = db.query<any, [string]>('SELECT * FROM channels WHERE slug = ?');
 const channelInsert = db.query(
-  'INSERT INTO channels(id, name, slug, topic, instructions, "group", repo, session_id, seen_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  'INSERT INTO channels(id, name, slug, topic, instructions, "group", repo, allowed_tools, session_id, seen_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
 );
 // Full-row touch for an un-archived channel: provided fields replace, absent ones keep what the row had.
 const channelTouch = db.query(
-  'UPDATE channels SET name = ?, topic = ?, instructions = ?, "group" = ?, repo = ?, archived_at = NULL, updated_at = ? WHERE id = ?',
+  'UPDATE channels SET name = ?, topic = ?, instructions = ?, "group" = ?, repo = ?, allowed_tools = ?, archived_at = NULL, updated_at = ? WHERE id = ?',
 );
 const channelArchive = db.query('UPDATE channels SET archived_at = ?, updated_at = ? WHERE id = ?');
 const channelSeen = db.query('UPDATE channels SET seen_at = ? WHERE id = ?');
@@ -133,21 +168,23 @@ export const channels = {
    */
   general(): ChannelRow {
     const row = channelGet.get(GENERAL_CHANNEL);
-    if (row) return row;
+    if (row) return hydrateChannel(row);
     const session = kv.get<string>('main_session', '') || createMainSession();
     const now = Date.now();
-    channelInsert.run(GENERAL_CHANNEL, 'general', 'general', 'Everything that is not a project of its own', null, null, null, session, null, now, now);
-    return channelGet.get(GENERAL_CHANNEL)!;
+    channelInsert.run(GENERAL_CHANNEL, 'general', 'general', 'Everything that is not a project of its own', null, null, null, null, session, null, now, now);
+    return hydrateChannel(channelGet.get(GENERAL_CHANNEL)!);
   },
   all(): ChannelRow[] {
     channels.general();
-    return channelAll.all(GENERAL_CHANNEL);
+    return channelAll.all(GENERAL_CHANNEL).map(hydrateChannel);
   },
   get(id: string): ChannelRow | null {
-    return channelGet.get(id) ?? null;
+    const row = channelGet.get(id);
+    return row ? hydrateChannel(row) : null;
   },
   bySlug(slug: string): ChannelRow | null {
-    return channelBySlug.get(slug) ?? null;
+    const row = channelBySlug.get(slug);
+    return row ? hydrateChannel(row) : null;
   },
   /**
    * Create a channel, or bring back one that was archived under the same slug: the old session still has the
@@ -167,27 +204,43 @@ export const channels = {
         if (input.instructions !== undefined) patch.instructions = input.instructions;
         if (input.group !== undefined) patch.group = input.group;
         if (input.repo !== undefined) patch.repo = input.repo;
+        if (input.allowed_tools !== undefined) patch.allowed_tools = input.allowed_tools;
         if (Object.keys(patch).length) return channels.update(existing.id, patch);
         return existing;
       }
       // Archived: bring it back, keeping each field when the caller did not name a new one.
+      const allowed = input.allowed_tools !== undefined ? serializeAllowedTools(input.allowed_tools) : serializeAllowedTools(existing.allowed_tools);
       channelTouch.run(
         input.name,
         input.topic ?? existing.topic ?? null,
         input.instructions ?? existing.instructions ?? null,
         input.group ?? existing.group ?? null,
         input.repo ?? existing.repo ?? null,
+        allowed,
         now,
         existing.id,
       );
-      return channelGet.get(existing.id)!;
+      return hydrateChannel(channelGet.get(existing.id)!);
     };
     const found = reuse();
     if (found) return found;
     const id = `chan-${slug}-${newId().slice(-4)}`;
     try {
       tx(() =>
-        channelInsert.run(id, input.name, slug, input.topic ?? null, input.instructions ?? null, input.group ?? null, input.repo ?? null, `duet-channel-${slug}`, null, now, now),
+        channelInsert.run(
+          id,
+          input.name,
+          slug,
+          input.topic ?? null,
+          input.instructions ?? null,
+          input.group ?? null,
+          input.repo ?? null,
+          serializeAllowedTools(input.allowed_tools),
+          `duet-channel-${slug}`,
+          null,
+          now,
+          now,
+        ),
       );
     } catch (e: any) {
       // Another create won the slug between the read and the insert: that is the same "already archived" answer.
@@ -195,29 +248,38 @@ export const channels = {
       if (again) return again;
       throw e;
     }
-    return channelGet.get(id)!;
+    return hydrateChannel(channelGet.get(id)!);
   },
   /**
    * Update a channel's editable fields. Only keys present in the patch are written (`null` clears the column),
    * so the sheet can send topic/instructions/group together and the general channel can gain standing rules too.
    */
   update(id: string, patch: ChannelPatch): ChannelRow | null {
-    const existing = channelGet.get(id);
+    const existing = channels.get(id);
     if (!existing) return null;
     const sets: string[] = [];
     const args: unknown[] = [];
     // `group` is a reserved word: quoted here, bare in the returned row like every other column.
-    for (const [col, value] of [['topic', patch.topic], ['instructions', patch.instructions], ['"group"', patch.group], ['repo', patch.repo]] as const) {
+    for (const [col, value] of [
+      ['topic', patch.topic],
+      ['instructions', patch.instructions],
+      ['"group"', patch.group],
+      ['repo', patch.repo],
+    ] as const) {
       if (value !== undefined) {
         sets.push(`${col} = ?`);
         args.push(value);
       }
     }
+    if (patch.allowed_tools !== undefined) {
+      sets.push('allowed_tools = ?');
+      args.push(serializeAllowedTools(patch.allowed_tools));
+    }
     if (!sets.length) return existing;
     sets.push('updated_at = ?');
     args.push(Date.now(), id);
     db.query(`UPDATE channels SET ${sets.join(', ')} WHERE id = ?`).run(...(args as (string | number | null)[]));
-    return channelGet.get(id)!;
+    return hydrateChannel(channelGet.get(id)!);
   },
   archive(id: string): boolean {
     if (id === GENERAL_CHANNEL) throw new Error('the general channel cannot be archived');
@@ -234,7 +296,8 @@ export const channels = {
    * general: their result and handover card belong in the thread the user talks in.
    */
   bySession(sessionId: string): ChannelRow | null {
-    return db.query<ChannelRow, [string]>('SELECT * FROM channels WHERE session_id = ?').get(sessionId) ?? null;
+    const row = db.query<any, [string]>('SELECT * FROM channels WHERE session_id = ?').get(sessionId);
+    return row ? hydrateChannel(row) : null;
   },
   /** The channel a task's cards and handover belong to (archived channels fall back to general). */
   forTask(task: Task | null | undefined): string {
@@ -284,6 +347,7 @@ const itemsPendingIn = db.query<{ json: string }, [string]>(
 const itemsBriefsSince = db.query<{ json: string }, [number]>(
   `SELECT json FROM items WHERE kind = 'card' AND json_extract(json, '$.card.type') = 'brief' AND created_at >= ? ORDER BY created_at`,
 );
+const itemsByTask = db.query<{ json: string }, [string]>('SELECT json FROM items WHERE task_id = ? ORDER BY created_at');
 
 export const items = {
   save(item: Item) {
@@ -337,6 +401,9 @@ export const items = {
   /** Brief cards (morning and check-in) posted at or after `since`, oldest first. */
   briefsSince(since: number): Item[] {
     return parseRows<Item>(itemsBriefsSince.all(since));
+  },
+  byTask(taskId: string): Item[] {
+    return parseRows<Item>(itemsByTask.all(taskId));
   },
   channelOf(id: string): string {
     return items.get(id)?.channel_id ?? GENERAL_CHANNEL;
@@ -393,6 +460,12 @@ const taskGet = db.query<{ json: string; session_id: string | null }, [string]>(
 const tasksRecent = db.query<{ json: string }, [number]>(
   `SELECT json FROM tasks WHERE status IN ('queued','running','waiting') OR updated_at > ? ORDER BY updated_at DESC LIMIT 60`,
 );
+const tasksOlder = db.query<{ json: string }, [number, number]>(
+  `SELECT json FROM tasks WHERE status IN ('done','failed','cancelled') AND updated_at < ? ORDER BY updated_at DESC LIMIT ?`,
+);
+const tasksHasOlder = db.query<{ one: number }, [number]>(
+  `SELECT 1 AS one FROM tasks WHERE status IN ('done','failed','cancelled') AND updated_at < ? LIMIT 1`,
+);
 
 export const tasks = {
   save(task: Task, sessionId?: string | null) {
@@ -418,6 +491,14 @@ export const tasks = {
   },
   recent(): Task[] {
     return parseRows<Task>(tasksRecent.all(Date.now() - 7 * 86400_000));
+  },
+  older(beforeUpdatedAt: number, limit = 40): { tasks: Task[]; has_more: boolean } {
+    const safeLimit = Math.max(1, Math.min(100, Math.floor(limit)));
+    const rows = parseRows<Task>(tasksOlder.all(beforeUpdatedAt, safeLimit + 1));
+    return { tasks: rows.slice(0, safeLimit), has_more: rows.length > safeLimit };
+  },
+  hasOlder(beforeUpdatedAt: number): boolean {
+    return !!tasksHasOlder.get(beforeUpdatedAt);
   },
 };
 
@@ -617,6 +698,72 @@ export const triggers = {
   },
 };
 
+// ---------- trust rules ("Don't ask again" for low-risk actions) ----------
+const trustRuleAll = db.query<{ json: string }, []>('SELECT json FROM trust_rules ORDER BY created_at DESC');
+const trustRuleGet = db.query<{ json: string }, [string]>('SELECT json FROM trust_rules WHERE id = ?');
+const trustRuleUpsert = db.query(
+  `INSERT INTO trust_rules(id, created_at, json) VALUES (?, ?, ?)
+   ON CONFLICT(id) DO UPDATE SET json = excluded.json`,
+);
+const trustRuleDelete = db.query('DELETE FROM trust_rules WHERE id = ?');
+
+export const trustRules = {
+  all(): TrustRule[] {
+    return parseRows<TrustRule>(trustRuleAll.all());
+  },
+  get(id: string): TrustRule | null {
+    return parseRow<TrustRule>(trustRuleGet.get(id));
+  },
+  save(rule: TrustRule): TrustRule {
+    trustRuleUpsert.run(rule.id, rule.created_at, JSON.stringify(rule));
+    return rule;
+  },
+  remove(id: string): boolean {
+    return trustRuleDelete.run(id).changes > 0;
+  },
+};
+
+// ---------- follow-ups (outbound threads awaiting reply) ----------
+const followUpAll = db.query<{ json: string }, []>(
+  `SELECT json FROM follow_ups ORDER BY CASE WHEN status = 'open' THEN 0 ELSE 1 END, due_at ASC, created_at DESC`,
+);
+const followUpOpen = db.query<{ json: string }, []>(
+  `SELECT json FROM follow_ups WHERE status = 'open' ORDER BY due_at ASC, created_at DESC`,
+);
+const followUpGet = db.query<{ json: string }, [string]>('SELECT json FROM follow_ups WHERE id = ?');
+const followUpUpsert = db.query(
+  `INSERT INTO follow_ups(id, status, due_at, channel_id, created_at, updated_at, json) VALUES (?, ?, ?, ?, ?, ?, ?)
+   ON CONFLICT(id) DO UPDATE SET status = excluded.status, due_at = excluded.due_at, channel_id = excluded.channel_id, updated_at = excluded.updated_at, json = excluded.json`,
+);
+const followUpDelete = db.query('DELETE FROM follow_ups WHERE id = ?');
+
+export const followUps = {
+  all(): TrackedFollowUp[] {
+    return parseRows<TrackedFollowUp>(followUpAll.all());
+  },
+  open(): TrackedFollowUp[] {
+    return parseRows<TrackedFollowUp>(followUpOpen.all());
+  },
+  get(id: string): TrackedFollowUp | null {
+    return parseRow<TrackedFollowUp>(followUpGet.get(id));
+  },
+  save(followup: TrackedFollowUp): TrackedFollowUp {
+    followUpUpsert.run(
+      followup.id,
+      followup.status,
+      followup.due_at,
+      followup.channel_id ?? null,
+      followup.created_at,
+      followup.updated_at,
+      JSON.stringify(followup),
+    );
+    return followup;
+  },
+  remove(id: string): boolean {
+    return followUpDelete.run(id).changes > 0;
+  },
+};
+
 // ---------- settings ----------
 const NOTIFY_TASKS = ['all', 'failures', 'off'] as const;
 export const MAX_PUSHES_PER_DAY = 100;
@@ -637,6 +784,9 @@ function validTimezone(tz: unknown): string {
   return 'UTC';
 }
 
+const TTS_SPEEDS = [0.75, 1, 1.25, 1.5, 2] as const;
+const TTS_VOICE_RE = /^[A-Za-z0-9._-]{1,40}$/;
+
 const DEFAULT_SETTINGS: Settings = {
   brief_enabled: true,
   brief_time: '07:30',
@@ -649,6 +799,8 @@ const DEFAULT_SETTINGS: Settings = {
   notify_agent: true,
   muted_channels: [],
   max_pushes_per_day: 0,
+  tts_speed: 1,
+  tts_voice: '',
 };
 export const settings = {
   get(): Settings {
@@ -692,6 +844,21 @@ export const settings = {
         throw new UserError(`max_pushes_per_day must be a whole number between 0 and ${MAX_PUSHES_PER_DAY}`);
       }
       clean.max_pushes_per_day = cap;
+    }
+    if (patch.tts_speed !== undefined) {
+      const speed = patch.tts_speed;
+      if (typeof speed !== 'number' || !TTS_SPEEDS.includes(speed as (typeof TTS_SPEEDS)[number])) {
+        throw new UserError(`tts_speed must be one of ${TTS_SPEEDS.join(', ')}`);
+      }
+      clean.tts_speed = speed;
+    }
+    if (patch.tts_voice !== undefined) {
+      if (typeof patch.tts_voice !== 'string') throw new UserError('tts_voice must be a string');
+      const v = patch.tts_voice.trim();
+      if (v && !TTS_VOICE_RE.test(v)) {
+        throw new UserError('tts_voice must be empty or 1–40 letters/digits/._-');
+      }
+      clean.tts_voice = v;
     }
     const next = { ...settings.get(), ...clean };
     kv.set('settings', next);

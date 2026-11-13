@@ -90,7 +90,7 @@ export async function deviceFor(req: Request): Promise<string | null> {
 }
 
 export function deviceCookie(token: string, secure: boolean) {
-  return `${COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${400 * 86400}${secure ? '; Secure' : ''}`;
+  return `${COOKIE}=${token}; Path=/; HttpOnly; SameSite=${secure ? 'None; Secure' : 'Lax'}; Max-Age=${400 * 86400}`;
 }
 
 function readCookie(req: Request, name: string): string | null {

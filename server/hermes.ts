@@ -1,6 +1,9 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { GatewayProfile } from '../shared/types';
 import { config } from './config';
+import { kv, newId } from './db';
+import { UserError } from './errors';
 
 /** API key: explicit env first, then the gateway's own ~/.hermes/.env (read-only). */
 function apiKey(): string {
@@ -32,8 +35,92 @@ export class HermesError extends Error {
   }
 }
 
+export function normalizeGatewayUrl(raw: string): string {
+  const s = String(raw ?? '').trim();
+  let u: URL;
+  try {
+    u = new URL(s);
+  } catch {
+    throw new UserError('gateway url must be a valid http:// or https:// URL');
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+    throw new UserError('gateway url must start with http:// or https://');
+  }
+  if (u.username || u.password) {
+    throw new UserError('gateway url must not embed credentials');
+  }
+  return u.toString().replace(/\/+$/, '');
+}
+
+const DEFAULT_GATEWAY_ID = 'gw-default';
+
+function readGatewayState(): { profiles: GatewayProfile[]; active_id: string } {
+  const primary: GatewayProfile = {
+    id: DEFAULT_GATEWAY_ID,
+    name: 'Primary host',
+    url: normalizeGatewayUrl(config.hermesUrl),
+    is_default: true,
+  };
+  const saved = kv.get<GatewayProfile[]>('gateway_profiles', []);
+  const extras = Array.isArray(saved)
+    ? saved.filter((g) => g && typeof g.id === 'string' && g.id !== DEFAULT_GATEWAY_ID && typeof g.url === 'string' && typeof g.name === 'string')
+    : [];
+  const profiles = [primary, ...extras];
+  const savedActive = kv.get<string>('active_gateway_id', DEFAULT_GATEWAY_ID);
+  const active_id = profiles.some((p) => p.id === savedActive) ? savedActive : DEFAULT_GATEWAY_ID;
+  return { profiles, active_id };
+}
+
+export function activeGatewayUrl(): string {
+  const { profiles, active_id } = readGatewayState();
+  return profiles.find((p) => p.id === active_id)?.url ?? config.hermesUrl;
+}
+
+export const gateways = {
+  list(): { profiles: GatewayProfile[]; active_id: string } {
+    return readGatewayState();
+  },
+  add(input: { name: string; url: string }): { profile: GatewayProfile; state: { profiles: GatewayProfile[]; active_id: string } } {
+    const name = String(input.name ?? '').trim();
+    if (!name || name.length > 48) throw new UserError('gateway name must be 1–48 characters');
+    const url = normalizeGatewayUrl(input.url);
+    const { profiles } = readGatewayState();
+    if (profiles.some((p) => p.url === url)) throw new UserError('a gateway profile with that URL already exists');
+    if (profiles.length >= 12) throw new UserError('maximum of 12 gateway profiles reached');
+    const profile: GatewayProfile = { id: `gw-${newId().slice(-6)}`, name, url };
+    const extras = [...profiles.filter((p) => !p.is_default), profile];
+    kv.set('gateway_profiles', extras);
+    return { profile, state: readGatewayState() };
+  },
+  select(id: string): { profiles: GatewayProfile[]; active_id: string } {
+    const state = readGatewayState();
+    if (!state.profiles.some((p) => p.id === id)) throw new UserError('gateway profile not found', 404);
+    kv.set('active_gateway_id', id);
+    return readGatewayState();
+  },
+  remove(id: string): { profiles: GatewayProfile[]; active_id: string } {
+    if (id === DEFAULT_GATEWAY_ID) throw new UserError('cannot remove the primary gateway profile');
+    const state = readGatewayState();
+    const extras = state.profiles.filter((p) => !p.is_default && p.id !== id);
+    if (extras.length === state.profiles.filter((p) => !p.is_default).length) {
+      throw new UserError('gateway profile not found', 404);
+    }
+    kv.set('gateway_profiles', extras);
+    if (state.active_id === id) kv.set('active_gateway_id', DEFAULT_GATEWAY_ID);
+    return readGatewayState();
+  },
+  async healthOf(url: string): Promise<boolean> {
+    try {
+      const res = await fetch(`${normalizeGatewayUrl(url)}/health`, { signal: AbortSignal.timeout(4000) });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  },
+};
+
 async function req<T>(method: string, path: string, body?: unknown, extra?: Record<string, string>): Promise<T> {
-  const res = await fetch(`${config.hermesUrl}${path}`, {
+  const res = await fetch(`${activeGatewayUrl()}${path}`, {
     method,
     headers: headers(extra),
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -79,7 +166,7 @@ export const hermes = {
 
   async health(): Promise<boolean> {
     try {
-      const res = await fetch(`${config.hermesUrl}/health`, { signal: AbortSignal.timeout(4000) });
+      const res = await fetch(`${activeGatewayUrl()}/health`, { signal: AbortSignal.timeout(4000) });
       return res.ok;
     } catch {
       return false;
@@ -141,7 +228,7 @@ export const hermes = {
    * Frames are `id: <seq>` + `data: {"event": ...}`; resume with ?last_seq.
    */
   async events(runId: string, lastSeq: number, onEvent: (ev: RunEvent) => void, signal: AbortSignal): Promise<void> {
-    const url = `${config.hermesUrl}/v1/runs/${encodeURIComponent(runId)}/events${lastSeq > 0 ? `?last_seq=${lastSeq}` : ''}`;
+    const url = `${activeGatewayUrl()}/v1/runs/${encodeURIComponent(runId)}/events${lastSeq > 0 ? `?last_seq=${lastSeq}` : ''}`;
     const res = await fetch(url, { headers: { ...headers(), accept: 'text/event-stream' }, signal });
     if (!res.ok || !res.body) throw new HermesError(res.status, `events ${res.status}`);
     const reader = res.body.getReader();

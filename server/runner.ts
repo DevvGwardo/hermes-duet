@@ -8,6 +8,7 @@ export {
   briefDedupeAllowed,
   confirmTask,
   mainSessionId,
+  moveTaskChannel,
   pageRefreshing,
   putRoutine,
   removeRoutine,
@@ -17,6 +18,7 @@ export {
 export { mediaPaths } from './tools/deliver';
 export {
   cancelTask,
+  checkHermesHealth,
   recoverOrphans,
   refreshPage,
   removePage,

@@ -72,6 +72,21 @@ export function ChannelsStrip({ onSearch, onManage }: { onSearch: () => void; on
   );
 }
 
+const CHANNEL_TOOL_OPTIONS: { name: string; label: string }[] = [
+  { name: 'request_approval', label: 'Approvals' },
+  { name: 'request_payment', label: 'Payments' },
+  { name: 'ask', label: 'Quick questions' },
+  { name: 'post_brief', label: 'Briefs' },
+  { name: 'post_card', label: 'Cards & checklists' },
+  { name: 'deliver_file', label: 'Deliver files' },
+  { name: 'save_page', label: 'Standing pages' },
+  { name: 'save_routine', label: 'Routines' },
+  { name: 'start_task', label: 'Background tasks' },
+  { name: 'notify', label: 'Phone push' },
+  { name: 'track_followup', label: 'Follow-ups' },
+  { name: 'assign_channel', label: 'Route to channel' },
+];
+
 /** Create a channel, archive one that has served its purpose, or edit a channel's topic, group and standing instructions. */
 export function ChannelsSheet({ onClose }: { onClose: () => void }) {
   const channels = useStore((s) => s.channels);
@@ -81,6 +96,7 @@ export function ChannelsSheet({ onClose }: { onClose: () => void }) {
   const [group, setGroup] = useState('');
   const [repo, setRepo] = useState('');
   const [instructions, setInstructions] = useState('');
+  const [allowedTools, setAllowedTools] = useState<string[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
@@ -88,6 +104,7 @@ export function ChannelsSheet({ onClose }: { onClose: () => void }) {
   const [eGroup, setEGroup] = useState('');
   const [eRepo, setERepo] = useState('');
   const [eInstructions, setEInstructions] = useState('');
+  const [eAllowedTools, setEAllowedTools] = useState<string[] | null>(null);
   const dialog = useRef<HTMLDivElement | null>(null);
   useDialogTrap(dialog, onClose);
 
@@ -116,12 +133,14 @@ export function ChannelsSheet({ onClose }: { onClose: () => void }) {
         ...(instructions.trim() ? { instructions: instructions.trim() } : {}),
         ...(group.trim() ? { group: group.trim() } : {}),
         ...(repo.trim() ? { repo: repo.trim() } : {}),
+        ...(allowedTools && allowedTools.length ? { allowed_tools: allowedTools } : {}),
       });
       setName('');
       setTopic('');
       setGroup('');
       setRepo('');
       setInstructions('');
+      setAllowedTools(null);
       await openChannel(channel.id);
       onClose();
     } catch (e: any) {
@@ -137,6 +156,7 @@ export function ChannelsSheet({ onClose }: { onClose: () => void }) {
     setEGroup(c.group ?? '');
     setERepo(c.repo ?? '');
     setEInstructions(c.instructions ?? '');
+    setEAllowedTools(c.allowed_tools ?? null);
     setErr(null);
   }
 
@@ -145,7 +165,13 @@ export function ChannelsSheet({ onClose }: { onClose: () => void }) {
     setErr(null);
     try {
       // Empty strings clear the field server-side; absent keys would leave it alone.
-      await api.updateChannel(id, { topic: eTopic.trim(), instructions: eInstructions.trim(), group: eGroup.trim(), repo: eRepo.trim() });
+      await api.updateChannel(id, {
+        topic: eTopic.trim(),
+        instructions: eInstructions.trim(),
+        group: eGroup.trim(),
+        repo: eRepo.trim(),
+        allowed_tools: eAllowedTools && eAllowedTools.length ? eAllowedTools : null,
+      });
       setEditing(null);
     } catch (e: any) {
       setErr(e?.message ?? 'Could not save that channel.');
@@ -248,6 +274,8 @@ export function ChannelsSheet({ onClose }: { onClose: () => void }) {
               onRepo={setERepo}
               instructions={eInstructions}
               onInstructions={setEInstructions}
+              allowedTools={eAllowedTools}
+              onAllowedTools={setEAllowedTools}
               instructionsPlaceholder="Standing instructions for this channel (optional)"
             />
             <span className="channel-edit-btns">
@@ -312,6 +340,8 @@ export function ChannelsSheet({ onClose }: { onClose: () => void }) {
                 onRepo={setRepo}
                 instructions={instructions}
                 onInstructions={setInstructions}
+                allowedTools={allowedTools}
+                onAllowedTools={setAllowedTools}
                 instructionsPlaceholder="Standing instructions (optional)"
               />
               <button className="btn btn-primary small" disabled={busy || !name.trim()}>
@@ -514,6 +544,8 @@ function ChannelFields({
   onRepo,
   instructions,
   onInstructions,
+  allowedTools,
+  onAllowedTools,
   instructionsPlaceholder,
 }: {
   topic: string;
@@ -524,8 +556,16 @@ function ChannelFields({
   onRepo: (v: string) => void;
   instructions: string;
   onInstructions: (v: string) => void;
+  allowedTools: string[] | null;
+  onAllowedTools: (v: string[] | null) => void;
   instructionsPlaceholder: string;
 }) {
+  const restricted = allowedTools !== null;
+  function toggleTool(name: string) {
+    const cur = allowedTools ?? CHANNEL_TOOL_OPTIONS.map((t) => t.name);
+    const next = cur.includes(name) ? cur.filter((x) => x !== name) : [...cur, name];
+    onAllowedTools(next.length ? next : []);
+  }
   return (
     <>
       <input value={topic} onChange={(e) => onTopic(e.target.value)} placeholder="What it is for (optional)" aria-label="Channel topic" maxLength={200} />
@@ -548,6 +588,26 @@ function ChannelFields({
         maxLength={2000}
         rows={3}
       />
+      <div className="channel-tools-scope">
+        <label className="channel-tools-toggle">
+          <input
+            type="checkbox"
+            checked={!restricted}
+            onChange={(e) => onAllowedTools(e.target.checked ? null : ['post_card', 'deliver_file', 'ask', 'request_approval'])}
+          />
+          <span>{restricted ? 'Restricted Duet tools' : 'All Duet tools allowed'}</span>
+        </label>
+        {restricted && (
+          <div className="channel-tools-grid">
+            {CHANNEL_TOOL_OPTIONS.map((t) => (
+              <label key={t.name} className="channel-tool-check">
+                <input type="checkbox" checked={allowedTools.includes(t.name)} onChange={() => toggleTool(t.name)} />
+                <span>{t.label}</span>
+              </label>
+            ))}
+          </div>
+        )}
+      </div>
     </>
   );
 }

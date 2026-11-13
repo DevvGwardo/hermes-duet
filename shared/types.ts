@@ -158,6 +158,8 @@ export interface CardData {
   card_summary?: string;
   /** Set when the card details were typed into the agent's live browser instead of being handed to the model. */
   card_filled?: boolean;
+  /** Set when this approval was auto-approved by a matching "Don't ask again" trust rule. */
+  trust_rule_id?: string;
   /** Set when the card mirrors a Hermes-native approval/clarify prompt on a live run. */
   hermes?: { kind: 'approval' | 'clarify'; run_id: string; request_id: string; generation: number };
 }
@@ -224,6 +226,8 @@ export interface Channel {
   group?: string | null;
   /** A repository this channel works in: "owner/name" or an http(s) GitHub URL. */
   repo?: string | null;
+  /** Optional whitelist of Duet MCP tool names allowed in this channel; null/absent means all tools allowed. */
+  allowed_tools?: string[] | null;
   /** The Hermes session this channel talks to. */
   session_id: string;
   /** Last time the user opened it here, for the unread dot. */
@@ -389,6 +393,45 @@ export interface Settings {
   muted_channels?: string[];
   /** Soft daily push cap, approvals excluded; 0 or absent means no cap. */
   max_pushes_per_day?: number;
+  /** Playback speed multiplier for spoken briefs ("Listen"). */
+  tts_speed?: number;
+  /** Preferred TTS voice override (empty uses the host default). */
+  tts_voice?: string;
+}
+
+/** A scoped "Don't ask again" trust exception for low-risk repetitive actions (never money, send, post, delete, sign, or hard-blocked categories). */
+export interface TrustRule {
+  id: string;
+  label: string;
+  action: 'other';
+  destination?: string;
+  title_pattern: string;
+  channel_id?: string | null;
+  created_at: number;
+}
+
+/** An outbound thread or request awaiting someone else's reply so it surfaces if it goes quiet. */
+export interface TrackedFollowUp {
+  id: string;
+  title: string;
+  recipient?: string;
+  destination?: string;
+  channel_id?: string | null;
+  source_item_id?: string;
+  due_at: number;
+  status: 'open' | 'resolved' | 'dismissed';
+  notes?: string;
+  created_at: number;
+  updated_at: number;
+  resolved_at?: number;
+}
+
+/** A saved Hermes gateway / machine profile for switching between computers. */
+export interface GatewayProfile {
+  id: string;
+  name: string;
+  url: string;
+  is_default?: boolean;
 }
 
 export interface AgentState {
@@ -432,12 +475,17 @@ export interface Snapshot {
   /** Every pending card, including ones older than the `items` page. */
   pending: Item[];
   tasks: Task[];
+  /** Whether older finished tasks exist beyond the snapshot window. */
+  has_more_tasks?: boolean;
   /** User-defined recurring routines, when the routines feature is enabled. */
   routines?: Routine[];
   files: FileEntry[];
   pages: Page[];
   /** Topic channels, newest activity last. The app opens the general one first. */
   channels: Channel[];
+  trust_rules?: TrustRule[];
+  follow_ups?: TrackedFollowUp[];
+  gateways?: { profiles: GatewayProfile[]; active_id: string };
   settings: Settings;
   agent: AgentState;
   push_enabled: boolean;
@@ -454,6 +502,11 @@ export type ServerEvent =
   | { type: 'page_removed'; id: string }
   | { type: 'channel'; channel: Channel }
   | { type: 'channel_removed'; id: string }
+  | { type: 'trust_rule'; rule: TrustRule }
+  | { type: 'trust_rule_removed'; id: string }
+  | { type: 'followup'; followup: TrackedFollowUp }
+  | { type: 'followup_removed'; id: string }
+  | { type: 'gateways'; gateways: { profiles: GatewayProfile[]; active_id: string } }
   | { type: 'agent'; agent: AgentState }
   | { type: 'settings'; settings: Settings }
   | { type: 'hello'; at: number };

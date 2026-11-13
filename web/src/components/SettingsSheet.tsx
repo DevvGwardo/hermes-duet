@@ -14,11 +14,17 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
   const pushEnabled = useStore((s) => s.pushEnabled);
   const agent = useStore((s) => s.agent);
   const channels = useStore((s) => s.channels);
+  const trustRules = useStore((s) => s.trustRules);
+  const gateways = useStore((s) => s.gateways);
   const [pushMsg, setPushMsg] = useState<string | null>(null);
   const [pushBusy, setPushBusy] = useState(false);
   const [saveErr, setSaveErr] = useState<string | null>(null);
   const [maxPushes, setMaxPushes] = useState(() => String(settings?.max_pushes_per_day ?? 0));
   const [briefMsg, setBriefMsg] = useState<string | null>(null);
+  const [gwName, setGwName] = useState('');
+  const [gwUrl, setGwUrl] = useState('');
+  const [gwBusy, setGwBusy] = useState(false);
+  const [gwErr, setGwErr] = useState<string | null>(null);
   const [connectors, setConnectors] = useState<Connector[] | null>(null);
   const [testing, setTesting] = useState<string | null>(null);
   const [connErr, setConnErr] = useState<string | null>(null);
@@ -223,6 +229,39 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
               </button>
             </div>
             {briefMsg && <p className="muted small">{briefMsg}</p>}
+            <label className="setting-row">
+              <span>Spoken voice</span>
+              <select
+                aria-label="Spoken voice"
+                value={settings.tts_voice ?? ''}
+                onChange={(e) => save({ tts_voice: e.target.value })}
+              >
+                <option value="">Host default</option>
+                <option value="alloy">alloy</option>
+                <option value="echo">echo</option>
+                <option value="fable">fable</option>
+                <option value="onyx">onyx</option>
+                <option value="nova">nova</option>
+                <option value="shimmer">shimmer</option>
+              </select>
+            </label>
+            <div className="setting-row column">
+              <span>Listen speed</span>
+              <div className="segmented" role="radiogroup" aria-label="Listen speed">
+                {([0.75, 1, 1.25, 1.5, 2] as const).map((sp) => (
+                  <button
+                    key={sp}
+                    type="button"
+                    role="radio"
+                    aria-checked={(settings.tts_speed ?? 1) === sp}
+                    className={(settings.tts_speed ?? 1) === sp ? 'on' : ''}
+                    onClick={() => save({ tts_speed: sp })}
+                  >
+                    {sp}×
+                  </button>
+                ))}
+              </div>
+            </div>
           </section>
 
           <section>
@@ -336,6 +375,116 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
               <span>Timezone</span>
               <span className="muted">{settings.timezone}</span>
             </div>
+            {gateways.profiles.length > 0 && (
+              <div className="setting-row column">
+                <span>Hermes machines</span>
+                <ul className="connector-list gateway-list">
+                  {gateways.profiles.map((g) => {
+                    const isActive = g.id === gateways.active_id;
+                    return (
+                      <li key={g.id} className={`connector ${isActive ? 'active' : ''}`}>
+                        <span className={`conn-dot ${isActive ? 'active' : ''}`} aria-hidden="true" />
+                        <span className="connector-main">
+                          <span className="connector-name">{g.name}</span>
+                          <span className="connector-detail">{g.url}</span>
+                        </span>
+                        {isActive ? (
+                          <span className="conn-pill ok">Active</span>
+                        ) : (
+                          <button
+                            type="button"
+                            className="btn btn-ghost small"
+                            disabled={gwBusy}
+                            onClick={() => {
+                              setGwBusy(true);
+                              setGwErr(null);
+                              api
+                                .selectGateway(g.id)
+                                .catch((e: any) => setGwErr(e?.message ?? 'Could not switch machine.'))
+                                .finally(() => setGwBusy(false));
+                            }}
+                          >
+                            Use
+                          </button>
+                        )}
+                        {!g.is_default && (
+                          <button
+                            type="button"
+                            className="icon-btn"
+                            disabled={gwBusy}
+                            aria-label={`Remove ${g.name}`}
+                            onClick={() => {
+                              setGwBusy(true);
+                              setGwErr(null);
+                              api
+                                .removeGateway(g.id)
+                                .catch((e: any) => setGwErr(e?.message ?? 'Could not remove machine.'))
+                                .finally(() => setGwBusy(false));
+                            }}
+                          >
+                            <Icon.close size={15} />
+                          </button>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+                <form
+                  className="gateway-add-form"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    if (!gwName.trim() || !gwUrl.trim()) return;
+                    setGwBusy(true);
+                    setGwErr(null);
+                    api
+                      .addGateway(gwName.trim(), gwUrl.trim())
+                      .then(() => {
+                        setGwName('');
+                        setGwUrl('');
+                      })
+                      .catch((er: any) => setGwErr(er?.message ?? 'Could not add machine.'))
+                      .finally(() => setGwBusy(false));
+                  }}
+                >
+                  <input value={gwName} onChange={(e) => setGwName(e.target.value)} placeholder="Label (e.g. Studio Mac)" aria-label="Gateway name" maxLength={48} />
+                  <input value={gwUrl} onChange={(e) => setGwUrl(e.target.value)} placeholder="http://mac-studio:8642" aria-label="Gateway URL" autoCapitalize="off" autoCorrect="off" spellCheck={false} />
+                  <button type="submit" className="btn btn-ghost small" disabled={gwBusy || !gwName.trim() || !gwUrl.trim()}>
+                    Add
+                  </button>
+                </form>
+                {gwErr && <p className="card-error">{gwErr}</p>}
+              </div>
+            )}
+          </section>
+
+          <section>
+            <h3>Trusted actions</h3>
+            <p className="muted small">
+              Scoped “Don&apos;t ask again” rules for low-risk repetitive actions. Money, emails, messages, deletions, posts, signing, and secrets always ask.
+            </p>
+            {trustRules.length === 0 ? (
+              <p className="muted small">None saved yet.</p>
+            ) : (
+              <ul className="connector-list">
+                {trustRules.map((r) => (
+                  <li key={r.id} className="connector">
+                    <span className="connector-main">
+                      <span className="connector-name">{r.label}</span>
+                      <span className="connector-detail">
+                        {r.channel_id ? `#${channels.find((c) => c.id === r.channel_id)?.slug ?? r.channel_id}` : 'All channels'}
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      className="btn btn-ghost small"
+                      onClick={() => void api.removeTrustRule(r.id).catch((e: any) => setSaveErr(e?.message ?? 'Could not revoke rule.'))}
+                    >
+                      Revoke
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
           </section>
 
           {policy && policy.length > 0 && (

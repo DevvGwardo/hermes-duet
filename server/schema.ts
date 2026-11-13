@@ -1,6 +1,6 @@
 // The database shape, kept out of db.ts so a test can build it in memory. Every statement is idempotent: a checkout
 // that has been running for months gets the new columns and indexes on its next boot, and nothing is dropped.
-import type { Database } from 'bun:sqlite';
+import type { Database } from './sqlite';
 import type { FileEntry, Item, Page, Task } from '../shared/types';
 import { indexItem, taskSearchText } from './search';
 
@@ -26,7 +26,7 @@ function addColumn(db: Database, table: string, name: string, decl: string) {
  * Bumped whenever a shape change needs more than an idempotent CREATE. Kept in `PRAGMA user_version`, so a checkout
  * that has been running for months applies the step it is missing instead of guessing from the tables it can see.
  */
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 export function applySchema(db: Database) {
   const from = db.query<{ user_version: number }, []>('PRAGMA user_version').get()?.user_version ?? 0;
@@ -81,6 +81,8 @@ CREATE INDEX IF NOT EXISTS channels_session ON channels(session_id);
   addColumn(db, 'channels', 'group', 'TEXT');
   // The GitHub repo a channel works in, normalized to an https://github.com/owner/name URL (see channels.ts).
   addColumn(db, 'channels', 'repo', 'TEXT');
+  // Per-channel allowed Duet tool whitelist (JSON array of tool names; NULL means all tools allowed).
+  addColumn(db, 'channels', 'allowed_tools', 'TEXT');
   // Pending cards are read on every snapshot build, every badge count and every steer. An expression index on the
   // JSON path (partial to kind='card') turns that from a scan of the whole thread into a range read.
   db.exec(`CREATE INDEX IF NOT EXISTS items_card_status ON items(json_extract(json, '$.card.status'), created_at) WHERE kind = 'card'`);
@@ -122,6 +124,25 @@ CREATE TABLE IF NOT EXISTS triggers (
   last_triggered_at INTEGER,
   created_at INTEGER NOT NULL
 );
+`);
+
+  // Migration 005: "Don't ask again" trust rules (low-risk only) and outbound-thread follow-up tracking.
+  db.exec(`
+CREATE TABLE IF NOT EXISTS trust_rules (
+  id TEXT PRIMARY KEY,
+  created_at INTEGER NOT NULL,
+  json TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS follow_ups (
+  id TEXT PRIMARY KEY,
+  status TEXT NOT NULL,
+  due_at INTEGER NOT NULL,
+  channel_id TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  json TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS follow_ups_status_due ON follow_ups(status, due_at);
 `);
 
   // Full-text index over thread items. One row per item, written by db.items.save (and rebuilt here on upgrade)
@@ -177,8 +198,10 @@ END;
   if (from < SCHEMA_VERSION) {
     if (from >= 3 && from < 4) db.exec('DELETE FROM fts_items');
     if (from < 4) db.exec('DELETE FROM fts_assets');
-    backfillItems(db);
-    backfillAssets(db);
+    if (from < 4) {
+      backfillItems(db);
+      backfillAssets(db);
+    }
   }
   db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
 }

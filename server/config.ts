@@ -1,8 +1,9 @@
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const root = resolve(import.meta.dir, '..');
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 /**
  * A value as dotenv reads it: a `#` at the start of the value or after whitespace begins a comment, unless it is
@@ -59,8 +60,8 @@ export const config = {
   root,
   dataDir: env.DUET_DATA_DIR ?? (env.NODE_ENV === 'test' || env.VITEST ? mkdtempSync(join(tmpdir(), 'duet-test-')) : join(root, 'data')),
   webDir: join(root, 'web', 'dist'),
-  host: env.DUET_HOST ?? '127.0.0.1',
-  port: positiveNumber('DUET_PORT', 7456),
+  host: env.DUET_HOST ?? '0.0.0.0',
+  port: positiveNumber('DUET_PORT', 3000),
   /** Loopback-only listener for the MCP shim and the CLI. Never point the tunnel here. */
   internalPort: positiveNumber('DUET_INTERNAL_PORT', 7457),
   publicUrl: env.DUET_PUBLIC_URL ?? '',

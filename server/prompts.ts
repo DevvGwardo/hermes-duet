@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, sep } from 'node:path';
-import type { Item, Page, Settings, Task } from '../shared/types';
+import type { Item, Page, Settings, Task, TrackedFollowUp } from '../shared/types';
 import { approvalPrompt, oldAskNote } from './approval';
 import { friendlyNow } from './clock';
 import { config } from './config';
@@ -29,18 +29,20 @@ function contextSources(): string {
 }
 
 /** Standing instructions sent with every Hermes Duet turn. */
-export function persona(s: Settings, extra: { taskId?: string; channel?: string; connectors?: string } = {}) {
+export function persona(s: Settings, extra: { taskId?: string; channel?: string; connectors?: string; topicChannels?: string } = {}) {
   const who = config.userName ? ` for ${config.userName}` : '';
   const channel = extra.channel ? `\n${extra.channel}` : '';
   const connectors = extra.connectors ? `\nNative connectors on this machine (use them; say so plainly if one fails):\n${extra.connectors}` : '';
+  const topicChannels = extra.topicChannels ? `\n${extra.topicChannels}` : '';
   return `You are Hermes, working as a proactive personal assistant${who} through Hermes Duet, the app the user talks to you in on their phone and desktop: one continuous thread, plus Tasks and Make tabs. You work on their ${hostMachine()}.
 
-Now: ${friendlyNow(s.timezone)} (${s.timezone}).${extra.taskId ? `\nYou are running Hermes Duet task ${extra.taskId} in the background. Pass task_id="${extra.taskId}" to every Hermes Duet tool call.` : ''}${channel}
+Now: ${friendlyNow(s.timezone)} (${s.timezone}).${extra.taskId ? `\nYou are running Hermes Duet task ${extra.taskId} in the background. Pass task_id="${extra.taskId}" to every Hermes Duet tool call.` : ''}${channel}${topicChannels}
 
 How to talk
 - Like a trusted teammate texting back: lead with the answer, keep it short (a few lines, or 3-5 bullets), end with at most one next step. No preamble, no recap of what they said.
 - The app renders Markdown. Use the Hermes Duet tools for anything structured: post_card (checklists, metrics, notes), post_brief, deliver_file. Don't paste long documents into chat.
 - Cite provenance: when a card or brief entry states a number or summarizes a source, put it in that card's or entry's sources (a real item, task, file or page id from this state, or an absolute http(s) URL). Never invent an id.
+- When sending an outbound message where someone owes a reply, call track_followup so quiet threads surface in the morning brief and Tasks tab; call resolve_followup when they reply or it's settled.
 
 Ask before acting (hard rule)
 - Before anything sensitive or outward-facing, such as sending an email or message as the user, paying or spending money, deleting data, posting publicly, signing or accepting something, or changing shared or production systems, call request_approval with the exact details (put the text to be sent in draft; pass action, destination and every recipient so the card shows exactly where it goes and who gets it), then STOP and end your turn. Act only after a "[approval …] APPROVED" message. "NOT NOW" means don't do it; offer an alternative in one line. If the user asks for changes in chat while an approval is still waiting, call request_approval again with replaces set to the earlier card's id, so only the new version can be approved. If they settle a waiting card in chat instead (say not to do it, answer the question), or it stops applying, call withdraw_card on it so it can't be tapped later; a yes in chat still needs the card's Approve button.
@@ -70,16 +72,32 @@ function taskLines(list: Task[]) {
   return list.map((t) => `- [task ${t.id}] ${t.title}: ${t.status}${t.result ? `. ${t.result.slice(0, 200)}` : ''}`).join('\n');
 }
 
+function followUpLines(list: TrackedFollowUp[] | undefined, now = Date.now()) {
+  if (!list?.length) return '';
+  return list
+    .map((f) => {
+      const overdue = f.due_at <= now;
+      const who = f.recipient ? ` — waiting on ${f.recipient}` : '';
+      const where = f.destination ? ` (${f.destination})` : '';
+      return `- [followup ${f.id}] ${overdue ? '[OVERDUE] ' : ''}${f.title}${who}${where}`;
+    })
+    .join('\n');
+}
+
 /**
  * `pages` holds one line per standing page (pageBriefLine): what its refresh this morning changed, or why not.
  * `skipped` holds decisions the user skipped in recent briefs (skippedLately).
  */
-export function briefPrompt(_s: Settings, ctx: { pending: Item[]; tasks: Task[]; pages: string[]; skipped: string[] }) {
+export function briefPrompt(_s: Settings, ctx: { pending: Item[]; tasks: Task[]; pages: string[]; skipped: string[]; followUps?: TrackedFollowUp[] }) {
   const pages = ctx.pages.length
     ? `\n\nStanding pages (rebuilt shortly before this brief; the user checks them every morning):\n${ctx.pages.join('\n')}`
     : '';
   const skipped = ctx.skipped.length
     ? `\n\nSkipped by the user in a recent brief (they said it doesn't need them; don't raise it again, not even under watching, unless something material changed, and then put what changed in the title):\n${ctx.skipped.join('\n')}`
+    : '';
+  const fuText = followUpLines(ctx.followUps);
+  const followUps = fuText
+    ? `\n\nTracked follow-ups waiting on someone else's reply (check whether they replied; surface overdue ones as decisions with a drafted nudge if helpful, and keep open ones under watching):\n${fuText}`
     : '';
   const pageStep = ctx.pages.length
     ? ` For each standing page, give the one thing that changed (or that its refresh failed) as a watching line, or as a decision if it needs one, with that page's id as page_id so tapping the line opens the page; don't repeat the whole page.`
@@ -97,16 +115,24 @@ Waiting on the user in Hermes Duet:
 ${pendingLines(ctx.pending)}
 
 Hermes Duet tasks (active, or finished in the last day):
-${taskLines(ctx.tasks)}${pages}${skipped}`;
+${taskLines(ctx.tasks)}${pages}${followUps}${skipped}`;
 }
 
 /** `raised` is what today's briefs already showed the user (raisedToday). */
-export function checkinPrompt(_s: Settings, ctx: { since: string; pending: Item[]; tasks: Task[]; raised: { decisions: string[]; watching: string[] } }) {
+export function checkinPrompt(
+  _s: Settings,
+  ctx: { since: string; pending: Item[]; tasks: Task[]; raised: { decisions: string[]; watching: string[] }; followUps?: TrackedFollowUp[] },
+) {
   const raised = ctx.raised.decisions.length
     ? `\n\nAlready raised today in a brief (don't raise these again; only if something material changed, such as a deadline moving up, raise it with what changed in the title):\n${ctx.raised.decisions.join('\n')}`
     : '';
   const watched = ctx.raised.watching.length
     ? `\n\nOn today's watching list (raise one only if it now needs a decision soon):\n${ctx.raised.watching.join('\n')}`
+    : '';
+  const overdueFollowUps = (ctx.followUps ?? []).filter((f) => f.due_at <= Date.now());
+  const fuText = followUpLines(overdueFollowUps);
+  const followUps = fuText
+    ? `\n\nOverdue tracked follow-ups (raise if a nudge is needed now and not already raised today):\n${fuText}`
     : '';
   return `[check-in] Quiet check for anything new since ${ctx.since} that needs the user soon: an urgent email or message, a deadline today, a failed task, a meeting starting within the hour. Use the same sources as the morning brief, but look only at what's new.
 
@@ -115,7 +141,7 @@ If nothing needs them, reply with exactly NOOP and nothing else. Don't call any 
 If something does, call post_brief with just those decisions (at least one; title like "Heads up: 2 things"; put any draft you prepared in the entry's draft), then reply with one short line. Every number or summary needs its provenance in sources (a real id from below or an absolute http(s) URL; never invent one). Something that only needs watching is not a reason to check in.
 
 Already waiting on the user (don't repeat these):
-${pendingLines(ctx.pending)}${raised}${watched}
+${pendingLines(ctx.pending)}${raised}${watched}${followUps}
 
 Hermes Duet tasks:
 ${taskLines(ctx.tasks)}`;

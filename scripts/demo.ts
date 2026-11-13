@@ -1,12 +1,13 @@
-#!/usr/bin/env bun
+#!/usr/bin/env npx tsx
 // Throwaway demo instance with made-up content: try the UI (or regenerate README screenshots)
 // without touching your real thread. Data lives in a temp dir; the scheduler is off.
-//   bun scripts/demo.ts            → http://127.0.0.1:7466  (pair with: bun scripts/demo.ts pair)
-//   bun scripts/demo.ts --reset    → wipe and reseed first
+//   npm run demo            → http://127.0.0.1:3000  (pair with: npx tsx scripts/demo.ts pair)
+//   npx tsx scripts/demo.ts --reset    → wipe and reseed first
 
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 export const DEMO_DIR = join(tmpdir(), 'hermes-duet-demo');
 export const DEMO_PORT = 7466;
@@ -168,9 +169,9 @@ h1{font-weight:800;margin:0 0 4px}p{color:#b3ac9d;margin:0 0 22px;font:12px ui-m
 <div class="t"><div class="l">Open tickets</div><div class="v">14</div><div class="d b">+5</div></div></div></body></html>`;
 
 // Entry point last: seed() reads DASHBOARD_HTML, which must be initialized first.
-if (import.meta.main) {
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   if (process.argv.includes('pair')) {
-    const token = await Bun.file(join(DEMO_DIR, 'internal.token')).text();
+    const token = readFileSync(join(DEMO_DIR, 'internal.token'), 'utf8');
     const res = await fetch(`http://127.0.0.1:${DEMO_INTERNAL_PORT}/internal/pair`, { method: 'POST', headers: { authorization: `Bearer ${token.trim()}` } });
     console.log(`Pairing code: ${((await res.json()) as any).code}  →  http://127.0.0.1:${DEMO_PORT}`);
     process.exit(0);
@@ -181,5 +182,5 @@ if (import.meta.main) {
   if (fresh) await seed();
   const { startServers } = await import('../server/index.ts');
   startServers();
-  console.log(`[demo] ${fresh ? 'seeded' : 'reusing'} ${DEMO_DIR}. Pair with: bun scripts/demo.ts pair`);
+  console.log(`[demo] ${fresh ? 'seeded' : 'reusing'} ${DEMO_DIR}. Pair with: npx tsx scripts/demo.ts pair`);
 }

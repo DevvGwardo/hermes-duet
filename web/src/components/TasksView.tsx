@@ -1,11 +1,11 @@
 import { type RefObject, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { Item, Task } from '../../../shared/types';
+import type { Item, Task, TrackedFollowUp } from '../../../shared/types';
 import { api } from '../api';
 import { visibleFiles } from '../edit';
 import { isTopDialog, useDialogTrap } from '../hooks/useDialogTrap';
 import { STATUS_LABEL } from '../labels';
-import { useStore } from '../store';
+import { appendOlderTasks, useStore } from '../store';
 import { Icon, Markdown, relLabel, timeLabel } from '../ui';
 import { FileRow, SourceChips } from './CardView';
 import { VoiceHints, VoiceHoldHud, VoiceLockedBar, VoiceRetryCard, handleVoiceShortcut, useVoiceDictation } from './VoiceInput';
@@ -23,14 +23,34 @@ export function TasksView({
 }) {
   const tasks = useStore((s) => s.tasks);
   const pendingCards = useStore((s) => s.pending);
+  const followUps = useStore((s) => s.followUps);
+  const hasMoreTasks = useStore((s) => s.hasMoreTasks);
   const [localOpenId, setLocalOpenId] = useState<string | null>(null);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [olderErr, setOlderErr] = useState<string | null>(null);
   const openId = onOpenTask ? (openTaskId ?? null) : localOpenId;
   const setOpenId = onOpenTask ?? setLocalOpenId;
   const openTask = tasks.find((t) => t.id === openId) ?? null;
 
   const active = tasks.filter((t) => t.status === 'running' || t.status === 'queued');
   const waiting = tasks.filter((t) => t.status === 'waiting');
-  const finished = tasks.filter((t) => ['done', 'failed', 'cancelled'].includes(t.status)).slice(0, 30);
+  const finished = tasks.filter((t) => ['done', 'failed', 'cancelled'].includes(t.status));
+  const openFollowUps = followUps.filter((f) => f.status === 'open');
+
+  async function loadOlderTasks() {
+    if (loadingOlder) return;
+    setLoadingOlder(true);
+    setOlderErr(null);
+    try {
+      const oldest = finished.length ? Math.min(...finished.map((t) => t.updated_at)) : Date.now() - 7 * 86400_000;
+      const r = await api.olderTasks(oldest);
+      appendOlderTasks(r.tasks, r.has_more);
+    } catch (e: any) {
+      setOlderErr(e?.message ?? 'Could not load older tasks.');
+    } finally {
+      setLoadingOlder(false);
+    }
+  }
 
   return (
     <div className="pane tasks-pane">
@@ -54,10 +74,142 @@ export function TasksView({
         </section>
       )}
 
+      <FollowUpSection list={openFollowUps} />
+
       <TaskSection title="In progress" tasks={[...waiting, ...active]} onOpen={setOpenId} empty="Nothing running. Ask for something big and I'll track it here." />
-      {finished.length > 0 && <TaskSection title="Recently finished" tasks={finished} onOpen={setOpenId} />}
+      {(finished.length > 0 || hasMoreTasks) && (
+        <section>
+          <h2 className="section-title">Recently finished</h2>
+          {finished.length > 0 && (
+            <ul className="list">
+              {finished.map((t) => (
+                <TaskRow key={t.id} task={t} onOpen={setOpenId} />
+              ))}
+            </ul>
+          )}
+          {olderErr && <p className="card-error pad">{olderErr}</p>}
+          {hasMoreTasks && (
+            <div className="tasks-older-wrap">
+              <button type="button" className="btn btn-ghost small" disabled={loadingOlder} onClick={() => void loadOlderTasks()}>
+                {loadingOlder ? 'Loading…' : 'Load older tasks'}
+              </button>
+            </div>
+          )}
+        </section>
+      )}
       {openTask && <TaskSheet task={openTask} onClose={() => setOpenId(null)} onOpenFile={onOpenFile} />}
     </div>
+  );
+}
+
+function FollowUpSection({ list }: { list: TrackedFollowUp[] }) {
+  const [adding, setAdding] = useState(false);
+  const [title, setTitle] = useState('');
+  const [recipient, setRecipient] = useState('');
+  const [hours, setHours] = useState('48');
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const now = Date.now();
+
+  async function add(e: React.FormEvent) {
+    e.preventDefault();
+    if (!title.trim()) return;
+    setBusyId('add');
+    setErr(null);
+    try {
+      await api.createFollowUp({
+        title: title.trim(),
+        ...(recipient.trim() ? { recipient: recipient.trim() } : {}),
+        due_hours: Math.max(1, Number(hours) || 48),
+      });
+      setTitle('');
+      setRecipient('');
+      setAdding(false);
+    } catch (e: any) {
+      setErr(e?.message ?? 'Could not add follow-up.');
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function settle(id: string, status: 'resolved' | 'dismissed') {
+    setBusyId(id);
+    setErr(null);
+    try {
+      await api.resolveFollowUp(id, status);
+    } catch (e: any) {
+      setErr(e?.message ?? 'Could not update follow-up.');
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  if (!list.length && !adding) {
+    return (
+      <section>
+        <div className="section-head">
+          <h2 className="section-title">Waiting on replies</h2>
+          <button type="button" className="link" onClick={() => setAdding(true)}>
+            + Track reply
+          </button>
+        </div>
+        <p className="muted pad small">Quiet outbound emails or requests land here so they surface if nobody replies.</p>
+      </section>
+    );
+  }
+
+  return (
+    <section>
+      <div className="section-head">
+        <h2 className="section-title">Waiting on replies</h2>
+        <button type="button" className="link" onClick={() => setAdding((v) => !v)}>
+          {adding ? 'Cancel' : '+ Track reply'}
+        </button>
+      </div>
+      {err && <p className="card-error pad" role="alert">{err}</p>}
+      {adding && (
+        <form className="followup-form" onSubmit={add}>
+          <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Waiting on reply about…" aria-label="Follow-up title" maxLength={160} />
+          <div className="followup-form-row">
+            <input value={recipient} onChange={(e) => setRecipient(e.target.value)} placeholder="Who (optional)" aria-label="Recipient" maxLength={140} />
+            <input type="number" min={1} max={2160} value={hours} onChange={(e) => setHours(e.target.value)} aria-label="Due hours" title="Hours until overdue" />
+            <button type="submit" className="btn btn-primary small" disabled={busyId === 'add' || !title.trim()}>
+              {busyId === 'add' ? 'Saving…' : 'Track'}
+            </button>
+          </div>
+        </form>
+      )}
+      <ul className="list">
+        {list.map((f) => {
+          const overdue = f.due_at <= now;
+          const diffH = Math.max(1, Math.round(Math.abs(f.due_at - now) / 3600_000));
+          const when = overdue ? `Overdue · ${diffH}h` : diffH >= 48 ? `Due in ${Math.round(diffH / 24)}d` : `Due in ${diffH}h`;
+          return (
+            <li key={f.id} className={`followup-row ${overdue ? 'is-overdue' : ''}`}>
+              <div className="row followup-item">
+                <span className={`row-dot ${overdue ? 'attention' : 'waiting'}`} />
+                <span className="row-main">
+                  <span className="row-title">{f.title}</span>
+                  <span className="row-sub">
+                    {f.recipient ? `Waiting on ${f.recipient} · ` : ''}
+                    {f.destination ? `${f.destination} · ` : ''}
+                    {when}
+                  </span>
+                </span>
+                <span className="followup-actions">
+                  <button type="button" className="btn btn-ghost small" disabled={busyId === f.id} onClick={() => void settle(f.id, 'resolved')}>
+                    Replied
+                  </button>
+                  <button type="button" className="icon-btn" disabled={busyId === f.id} onClick={() => void settle(f.id, 'dismissed')} aria-label={`Dismiss ${f.title}`} title="Dismiss">
+                    <Icon.close size={15} />
+                  </button>
+                </span>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }
 
@@ -117,6 +269,7 @@ function TaskSheet({ task, onClose, onOpenFile }: { task: Task; onClose: () => v
     onClose();
   });
   const files = useStore((s) => s.files);
+  const channels = useStore((s) => s.channels);
   const storeHandover = useStore((s) => s.items.find((i) => i.id === task.handover_id));
   const [fetchedHandover, setFetchedHandover] = useState<Item | null>(null);
   const [handoverErr, setHandoverErr] = useState<string | null>(null);
@@ -226,6 +379,24 @@ function TaskSheet({ task, onClose, onOpenFile }: { task: Task; onClose: () => v
                 Undo
               </button>
             </div>
+          )}
+
+          {channels.length > 1 && (
+            <label className="setting-row task-channel-row">
+              <span>Channel</span>
+              <select
+                aria-label="Task channel"
+                disabled={!!busy}
+                value={task.channel_id ?? channels[0]?.id ?? ''}
+                onChange={(e) => void run('channel', () => api.moveTaskChannel(task.id, e.target.value))}
+              >
+                {channels.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    #{c.slug}
+                  </option>
+                ))}
+              </select>
+            </label>
           )}
 
           {task.steps.length > 0 && (

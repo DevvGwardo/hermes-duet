@@ -1,5 +1,24 @@
 import { settledNotifications } from '../../shared/links';
-import type { Attachment, Capabilities, Channel, Connector, ConnectorSuggestion, FileEntry, Item, MemoryState, Routine, RoutineSchedule, SearchHit, ServerEvent, Settings, Snapshot, Task } from '../../shared/types';
+import type {
+  Attachment,
+  Capabilities,
+  Channel,
+  Connector,
+  ConnectorSuggestion,
+  FileEntry,
+  GatewayProfile,
+  Item,
+  MemoryState,
+  Routine,
+  RoutineSchedule,
+  SearchHit,
+  ServerEvent,
+  Settings,
+  Snapshot,
+  Task,
+  TrackedFollowUp,
+  TrustRule,
+} from '../../shared/types';
 import { applyEvent, applySnapshot, channelItems, getState, hasMoreFor, mergeItems, prependItems, setChannel, setChannelMore, setState } from './store';
 
 export class HttpError extends Error {
@@ -97,6 +116,21 @@ export const api = {
   reopenTask: (id: string) => call<{ task: Task }>('POST', `/api/tasks/${encodeURIComponent(id)}/reopen`),
   /** Steer a running task mid-flight. `delivered` is false when the text was queued behind the live run instead. */
   messageTask: (id: string, text: string) => call<{ task: Task; delivered: boolean }>('POST', `/api/tasks/${encodeURIComponent(id)}/message`, { text }),
+  olderTasks: (before: number, limit = 40) => call<{ tasks: Task[]; has_more: boolean }>('GET', `/api/tasks?before=${before}&limit=${limit}`),
+  moveTaskChannel: (id: string, channelId: string) => call<{ task: Task }>('POST', `/api/tasks/${encodeURIComponent(id)}/channel`, { channel_id: channelId }),
+  createTrustRule: (input: { title_pattern: string; destination?: string; channel_id?: string | null }) =>
+    call<{ rule: TrustRule }>('POST', '/api/trust-rules', input),
+  removeTrustRule: (id: string) => call<{ ok: true }>('DELETE', `/api/trust-rules/${encodeURIComponent(id)}`),
+  createFollowUp: (input: { title: string; recipient?: string; destination?: string; due_hours?: number; channel_id?: string | null; notes?: string }) =>
+    call<{ followup: TrackedFollowUp }>('POST', '/api/followups', input),
+  resolveFollowUp: (id: string, status: 'resolved' | 'dismissed' = 'resolved') =>
+    call<{ followup: TrackedFollowUp }>('POST', `/api/followups/${encodeURIComponent(id)}/resolve`, { status }),
+  removeFollowUp: (id: string) => call<{ ok: true }>('DELETE', `/api/followups/${encodeURIComponent(id)}`),
+  gateways: () => call<{ profiles: GatewayProfile[]; active_id: string }>('GET', '/api/gateways'),
+  addGateway: (name: string, url: string) =>
+    call<{ profile: GatewayProfile; profiles: GatewayProfile[]; active_id: string }>('POST', '/api/gateways', { name, url }),
+  selectGateway: (id: string) => call<{ profiles: GatewayProfile[]; active_id: string }>('POST', `/api/gateways/${encodeURIComponent(id)}/select`),
+  removeGateway: (id: string) => call<{ profiles: GatewayProfile[]; active_id: string }>('DELETE', `/api/gateways/${encodeURIComponent(id)}`),
   stopPage: (id: string) => call<{ ok: true }>('DELETE', `/api/pages/${encodeURIComponent(id)}`),
   saveSettings: (s: Partial<Settings>) => call<{ settings: Settings }>('PUT', '/api/settings', s),
   runBrief: () => call<{ ok: true }>('POST', '/api/brief/run'),
@@ -131,9 +165,9 @@ export const api = {
     ),
   autofill: (provider?: string) => call<{ host: string; vault: string; filled: { user: boolean; pass: boolean } }>('POST', '/api/browser/autofill', { provider }),
   viewport: (mode: 'mobile' | 'desktop') => call<{ mode: string }>('POST', '/api/browser/viewport', { mode }),
-  createChannel: (name: string, topic?: string, extra?: { instructions?: string; group?: string; repo?: string }) =>
+  createChannel: (name: string, topic?: string, extra?: { instructions?: string; group?: string; repo?: string; allowed_tools?: string[] | null }) =>
     call<{ channel: Channel }>('POST', '/api/channels', { name, topic, ...extra }),
-  updateChannel: (id: string, patch: { topic?: string; instructions?: string; group?: string; repo?: string }) =>
+  updateChannel: (id: string, patch: { topic?: string; instructions?: string; group?: string; repo?: string; allowed_tools?: string[] | null }) =>
     call<{ channel: Channel }>('POST', '/api/channels', { id, ...patch }),
   archiveChannel: (id: string) => call<{ ok: true }>('DELETE', `/api/channels/${encodeURIComponent(id)}`),
   channelPage: (id: string) => call<{ items: Item[]; has_more: boolean }>('GET', `/api/channels/${encodeURIComponent(id)}/items`),

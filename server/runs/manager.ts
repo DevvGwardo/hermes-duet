@@ -5,8 +5,9 @@ import { broadcast } from '../bus';
 import { channelLine } from '../channels';
 import { localParts } from '../clock';
 import { config } from '../config';
-import { channels, files, items, kv, newId, pages, routines, runs, settings, tasks } from '../db';
+import { channels, files, followUps, items, kv, newId, pages, routines, runs, settings, tasks } from '../db';
 import { UserError } from '../errors';
+import { sleep } from '../exec';
 import { HermesError, type RunEvent, hermes } from '../hermes';
 import { afterInterruption, briefWait, pageBriefLine, refreshToCancel } from '../pages';
 import { briefPrompt, checkinPrompt, pageRefreshInstructions, persona, taskPrompt } from '../prompts';
@@ -168,6 +169,12 @@ async function launchRun(l: Lane, run: ActiveRun, spec: RunSpec) {
   try {
     if (!hermes.hasKey()) throw new Error('no Hermes API key (set DUET_HERMES_KEY or API_SERVER_KEY in ~/.hermes/.env)');
     const channel = channels.get(channelId) ?? channels.general();
+    const otherChannels =
+      channel.id === GENERAL_CHANNEL ? channels.all().filter((c) => c.id !== GENERAL_CHANNEL) : [];
+    const topicChannels =
+      otherChannels.length > 0
+        ? `Other topic channels you can route work to with assign_channel: ${otherChannels.map((c) => `#${c.name} (${c.id}${c.topic ? `: ${c.topic}` : ''})`).join('; ')}.`
+        : undefined;
     const r = await hermes.startRun({
       input,
       session_id: spec.sessionId,
@@ -175,6 +182,7 @@ async function launchRun(l: Lane, run: ActiveRun, spec: RunSpec) {
         taskId: spec.taskId ?? undefined,
         channel: channelLine(channel, spec.sessionId === mainSessionId()),
         connectors: runtime.connectorLines || undefined,
+        topicChannels,
       }),
       idempotencyKey: (spec.idem ??= `duet-${newId()}`),
     });
@@ -294,7 +302,7 @@ async function consume(l: Lane, run: ActiveRun) {
         }
       }
       attempts++;
-      await Bun.sleep(Math.min(15_000, 500 * 2 ** Math.min(attempts, 5)));
+      await sleep(Math.min(15_000, 500 * 2 ** Math.min(attempts, 5)));
     }
   } finally {
     clearInterval(watchdog);
@@ -319,7 +327,7 @@ function stopIfHung(l: Lane, run: ActiveRun) {
 async function hydratePendingSteer(run: ActiveRun) {
   if (!run.id || run.finished || !run.steers.length || run.leftoverSteer) return;
   try {
-    const st = await Promise.race([hermes.getRun(run.id), Bun.sleep(1_500).then(() => null)]);
+    const st = await Promise.race([hermes.getRun(run.id), sleep(1_500).then(() => null)]);
     if (st && typeof st.pending_steer === 'string') run.leftoverSteer = st.pending_steer;
   } catch {}
 }
@@ -841,7 +849,7 @@ async function requestStop(id: string): Promise<'stopped' | 'gone' | 'unknown'> 
     () => 'stopped' as const,
     (e) => (e instanceof HermesError && e.status === 404 ? ('gone' as const) : ('unknown' as const)),
   );
-  return Promise.race([asked, Bun.sleep(STOP_POST_MS).then(() => 'unknown' as const)]);
+  return Promise.race([asked, sleep(STOP_POST_MS).then(() => 'unknown' as const)]);
 }
 
 /**
@@ -860,7 +868,7 @@ async function stopRun(l: Lane, run: ActiveRun): Promise<void> {
     return;
   }
   const deadline = Date.now() + STOP_GRACE_MS;
-  while (!run.finished && Date.now() < deadline) await Bun.sleep(50);
+  while (!run.finished && Date.now() < deadline) await sleep(50);
   if (!run.finished) {
     await hydratePendingSteer(run);
     if (!run.finished) finish(l, run, 'stopped');
@@ -951,6 +959,7 @@ function briefInput(): string {
     tasks: tasks.recent().filter((t) => ['queued', 'running', 'waiting'].includes(t.status) || t.updated_at > dayAgo),
     pages: pages.all().map((p) => pageBriefLine(p, today, pageRefreshing(p))),
     skipped: skippedLately(items.briefsSince(Date.now() - SKIP_MEMORY_DAYS * 86400_000)),
+    followUps: followUps.open(),
   });
 }
 
@@ -965,6 +974,7 @@ function checkinInput(since?: string): string {
     pending: items.pendingCards(),
     tasks: tasks.recent().filter((t) => ['running', 'waiting', 'failed'].includes(t.status)),
     raised: raisedToday(items.briefsSince(midnight)),
+    followUps: followUps.open(),
   });
 }
 
@@ -1181,10 +1191,13 @@ function setHermesStatus(next: AgentState['hermes']) {
   if (next === 'ok') pumpAll();
 }
 
+export async function checkHermesHealth() {
+  setHermesStatus((await hermes.health()) ? 'ok' : 'down');
+}
+
 export function startHermesWatch() {
-  const check = async () => setHermesStatus((await hermes.health()) ? 'ok' : 'down');
-  check();
-  setInterval(check, 20_000);
+  void checkHermesHealth();
+  setInterval(() => void checkHermesHealth(), 20_000);
 }
 
 export function recoverOrphans() {

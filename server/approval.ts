@@ -8,21 +8,24 @@ export const DRAFT_MAX = 8000;
 
 export interface ApprovalDecision {
   approved: boolean;
+  /** Set when user opted "Approve & don't ask again" on an eligible card. */
+  remember?: boolean;
   /** Set only when the user changed the draft: the text the agent must send instead of its own. */
   draft?: string;
 }
 
 /** Resolve a tap on an approval card. `value` is the draft as the user left it (absent from push actions). */
 export function approvalDecision(card: CardData, action: string, value: unknown): ApprovalDecision {
-  if (action !== 'approve' && action !== 'decline') throw new Error('invalid action');
+  if (action !== 'approve' && action !== 'approve_always' && action !== 'decline') throw new Error('invalid action');
   if (action === 'decline') return { approved: false };
+  const remember = action === 'approve_always';
   // Hermes-native approvals have no draft to edit; their decision is a plain once/deny.
-  if (!card.draft || card.hermes || typeof value !== 'string') return { approved: true };
+  if (!card.draft || card.hermes || typeof value !== 'string') return { approved: true, ...(remember && { remember: true }) };
   const text = value.trim();
-  if (text === card.draft.trim()) return { approved: true };
+  if (text === card.draft.trim()) return { approved: true, ...(remember && { remember: true }) };
   if (!text) throw new Error('the draft is empty');
   if (text.length > DRAFT_MAX) throw new Error('the draft is too long');
-  return { approved: true, draft: text };
+  return { approved: true, ...(remember && { remember: true }), draft: text };
 }
 
 /**

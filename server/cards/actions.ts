@@ -3,11 +3,13 @@ import type { CardStatus, FileEntry, Item } from '../../shared/types';
 import { approvalDecision, approvalPush } from '../approval';
 import { BRIEF_RETRY, skipEntry, useAction, useDraft } from '../brief';
 import * as browser from '../browser';
-import { channels, files, items, settings, tasks } from '../db';
+import { broadcast } from '../bus';
+import { channels, files, items, newId, settings, tasks, trustRules } from '../db';
 import { useFollowUp } from '../handover';
 import { hermes } from '../hermes';
 import { cardExpired, issueCard, money, paymentDecision, paymentPrompt, providerFromEnv } from '../payments';
 import { decisionPrompt } from '../prompts';
+import { trustRuleFromCard } from '../trust';
 import { enqueue, requeueTask, runBrief, submitSystem, submitUser } from '../runs/manager';
 import {
   cardUrl,
@@ -137,12 +139,20 @@ export async function actOnCard(id: string, action: string, value?: string): Pro
     throw new Error("that request ended with its run, so there's nothing left to answer");
   }
   let approved: boolean | undefined;
+  let rememberRuleId: string | undefined;
   let answer: string | undefined;
   let edits: { draft: string; edited: true } | undefined;
   if (c.type === 'approval') {
     const d = approvalDecision(c, action, value);
     approved = d.approved;
     if (d.draft) edits = { draft: d.draft, edited: true };
+    if (d.remember && d.approved) {
+      const ruleChannelId = liveChannelId(c.channel_id ?? channels.forTask(c.task_id ? tasks.get(c.task_id) : null));
+      const rule = trustRuleFromCard(c, newId(), ruleChannelId);
+      trustRules.save(rule);
+      broadcast({ type: 'trust_rule', rule });
+      rememberRuleId = rule.id;
+    }
   } else if (c.type === 'payment') {
     approved = paymentDecision(action).approved;
   } else if (c.type === 'choice') {
@@ -159,6 +169,7 @@ export async function actOnCard(id: string, action: string, value?: string): Pro
   item.card = {
     ...c,
     ...edits,
+    ...(rememberRuleId ? { trust_rule_id: rememberRuleId } : {}),
     // A Hermes-native ask is not decided yet: see settleHermesAsk.
     status: ask ? 'pending' : status,
     decision: answer ?? (approved ? 'approve' : 'decline'),

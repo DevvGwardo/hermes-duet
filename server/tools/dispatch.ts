@@ -1,16 +1,18 @@
-import type { CardData, Task, TaskStep } from '../../shared/types';
+import type { CardData, Task, TaskStep, TrackedFollowUp } from '../../shared/types';
 import { DRAFT_MAX, REPLACED, WITHDRAWN, approvalPush, replaceRefusal, withdrawRefusal } from '../approval';
 import { briefCard, briefTitle, notifyRefusal } from '../brief';
 import { broadcast } from '../bus';
+import { channelInput, slugFor } from '../channels';
 import { inQuietHours, localParts } from '../clock';
 import { config } from '../config';
-import { channels, files, items, kv, newId, pages, settings, tasks } from '../db';
+import { channels, files, followUps as trackedFollowUps, items, kv, newId, pages, settings, tasks, trustRules } from '../db';
+import { sleep } from '../exec';
 import { followUps } from '../handover';
 import { MAX_PAGES, pageInput, refreshTime } from '../pages';
 import { money, paymentCard, paymentInput, providerFromEnv } from '../payments';
 import { notify } from '../push';
 import { scheduleLabel } from '../routines';
-import { removePage, saveRoutine, startTask } from '../runs/manager';
+import { removePage, saveRoutine, startTask, submitSystem } from '../runs/manager';
 import {
   type ActiveRun,
   CHANNEL_ORIGIN_PREFIX,
@@ -25,6 +27,8 @@ import {
   liveChannel,
   mainLane,
   markTaskWaiting,
+  moveTaskChannel,
+  newItem,
   pushSafe,
   put,
   putPage,
@@ -36,6 +40,7 @@ import { approvalPolicyRefusal, scanOutbound, validateApprovalFields } from '../
 import { GENERAL_CHANNEL } from '../schema';
 import { parseSources, type SourceKind } from '../sources';
 import { withAgentDone } from '../taskstatus';
+import { matchingTrustRule } from '../trust';
 import { backgroundTask, deliverFile, pageOf, postCard } from './deliver';
 
 /** Work out which session a tool call came from. */
@@ -67,7 +72,7 @@ async function originOf(tool: string, taskId: unknown): Promise<Origin> {
     const hits = act.filter((r) => r.steps.some((s) => s.status === 'running' && s.name.endsWith(tool)));
     if (hits.length === 1) return originOfRun(hits[0]);
     if (hits.length > 1) throw ambiguousOrigin(tool, hits);
-    await Bun.sleep(100);
+    await sleep(100);
   }
   const act = activeRuns();
   if (act.length > 1) throw ambiguousOrigin(tool, act);
@@ -195,6 +200,12 @@ function markVersion(fileId: string, pageId: string) {
 export async function executeTool(name: string, args: Record<string, unknown>): Promise<string> {
   kv.set('last_tool_call_at', Date.now());
   const o = await originOf(name, args.task_id);
+  const channelScope = channels.get(o.channelId);
+  if (channelScope?.allowed_tools?.length && !channelScope.allowed_tools.includes(name)) {
+    throw new Error(
+      `Tool "${name}" is disabled in channel #${channelScope.name}. Allowed Duet tools here: ${channelScope.allowed_tools.join(', ')}.`,
+    );
+  }
   switch (name) {
     case 'request_approval': {
       const swap = replacing(args.replaces, 'approval', o);
@@ -228,6 +239,41 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
       const scan_warning = consent.length
         ? `Contains ${[...new Set(consent.map((f) => f.label))].join(', ')} — check it before sending.`
         : undefined;
+      const matchedRule =
+        !consent.length && !args.replaces
+          ? matchingTrustRule(trustRules.all(), {
+              action: fields.action,
+              title,
+              summary,
+              destination: fields.destination,
+              recipients: fields.recipients,
+              draft,
+              content: fields.content,
+              channelId: o.channelId,
+            })
+          : null;
+      if (matchedRule) {
+        const autoItem = postCard(
+          {
+            type: 'approval',
+            title,
+            body: summary,
+            draft,
+            action_label: str(args.action_label, 30) || undefined,
+            action: fields.action,
+            destination: fields.destination,
+            recipients: fields.recipients.length ? fields.recipients : undefined,
+            content: fields.content ?? draft,
+            url: fields.url,
+            trust_rule_id: matchedRule.id,
+            status: 'approved',
+            decision: `Auto-approved (${matchedRule.label})`,
+            decided_at: Date.now(),
+          },
+          o,
+        );
+        return `Approval card ${autoItem.id} was APPROVED automatically by your "Don't ask again" rule "${matchedRule.label}". Go ahead and do it, then confirm in one short line.`;
+      }
       const item = postCard(
         {
           type: 'approval',
@@ -460,6 +506,96 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
       return inQuietHours(settings.get())
         ? `Card ${item.id} is in the thread. Quiet hours are on, so the push is held until they end.`
         : `Card ${item.id} is in the thread. No push went out (the app is open on their device, or no device has notifications on).`;
+    }
+    case 'track_followup': {
+      const title = req(args.title, 'title', 160);
+      const recipient = str(args.recipient, 140).trim() || undefined;
+      const destination = str(args.destination, 200).trim() || undefined;
+      const notes = str(args.notes, 500).trim() || undefined;
+      const source_item_id = str(args.source_item_id, 64).trim() || undefined;
+      if (source_item_id && !items.get(source_item_id)) throw new Error(`no item ${source_item_id}`);
+      const now = Date.now();
+      let due_at = typeof args.due_at === 'number' && Number.isFinite(args.due_at) && args.due_at > now ? Math.round(args.due_at) : 0;
+      if (!due_at) {
+        const hrsRaw = typeof args.due_hours === 'number' && Number.isFinite(args.due_hours) ? args.due_hours : 48;
+        const hrs = Math.max(1, Math.min(2160, hrsRaw));
+        due_at = now + Math.round(hrs * 3600_000);
+      }
+      const followup: TrackedFollowUp = {
+        id: newId(),
+        title,
+        ...(recipient ? { recipient } : {}),
+        ...(destination ? { destination } : {}),
+        channel_id: o.channelId,
+        ...(source_item_id ? { source_item_id } : {}),
+        due_at,
+        status: 'open',
+        ...(notes ? { notes } : {}),
+        created_at: now,
+        updated_at: now,
+      };
+      trackedFollowUps.save(followup);
+      broadcast({ type: 'followup', followup });
+      return `Tracking follow-up ${followup.id} ("${followup.title}"). If no reply arrives before due time, it surfaces in briefs and the Tasks tab.`;
+    }
+    case 'resolve_followup': {
+      const id = req(args.followup_id, 'followup_id', 64);
+      const existing = trackedFollowUps.get(id);
+      if (!existing) throw new Error(`no follow-up ${id}`);
+      const status = args.status === 'dismissed' ? 'dismissed' : 'resolved';
+      const now = Date.now();
+      const updated: TrackedFollowUp = { ...existing, status, updated_at: now, resolved_at: now };
+      trackedFollowUps.save(updated);
+      broadcast({ type: 'followup', followup: updated });
+      return `Follow-up ${id} ("${existing.title}") marked ${status}.`;
+    }
+    case 'assign_channel': {
+      const chanIdArg = str(args.channel_id, 64).trim();
+      const chanNameArg = str(args.channel_name, 60).trim();
+      let target = chanIdArg ? liveChannel(chanIdArg) : null;
+      if (!target) {
+        if (!chanNameArg) throw new Error('assign_channel requires channel_id or channel_name');
+        const bySlug = channels.bySlug(slugFor(chanNameArg));
+        if (bySlug && bySlug.archived_at == null) {
+          target = bySlug;
+        } else if (args.create_if_missing === true) {
+          target = channels.create(channelInput({ name: chanNameArg, ...(typeof args.topic === 'string' ? { topic: args.topic } : {}) }));
+          broadcast({ type: 'channel', channel: target });
+        } else {
+          throw new Error(`No active channel "${chanNameArg}". Pass create_if_missing: true to create it.`);
+        }
+      }
+      const actions: string[] = [];
+      const moveTaskId = str(args.task_id_to_move, 64).trim();
+      if (moveTaskId) {
+        const movedTask = moveTaskChannel(moveTaskId, target.id);
+        actions.push(`moved task ${movedTask.id}`);
+      }
+      const itemId = str(args.item_id, 64).trim();
+      if (itemId) {
+        const moved = items.setChannel(itemId, target.id);
+        if (!moved) throw new Error(`no item ${itemId}`);
+        if (moved.card && moved.card.channel_id !== target.id) {
+          put({ ...moved, card: { ...moved.card, channel_id: target.id }, channel_id: target.id });
+        } else {
+          broadcast({ type: 'item', item: moved });
+        }
+        actions.push(`moved item ${itemId}`);
+      }
+      const summary = str(args.handoff_summary, 2000).trim();
+      if (summary) {
+        if (args.start_in_channel === true) {
+          submitSystem(`Handed over to #${target.name}: ${firstLine(summary, 120)}`, summary, target.id);
+          actions.push('started follow-up turn');
+        } else {
+          put(newItem('system', { text: summary, channel_id: target.id }));
+          actions.push('posted handoff note');
+        }
+      }
+      if (!actions.length) {
+        actions.push(`resolved channel #${target.name}`);
+      }
+      return `Assigned to channel #${target.name} (${target.id}): ${actions.join(', ')}.`;
     }
     default:
       throw new Error(`unknown tool ${name}`);

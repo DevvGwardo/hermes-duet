@@ -1,8 +1,12 @@
-import { chmodSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, createReadStream, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from 'node:http';
 import { homedir } from 'node:os';
-import { join, normalize, sep } from 'node:path';
+import { extname, join, normalize, resolve, sep } from 'node:path';
+import { Readable } from 'node:stream';
+import { fileURLToPath } from 'node:url';
 import { brotliCompressSync, gzipSync } from 'node:zlib';
-import type { Item, Snapshot } from '../shared/types';
+import { WebSocketServer, type WebSocket as WsSocket } from 'ws';
+import type { Item, Snapshot, TrackedFollowUp } from '../shared/types';
 import { audioDiagnostics, briefSpeech, speak, transcribeFile } from './audio';
 import { capabilities } from './capabilities';
 import { channelInput, channelPatch } from './channels';
@@ -13,19 +17,21 @@ import { broadcast, sseResponse } from './bus';
 import { listConnectors, testConnector } from './connectors';
 import { config } from './config';
 import { MAX_EDIT_BYTES } from '../shared/edit';
-import { type AttachmentRow, attachments, channels, db, devices, files, items, kv, newId, pages, routines, settings, tasks, toAttachment, triggers } from './db';
+import { type AttachmentRow, attachments, channels, db, devices, files, followUps, items, kv, newId, pages, routines, settings, tasks, toAttachment, triggers, trustRules } from './db';
 import { UserError } from './errors';
+import { sleep } from './exec';
 import { saveFileVersion } from './fileversions';
-import { hermes } from './hermes';
+import { gateways, hermes } from './hermes';
 import { MEMORY_MAX_BYTES, clearMemory, readMemory, writeMemory } from './memory';
 import { idempotencyKey, idempotentInflight, idempotentItem, limits, rememberIdempotent, startIdempotentInflight, type SlidingWindow } from './limits';
 import { HARD_BLOCKS } from './safety';
 import { presence } from './presence';
 import { hasSubscriptions, notify, publicKey, saveSubscription } from './push';
-import { abortActiveRuns, actOnCard, agentState, cancelTask, confirmTask, deliverableAction, deliverableApproval, executeTool, recoverOrphans, removeRoutine, reopenTask, runBrief, runCheckin, runRoutineNow, saveRoutine, setRoutineEnabled, startConnectorWatch, startHermesWatch, startUserTask, steerTask, stopMain, stopPage, submitSystem, submitUser } from './runner';
+import { abortActiveRuns, actOnCard, agentState, cancelTask, checkHermesHealth, confirmTask, deliverableAction, deliverableApproval, executeTool, moveTaskChannel, recoverOrphans, removeRoutine, reopenTask, runBrief, runCheckin, runRoutineNow, saveRoutine, setRoutineEnabled, startConnectorWatch, startHermesWatch, startUserTask, steerTask, stopMain, stopPage, submitSystem, submitUser } from './runner';
 import { ftsQuery, search } from './search';
 import { startScheduler } from './scheduler';
 import { suggestedConnectors } from './suggestions';
+import { trustRuleFromInput } from './trust';
 import { downloadsPrompt, inboundIp, meetingPrompt, webhookMatches, webhookPrompt, type WatchedFile } from './triggers';
 import { checkMeetings, meetingPrepEnabled, recordWebhook, recordWebhookIp, startFolderWatch, webhookIpReady, webhookReady, webhookToken } from './triggers-runtime';
 import { MAX_UPLOAD_BYTES, checkBodySize, deleteUnlinkedUpload, isAudioMime, normalizeMime, prune, saveUpload, uploadDir } from './uploads';
@@ -180,11 +186,20 @@ const API_METHODS: [RegExp, string[]][] = [
   [/^\/api\/browser\/(status|tabs|vaults)$/, ['GET']],
   [/^\/api\/browser\/(open|input|viewport|autofill)$/, ['POST']],
   [/^\/api\/messages$/, ['POST']],
-  [/^\/api\/tasks$/, ['POST']],
+  [/^\/api\/tasks$/, ['GET', 'POST']],
   [/^\/api\/tasks\/[\w-]+\/cancel$/, ['POST']],
   [/^\/api\/tasks\/[\w-]+\/confirm$/, ['POST']],
   [/^\/api\/tasks\/[\w-]+\/reopen$/, ['POST']],
   [/^\/api\/tasks\/[\w-]+\/message$/, ['POST']],
+  [/^\/api\/tasks\/[\w-]+\/channel$/, ['POST']],
+  [/^\/api\/trust-rules$/, ['GET', 'POST']],
+  [/^\/api\/trust-rules\/[\w-]+$/, ['DELETE']],
+  [/^\/api\/followups$/, ['GET', 'POST']],
+  [/^\/api\/followups\/[\w-]+$/, ['DELETE']],
+  [/^\/api\/followups\/[\w-]+\/resolve$/, ['POST']],
+  [/^\/api\/gateways$/, ['GET', 'POST']],
+  [/^\/api\/gateways\/[\w-]+$/, ['DELETE']],
+  [/^\/api\/gateways\/[\w-]+\/select$/, ['POST']],
   [/^\/api\/uploads$/, ['POST']],
   [/^\/api\/uploads\/[\w-]+$/, ['GET', 'DELETE']],
   [/^\/api\/audio\/transcribe$/, ['POST']],
@@ -224,7 +239,6 @@ function attachmentNote(rows: AttachmentRow[]): string {
 const SECURITY_HEADERS = {
   'x-content-type-options': 'nosniff',
   'referrer-policy': 'same-origin',
-  'x-frame-options': 'SAMEORIGIN',
 };
 
 // The app shell only loads its own bundle. Agent text is sanitized before rendering, and this is the second lock.
@@ -241,7 +255,6 @@ const APP_CSP = [
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'self'",
-  "frame-ancestors 'none'",
 ].join('; ');
 
 /** Strip local paths, URLs/ports, markup and stack fragments from route-specific error responses. */
@@ -434,15 +447,22 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
   try {
     if (path === '/api/state' && req.method === 'GET') {
       const page = items.latest(150);
+      const recentTasks = tasks.recent();
+      const finishedTasks = recentTasks.filter((t) => ['done', 'failed', 'cancelled'].includes(t.status));
+      const oldestFinishedAt = finishedTasks.length ? Math.min(...finishedTasks.map((t) => t.updated_at)) : Date.now() - 7 * 86400_000;
       const snap: Snapshot = {
         items: page.items,
         has_more: page.has_more,
         pending: items.pendingCards(),
-        tasks: tasks.recent(),
+        tasks: recentTasks,
+        has_more_tasks: tasks.hasOlder(oldestFinishedAt),
         routines: routines.all(),
         files: files.all(),
         pages: pages.all(),
         channels: channels.all(),
+        trust_rules: trustRules.all(),
+        follow_ups: followUps.all(),
+        gateways: gateways.list(),
         settings: settings.get(),
         agent: agentState(),
         push_enabled: hasSubscriptions(device),
@@ -645,6 +665,13 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
         },
       );
     }
+    if (path === '/api/tasks' && req.method === 'GET') {
+      const beforeParam = url.searchParams.get('before');
+      const before = beforeParam ? Number(beforeParam) : Date.now();
+      if (!Number.isFinite(before) || before <= 0) return err(400, 'invalid before cursor');
+      const limit = Number(url.searchParams.get('limit') ?? 40) || 40;
+      return json(tasks.older(before, limit));
+    }
     if (path === '/api/tasks' && req.method === 'POST') {
       return withIdempotentBody<{ text?: string; channel_id?: string; attachment_ids?: string[] }>(
         req,
@@ -740,7 +767,9 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
       if (limited) return limited;
       const item = items.get(briefAudio[1]);
       if (!item?.card || item.card.type !== 'brief') return err(404, 'no such brief');
-      const clip = await speak(briefSpeech(item.card));
+      const voiceParam = url.searchParams.get('voice');
+      const voice = (voiceParam !== null ? voiceParam : settings.get().tts_voice) || undefined;
+      const clip = await speak(briefSpeech(item.card), { voice });
       return serveRangedFile(req, clip.path, {
         'content-type': clip.mime,
         'cache-control': 'private, max-age=3600',
@@ -782,6 +811,104 @@ export async function handleApp(req: Request, server?: any): Promise<Response> {
       if (t.length > MAX_MESSAGE) return err(400, 'message too long');
       const { delivered } = await steerTask(taskMessage[1], t);
       return json({ task: tasks.get(taskMessage[1]), delivered });
+    }
+    const taskChannel = path.match(/^\/api\/tasks\/([\w-]+)\/channel$/);
+    if (taskChannel && req.method === 'POST') {
+      const { channel_id } = await body<{ channel_id?: string }>(req);
+      const cid = String(channel_id ?? '').trim();
+      if (!cid) return err(400, 'missing channel_id');
+      return json({ task: moveTaskChannel(taskChannel[1], cid) });
+    }
+
+    // ---- "Don't ask again" trust rules (low-risk only) ----
+    if (path === '/api/trust-rules' && req.method === 'GET') return json({ trust_rules: trustRules.all() });
+    if (path === '/api/trust-rules' && req.method === 'POST') {
+      const rawBody = await body<Record<string, unknown>>(req);
+      const rule = trustRuleFromInput(rawBody, newId());
+      trustRules.save(rule);
+      broadcast({ type: 'trust_rule', rule });
+      return json({ rule });
+    }
+    const trustRuleMatch = path.match(/^\/api\/trust-rules\/([\w-]+)$/);
+    if (trustRuleMatch && req.method === 'DELETE') {
+      if (!trustRules.remove(trustRuleMatch[1])) return err(404, 'no such trust rule');
+      broadcast({ type: 'trust_rule_removed', id: trustRuleMatch[1] });
+      return json({ ok: true });
+    }
+
+    // ---- tracked follow-ups (outbound threads awaiting reply) ----
+    if (path === '/api/followups' && req.method === 'GET') return json({ follow_ups: followUps.all() });
+    if (path === '/api/followups' && req.method === 'POST') {
+      const rawBody = await body<Record<string, unknown>>(req);
+      const title = String(rawBody.title ?? '').trim().slice(0, 160);
+      if (!title) return err(400, 'missing title');
+      const recipient = typeof rawBody.recipient === 'string' && rawBody.recipient.trim() ? rawBody.recipient.trim().slice(0, 140) : undefined;
+      const destination = typeof rawBody.destination === 'string' && rawBody.destination.trim() ? rawBody.destination.trim().slice(0, 200) : undefined;
+      const notes = typeof rawBody.notes === 'string' && rawBody.notes.trim() ? rawBody.notes.trim().slice(0, 500) : undefined;
+      const channel_id = typeof rawBody.channel_id === 'string' && rawBody.channel_id.trim() ? rawBody.channel_id.trim() : null;
+      if (channel_id && !activeChannel(channel_id)) return err(404, 'no such channel');
+      const now = Date.now();
+      let due_at = typeof rawBody.due_at === 'number' && Number.isFinite(rawBody.due_at) && rawBody.due_at > now ? Math.round(rawBody.due_at) : 0;
+      if (!due_at) {
+        const hrsRaw = typeof rawBody.due_hours === 'number' && Number.isFinite(rawBody.due_hours) ? rawBody.due_hours : 48;
+        due_at = now + Math.round(Math.max(1, Math.min(2160, hrsRaw)) * 3600_000);
+      }
+      const followup: TrackedFollowUp = {
+        id: newId(),
+        title,
+        ...(recipient ? { recipient } : {}),
+        ...(destination ? { destination } : {}),
+        channel_id,
+        due_at,
+        status: 'open',
+        ...(notes ? { notes } : {}),
+        created_at: now,
+        updated_at: now,
+      };
+      followUps.save(followup);
+      broadcast({ type: 'followup', followup });
+      return json({ followup });
+    }
+    const followUpResolve = path.match(/^\/api\/followups\/([\w-]+)\/resolve$/);
+    if (followUpResolve && req.method === 'POST') {
+      const existing = followUps.get(followUpResolve[1]);
+      if (!existing) return err(404, 'no such follow-up');
+      const rawBody = await body<{ status?: string }>(req);
+      const status = rawBody.status === 'dismissed' ? 'dismissed' : 'resolved';
+      const now = Date.now();
+      const updated: TrackedFollowUp = { ...existing, status, updated_at: now, resolved_at: now };
+      followUps.save(updated);
+      broadcast({ type: 'followup', followup: updated });
+      return json({ followup: updated });
+    }
+    const followUpMatch = path.match(/^\/api\/followups\/([\w-]+)$/);
+    if (followUpMatch && req.method === 'DELETE') {
+      if (!followUps.remove(followUpMatch[1])) return err(404, 'no such follow-up');
+      broadcast({ type: 'followup_removed', id: followUpMatch[1] });
+      return json({ ok: true });
+    }
+
+    // ---- multi-gateway machine profiles ----
+    if (path === '/api/gateways' && req.method === 'GET') return json(gateways.list());
+    if (path === '/api/gateways' && req.method === 'POST') {
+      const rawBody = await body<{ name?: string; url?: string }>(req);
+      const { profile, state } = gateways.add({ name: String(rawBody.name ?? ''), url: String(rawBody.url ?? '') });
+      broadcast({ type: 'gateways', gateways: state });
+      return json({ profile, ...state });
+    }
+    const gatewaySelect = path.match(/^\/api\/gateways\/([\w-]+)\/select$/);
+    if (gatewaySelect && req.method === 'POST') {
+      const state = gateways.select(gatewaySelect[1]);
+      broadcast({ type: 'gateways', gateways: state });
+      void checkHermesHealth();
+      return json(state);
+    }
+    const gatewayMatch = path.match(/^\/api\/gateways\/([\w-]+)$/);
+    if (gatewayMatch && req.method === 'DELETE') {
+      const state = gateways.remove(gatewayMatch[1]);
+      broadcast({ type: 'gateways', gateways: state });
+      void checkHermesHealth();
+      return json(state);
     }
     const pageMatch = path.match(/^\/api\/pages\/([\w-]+)$/);
     if (pageMatch && req.method === 'DELETE') {
@@ -918,6 +1045,35 @@ const DELIVERABLE_BRIDGE = `<script>(function(){
   document.documentElement.setAttribute('data-duet','1');
 })()</script>`;
 
+const MIME_TYPES: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.ico': 'image/x-icon',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.txt': 'text/plain; charset=utf-8',
+  '.xml': 'application/xml; charset=utf-8',
+  '.map': 'application/json; charset=utf-8',
+};
+
+function mimeTypeFor(path: string): string {
+  return MIME_TYPES[extname(path).toLowerCase()] ?? 'application/octet-stream';
+}
+
+function fileBody(path: string, opts?: { start?: number; end?: number }): BodyInit {
+  return Readable.toWeb(createReadStream(path, opts)) as unknown as BodyInit;
+}
+
 /**
  * Serve a file with HTTP byte-range support (`Accept-Ranges: bytes`, `206 Partial Content`, `416` on out-of-range)
  * so iOS Safari / AVFoundation media playback and seeking work reliably.
@@ -927,14 +1083,14 @@ function serveRangedFile(req: Request, path: string, headers: Record<string, str
   const baseHeaders: Record<string, string> = { ...headers, 'accept-ranges': 'bytes' };
   const rangeHeader = req.headers.get('range');
   if (!rangeHeader) {
-    return new Response(Bun.file(path), {
+    return new Response(fileBody(path), {
       status: 200,
       headers: { ...baseHeaders, 'content-length': String(size) },
     });
   }
   const trimmed = rangeHeader.trim();
   if (!/^bytes=/i.test(trimmed)) {
-    return new Response(Bun.file(path), {
+    return new Response(fileBody(path), {
       status: 200,
       headers: { ...baseHeaders, 'content-length': String(size) },
     });
@@ -942,7 +1098,7 @@ function serveRangedFile(req: Request, path: string, headers: Record<string, str
   const spec = trimmed.slice(6).trim();
   if (spec.includes(',')) {
     // Multi-range requests are optional under RFC 9110; serve the full representation when multiple ranges are requested.
-    return new Response(Bun.file(path), {
+    return new Response(fileBody(path), {
       status: 200,
       headers: { ...baseHeaders, 'content-length': String(size) },
     });
@@ -977,7 +1133,7 @@ function serveRangedFile(req: Request, path: string, headers: Record<string, str
     }
   }
   const length = end - start + 1;
-  return new Response(Bun.file(path).slice(start, end + 1), {
+  return new Response(fileBody(path, { start, end }), {
     status: 206,
     headers: {
       ...baseHeaders,
@@ -1013,8 +1169,8 @@ async function serveFile(id: string, download: boolean): Promise<Response> {
     'content-security-policy': 'sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox allow-downloads allow-modals; frame-ancestors \'self\'',
   };
   if (download) headers['content-disposition'] = `attachment; filename="${f.entry.name.replace(/["\\\r\n]/g, '_')}"`;
-  else if (f.entry.mime === 'text/html') return new Response((await Bun.file(f.path).text()) + LINK_SHIM + DELIVERABLE_BRIDGE, { headers });
-  return new Response(Bun.file(f.path), { headers });
+  else if (f.entry.mime === 'text/html') return new Response(readFileSync(f.path, 'utf8') + LINK_SHIM + DELIVERABLE_BRIDGE, { headers });
+  return new Response(fileBody(f.path), { headers });
 }
 
 /** True only for a regular file: a directory is not something the app shell can serve as a body. */
@@ -1027,7 +1183,7 @@ function isFile(path: string): boolean {
 }
 
 async function serveStatic(req: Request, path: string): Promise<Response> {
-  // Reject malformed URL escapes before routing so bad paths return 400 rather than Bun's 500 stack trace.
+  // Reject malformed URL escapes before routing so bad paths return 400 rather than a 500 stack trace.
   let decoded: string;
   try {
     decoded = decodeURIComponent(path);
@@ -1042,15 +1198,15 @@ async function serveStatic(req: Request, path: string): Promise<Response> {
   // Require a regular file (directories pass existsSync and fail with EISDIR) so directory paths fall back to index.html.
   if ((candidate === config.webDir || candidate.startsWith(webDirRoot)) && urlPath !== '/' && isFile(candidate)) {
     // The build writes `.br`/`.gz` siblings; serve one when the client accepts it. The type comes from the original
-    // path, not the `.br` sibling (Bun would otherwise infer application/octet-stream).
+    // path, not the `.br` sibling.
     const encoding = preferredEncoding(req);
     const encoded = encoding ? encodedPath(candidate, encoding, isFile) : null;
     const immutable = urlPath.startsWith('/assets/');
-    return new Response(Bun.file(encoded ?? candidate), {
+    return new Response(fileBody(encoded ?? candidate), {
       headers: {
         ...SECURITY_HEADERS,
         ...encodingHeaders(encoded ? encoding : null),
-        'content-type': Bun.file(candidate).type,
+        'content-type': mimeTypeFor(candidate),
         ...(urlPath.endsWith('.html') ? { 'content-security-policy': APP_CSP } : {}),
         'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache',
         ...(urlPath === '/sw.js' ? { 'service-worker-allowed': '/' } : {}),
@@ -1058,10 +1214,10 @@ async function serveStatic(req: Request, path: string): Promise<Response> {
     });
   }
   const index = join(config.webDir, 'index.html');
-  if (!isFile(index)) return new Response('Web app not built. Run: bun run build', { status: 503 });
+  if (!isFile(index)) return new Response('Web app not built. Run: npm run build', { status: 503 });
   const encoding = preferredEncoding(req);
   const encoded = encoding ? encodedPath(index, encoding, isFile) : null;
-  return new Response(Bun.file(encoded ?? index), {
+  return new Response(fileBody(encoded ?? index), {
     headers: {
       ...SECURITY_HEADERS,
       ...encodingHeaders(encoded ? encoding : null),
@@ -1220,8 +1376,9 @@ export async function handleInternal(req: Request): Promise<Response> {
  * JSON header), pointer/keyboard events in. Frames are dropped rather than queued when a phone
  * can't keep up, so a slow link degrades the picture instead of lagging behind reality.
  */
-let appServer: any = null;
-let internalServer: any = null;
+let appServer: HttpServer | null = null;
+let internalServer: HttpServer | null = null;
+let browserWss: WebSocketServer | null = null;
 
 /**
  * Compress a JSON response once the route has built it. Static files ride the precompressed siblings in
@@ -1245,75 +1402,186 @@ export async function compressJson(req: Request, pending: Promise<Response>): Pr
   return new Response(body, { status: res.status, headers });
 }
 
+function toWebRequest(nodeReq: IncomingMessage, nodeRes?: ServerResponse): Request {
+  const proto = (nodeReq.headers['x-forwarded-proto'] as string)?.split(',')[0]?.trim() || 'http';
+  const host = (nodeReq.headers.host as string) || `127.0.0.1:${config.port}`;
+  const url = new URL(nodeReq.url || '/', `${proto}://${host}`);
+  const headers = new Headers();
+  for (const [k, v] of Object.entries(nodeReq.headers)) {
+    if (v === undefined) continue;
+    if (Array.isArray(v)) {
+      for (const item of v) headers.append(k, item);
+    } else {
+      headers.set(k, v);
+    }
+  }
+  const ac = new AbortController();
+  if (nodeRes) {
+    nodeRes.on('close', () => {
+      if (!nodeRes.writableFinished) ac.abort();
+    });
+  }
+  const method = (nodeReq.method || 'GET').toUpperCase();
+  const hasBody = method !== 'GET' && method !== 'HEAD';
+  const init: RequestInit & { duplex?: 'half' } = {
+    method,
+    headers,
+    signal: ac.signal,
+    ...(hasBody ? { body: Readable.toWeb(nodeReq) as unknown as BodyInit, duplex: 'half' } : {}),
+  };
+  return new Request(url.toString(), init);
+}
+
+async function sendWebResponse(res: Response, nodeRes: ServerResponse): Promise<void> {
+  nodeRes.statusCode = res.status;
+  const setCookies = typeof (res.headers as any).getSetCookie === 'function' ? ((res.headers as any).getSetCookie() as string[]) : [];
+  res.headers.forEach((value, key) => {
+    if (key.toLowerCase() === 'set-cookie' && setCookies.length > 0) return;
+    nodeRes.setHeader(key, value);
+  });
+  if (setCookies.length > 0) nodeRes.setHeader('set-cookie', setCookies);
+
+  if (!res.body) {
+    nodeRes.end();
+    return;
+  }
+  const reader = res.body.getReader();
+  const abortReader = () => {
+    reader.cancel().catch(() => {});
+  };
+  nodeRes.on('close', abortReader);
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (nodeRes.destroyed || nodeRes.writableEnded) {
+        await reader.cancel().catch(() => {});
+        break;
+      }
+      if (!nodeRes.write(value)) {
+        await new Promise<void>((resolve) => nodeRes.once('drain', resolve));
+      }
+    }
+  } catch {
+    // Client disconnected mid-stream.
+  } finally {
+    nodeRes.off('close', abortReader);
+    if (!nodeRes.writableEnded) nodeRes.end();
+  }
+}
+
+function attachBrowserSocket(ws: WsSocket) {
+  if (process.env.DUET_CHROME_DEBUG) console.error('[ws] open', JSON.stringify({ kind: 'browser' }));
+  const stopFrame = browser.onFrame((f) => {
+    // A phone on a bad link must never make the server buffer megabytes of stale frames:
+    // drop the frame instead of queueing it behind a stalled socket.
+    if (ws.bufferedAmount > 1_500_000) return;
+    const meta = new TextEncoder().encode(JSON.stringify({ w: f.width, h: f.height, tab: f.tabId }));
+    const buf = new Uint8Array(4 + meta.length + f.jpeg.length);
+    new DataView(buf.buffer).setUint32(0, meta.length, true);
+    buf.set(meta, 4);
+    buf.set(f.jpeg, 4 + meta.length);
+    try {
+      ws.send(buf);
+    } catch (e: any) {
+      console.error('[ws] frame send failed', e?.message);
+    }
+  });
+  const stopTabs = browser.onTabs((tabs) => {
+    try {
+      ws.send(JSON.stringify({ type: 'tabs', tabs }));
+    } catch (e: any) {
+      console.error('[ws] tabs send failed', e?.message);
+    }
+  });
+  browser.open().catch((e: Error) => {
+    try {
+      ws.send(JSON.stringify({ type: 'error', message: safeRouteMessage(e, 'Could not open browser') }));
+    } catch {}
+  });
+  ws.on('message', async (raw) => {
+    let evt: any;
+    try {
+      const text = typeof raw === 'string' ? raw : Buffer.isBuffer(raw) ? raw.toString('utf8') : new TextDecoder().decode(raw as ArrayBuffer);
+      evt = JSON.parse(text);
+    } catch {
+      return;
+    }
+    if (!evt?.type) return;
+    try {
+      await browser.input(evt);
+    } catch (e: any) {
+      try {
+        ws.send(JSON.stringify({ type: 'error', message: safeRouteMessage(e, 'input failed') }));
+      } catch {}
+    }
+  });
+  ws.on('close', () => {
+    stopFrame();
+    stopTabs();
+  });
+}
+
 export function startServers() {
   if (appServer && internalServer) return { appServer, internalServer };
-  appServer = Bun.serve({
-    hostname: config.host,
-    port: config.port,
-    fetch: (req, srv) => compressJson(req, handleApp(req, srv)),
-    websocket: {
-      open(ws: any) {
-        if (process.env.DUET_CHROME_DEBUG) console.error('[ws] open', JSON.stringify(ws.data));
-        if (ws.data?.kind !== 'browser') return;
-        const stopFrame = browser.onFrame((f) => {
-          // A phone on a bad link must never make the server buffer megabytes of stale frames:
-          // drop the frame instead of queueing it behind a stalled socket.
-          const buffered = typeof (ws as any).getBufferedAmount === 'function' ? (ws as any).getBufferedAmount() : 0;
-          if (buffered > 1_500_000) return;
-          const meta = new TextEncoder().encode(
-            JSON.stringify({ w: f.width, h: f.height, tab: f.tabId }),
-          );
-          const buf = new Uint8Array(4 + meta.length + f.jpeg.length);
-          new DataView(buf.buffer).setUint32(0, meta.length, true);
-          buf.set(meta, 4);
-          buf.set(f.jpeg, 4 + meta.length);
-          try {
-            ws.send(buf);
-          } catch (e: any) {
-            console.error('[ws] frame send failed', e?.message);
-          }
-        });
-        const stopTabs = browser.onTabs((tabs) => {
-          try {
-            ws.send(JSON.stringify({ type: 'tabs', tabs }));
-          } catch (e: any) {
-            console.error('[ws] tabs send failed', e?.message);
-          }
-        });
-        ws.data.stop = () => {
-          stopFrame();
-          stopTabs();
-        };
-        browser.open().catch((e: Error) => {
-          try {
-            ws.send(JSON.stringify({ type: 'error', message: safeRouteMessage(e, 'Could not open browser') }));
-          } catch {}
-        });
-      },
-      async message(ws: any, raw: any) {
-        if (ws.data?.kind !== 'browser') return;
-        let evt: any;
-        try {
-          evt = JSON.parse(typeof raw === 'string' ? raw : new TextDecoder().decode(raw));
-        } catch {
-          return;
+  browserWss = new WebSocketServer({ noServer: true });
+  appServer = createServer((nodeReq, nodeRes) => {
+    const req = toWebRequest(nodeReq, nodeRes);
+    const srv = { requestIP: () => ({ address: nodeReq.socket.remoteAddress ?? '' }) };
+    compressJson(req, handleApp(req, srv))
+      .then((res) => sendWebResponse(res, nodeRes))
+      .catch((e) => {
+        console.error('[http] unhandled', e);
+        if (!nodeRes.headersSent) {
+          nodeRes.statusCode = 500;
+          nodeRes.end('Internal server error');
+        } else if (!nodeRes.writableEnded) {
+          nodeRes.end();
         }
-        if (!evt?.type) return;
-        try {
-          await browser.input(evt);
-        } catch (e: any) {
-          try {
-            ws.send(JSON.stringify({ type: 'error', message: safeRouteMessage(e, 'input failed') }));
-          } catch {}
-        }
-      },
-      close(ws: any) {
-        ws.data?.stop?.();
-      },
-    },
-    idleTimeout: 0,
+      });
   });
-  internalServer = Bun.serve({ hostname: '127.0.0.1', port: config.internalPort, fetch: handleInternal, idleTimeout: 120 });
+  appServer.requestTimeout = 0;
+
+  appServer.on('upgrade', async (nodeReq, socket, head) => {
+    const req = toWebRequest(nodeReq);
+    const pathname = new URL(req.url).pathname.replace(/\/+$/, '') || '/';
+    if (pathname !== '/api/browser/ws') {
+      socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+    const device = await deviceFor(req);
+    if (!device) {
+      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+    if (!sameOrigin(req)) {
+      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+    browserWss!.handleUpgrade(nodeReq, socket, head, (ws) => attachBrowserSocket(ws));
+  });
+
+  appServer.listen(config.port, config.host);
+
+  internalServer = createServer((nodeReq, nodeRes) => {
+    const req = toWebRequest(nodeReq, nodeRes);
+    handleInternal(req)
+      .then((res) => sendWebResponse(res, nodeRes))
+      .catch((e) => {
+        console.error('[internal] unhandled', e);
+        if (!nodeRes.headersSent) {
+          nodeRes.statusCode = 500;
+          nodeRes.end('Internal server error');
+        } else if (!nodeRes.writableEnded) {
+          nodeRes.end();
+        }
+      });
+  });
+  internalServer.requestTimeout = 120_000;
+  internalServer.listen(config.internalPort, '127.0.0.1');
 
   try {
     prune();
@@ -1336,7 +1604,7 @@ export function startServers() {
   return { appServer, internalServer };
 }
 
-if (import.meta.main) {
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   startServers();
 }
 
@@ -1351,14 +1619,15 @@ async function shutdown(signal: string) {
   closing = true;
   console.log(`[hermes-duet] ${signal}: shutting down`);
   try {
-    appServer?.stop(true);
-    internalServer?.stop(true);
+    browserWss?.close();
+    appServer?.close();
+    internalServer?.close();
   } catch {}
   abortActiveRuns();
   try {
     browser.close();
   } catch {}
-  await Bun.sleep(150);
+  await sleep(150);
   try {
     db.close();
   } catch {}

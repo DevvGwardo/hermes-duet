@@ -1,6 +1,20 @@
 import { useSyncExternalStore } from 'react';
 import { trackPending } from '../../shared/pending';
-import type { AgentState, Channel, FileEntry, Item, Page, Routine, ServerEvent, Settings, Snapshot, Task } from '../../shared/types';
+import type {
+  AgentState,
+  Channel,
+  FileEntry,
+  GatewayProfile,
+  Item,
+  Page,
+  Routine,
+  ServerEvent,
+  Settings,
+  Snapshot,
+  Task,
+  TrackedFollowUp,
+  TrustRule,
+} from '../../shared/types';
 
 interface State {
   ready: boolean;
@@ -12,6 +26,7 @@ interface State {
   /** Cards waiting on the user, from the server, not filtered from the loaded `items` page. */
   pending: Item[];
   tasks: Task[];
+  hasMoreTasks: boolean;
   /** User-defined recurring routines, soonest next run first. */
   routines: Routine[];
   files: FileEntry[];
@@ -24,6 +39,9 @@ interface State {
   /** Per-channel initial/retry page fetch status. */
   channelLoading: Record<string, boolean>;
   channelError: Record<string, string | null>;
+  trustRules: TrustRule[];
+  followUps: TrackedFollowUp[];
+  gateways: { profiles: GatewayProfile[]; active_id: string };
   settings: Settings | null;
   agent: AgentState;
   pushEnabled: boolean;
@@ -39,6 +57,7 @@ let state: State = {
   hasMoreBy: {},
   pending: [],
   tasks: [],
+  hasMoreTasks: false,
   routines: [],
   files: [],
   pages: [],
@@ -46,6 +65,9 @@ let state: State = {
   channelId: null,
   channelLoading: {},
   channelError: {},
+  trustRules: [],
+  followUps: [],
+  gateways: { profiles: [], active_id: 'gw-default' },
   settings: null,
   agent: initialAgent,
   pushEnabled: false,
@@ -83,6 +105,11 @@ const byCreated = (a: { created_at: number }, b: { created_at: number }) => a.cr
 const byUpdatedDesc = (a: { updated_at: number }, b: { updated_at: number }) => b.updated_at - a.updated_at;
 /** Soonest next run first; a routine with no next run (paused before its first save) sorts last. */
 const byNextRun = (a: Routine, b: Routine) => (a.next_run ?? Infinity) - (b.next_run ?? Infinity);
+const byFollowUpDue = (a: TrackedFollowUp, b: TrackedFollowUp) => {
+  if (a.status === 'open' && b.status !== 'open') return -1;
+  if (a.status !== 'open' && b.status === 'open') return 1;
+  return a.due_at - b.due_at || b.created_at - a.created_at;
+};
 
 export function applySnapshot(s: Snapshot) {
   setState((current) => {
@@ -103,6 +130,7 @@ export function applySnapshot(s: Snapshot) {
       hasMoreBy,
       pending: s.pending,
       tasks: s.tasks.sort(byUpdatedDesc),
+      hasMoreTasks: !!s.has_more_tasks,
       routines: (s.routines ?? []).sort(byNextRun),
       files: s.files,
       pages: s.pages ?? [],
@@ -110,11 +138,21 @@ export function applySnapshot(s: Snapshot) {
       channelId,
       channelLoading: {},
       channelError: {},
+      trustRules: (s.trust_rules ?? []).sort((a, b) => b.created_at - a.created_at),
+      followUps: (s.follow_ups ?? []).sort(byFollowUpDue),
+      gateways: s.gateways ?? { profiles: [], active_id: 'gw-default' },
       settings: s.settings,
       agent: s.agent,
       pushEnabled: s.push_enabled,
     };
   });
+}
+
+export function appendOlderTasks(older: Task[], hasMore: boolean) {
+  setState((s) => ({
+    tasks: [...s.tasks, ...older.filter((o) => !s.tasks.some((t) => t.id === o.id))].sort(byUpdatedDesc),
+    hasMoreTasks: hasMore,
+  }));
 }
 
 /** The paging key for the thread the Chat tab is showing ('' when there are no channels). */
@@ -209,6 +247,21 @@ export function applyEvent(ev: ServerEvent) {
         const channels = s.channels.filter((c) => c.id !== ev.id);
         return { channels, channelId: s.channelId === ev.id ? (channels[0]?.id ?? null) : s.channelId };
       });
+      break;
+    case 'trust_rule':
+      setState((s) => ({ trustRules: upsert(s.trustRules, ev.rule, (a, b) => b.created_at - a.created_at) }));
+      break;
+    case 'trust_rule_removed':
+      setState((s) => ({ trustRules: s.trustRules.filter((r) => r.id !== ev.id) }));
+      break;
+    case 'followup':
+      setState((s) => ({ followUps: upsert(s.followUps, ev.followup, byFollowUpDue) }));
+      break;
+    case 'followup_removed':
+      setState((s) => ({ followUps: s.followUps.filter((f) => f.id !== ev.id) }));
+      break;
+    case 'gateways':
+      setState({ gateways: ev.gateways });
       break;
     case 'agent':
       setState({ agent: ev.agent });

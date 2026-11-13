@@ -1,6 +1,6 @@
 // Full-text search over the thread and the things the agent produced. The SQL lives here and takes a Database, so a
 // test can drive it against an in-memory copy of the schema without touching the real install.
-import type { Database } from 'bun:sqlite';
+import type { Database } from './sqlite';
 import type { CardData, Item, SearchHit, Source, Task } from '../shared/types';
 
 const MAX_TERMS = 8;

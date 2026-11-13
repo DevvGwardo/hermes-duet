@@ -1,11 +1,12 @@
-#!/usr/bin/env bun
+#!/usr/bin/env npx tsx
 // Precompress the built PWA so the server can serve `.br`/`.gz` siblings without doing it per request.
-// Run automatically by `bun run build`; `server/index.ts` picks the sibling that matches Accept-Encoding.
+// Run automatically by `npm run build`; `server/index.ts` picks the sibling that matches Accept-Encoding.
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { extname, join } from 'node:path';
+import { dirname, extname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { brotliCompressSync, gzipSync } from 'node:zlib';
 
-const ROOT = join(import.meta.dir, '..', 'web', 'dist');
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', 'web', 'dist');
 const TYPES = new Set(['.js', '.css', '.html', '.json', '.webmanifest', '.svg', '.txt', '.xml']);
 
 function walk(dir: string): string[] {

@@ -9,11 +9,12 @@
  *
  * No playwright dependency: Bun speaks CDP directly.
  */
+import { type ChildProcess, spawn } from 'node:child_process';
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { config } from './config';
 import { UserError } from './errors';
-import { whichCommand } from './exec';
+import { sleep, whichCommand } from './exec';
 
 const debugPort = () => Number(process.env.DUET_CHROME_PORT ?? 9333);
 const profileDir = () => process.env.DUET_CHROME_PROFILE ?? join(config.hermesHome, 'duet-chrome');
@@ -65,7 +66,7 @@ export type Frame = { jpeg: Uint8Array; width: number; height: number; tabId: st
 type Sink = (f: Frame) => void;
 type TabInfo = (tabs: Tab[]) => void;
 
-let chrome: ReturnType<typeof Bun.spawn> | null = null;
+let chrome: ChildProcess | null = null;
 let ws: WebSocket | null = null;
 let connecting: Promise<void> | null = null;
 let cmdId = 1;
@@ -122,10 +123,10 @@ async function ensureChrome(): Promise<void> {
   const profile = profileDir();
   mkdirSync(profile, { recursive: true });
   log('launching Chrome', profile);
-  chrome = Bun.spawn([bin, ...chromeLaunchArgs(debugPort(), profile)], { stdout: 'ignore', stderr: 'ignore', stdin: 'ignore' });
+  chrome = spawn(bin, chromeLaunchArgs(debugPort(), profile), { stdio: 'ignore' });
   for (let i = 0; i < 60; i++) {
     if (await reachable()) return;
-    await Bun.sleep(250);
+    await sleep(250);
   }
   try {
     chrome.kill();
@@ -534,7 +535,7 @@ export async function input(raw: unknown): Promise<void> {
       return;
     case 'long-press':
       await dispatch('Input.dispatchMouseEvent', { type: 'mousePressed', x: evt.x, y: evt.y, button: 'left', clickCount: 1 });
-      await Bun.sleep(650);
+      await sleep(650);
       await dispatch('Input.dispatchMouseEvent', { type: 'mouseReleased', x: evt.x, y: evt.y, button: 'left', clickCount: 1 });
       return;
     case 'scroll':
@@ -841,7 +842,7 @@ export async function fillLogin(username: string, password: string, expectedSite
     await send('Input.dispatchKeyEvent', { type: 'keyDown', windowsVirtualKeyCode: 13, key: 'Enter', text: '\r' }, sid);
     await send('Input.dispatchKeyEvent', { type: 'keyUp', windowsVirtualKeyCode: 13, key: 'Enter' }, sid);
     // The form has the value it needs; leaving the plaintext sitting in the DOM only gives page scripts a copy.
-    await Bun.sleep(300);
+    await sleep(300);
     await clearPassword(sid).catch(() => {});
   }
   return { user, pass };

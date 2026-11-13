@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { askAge } from '../../../shared/age';
+import { isTrustCandidateSafe } from '../../../shared/trust';
 import type { CardData, FollowUp, Item, PaymentItem, Source, WatchEntry } from '../../../shared/types';
 import { api } from '../api';
 import { isSafeSourceUrl } from '../sources';
@@ -130,10 +131,20 @@ export function CardView({ item, onOpenFile }: { item: Item; onOpenFile: (id: st
       {age && <p className="card-age">{card.type === 'choice' ? `Asked ${age}` : `Written ${age} · check it still fits`}</p>}
       {card.type === 'approval' &&
         (pending ? (
-          <div className="card-actions">
+          <div className="card-actions wrap">
             <button className="btn btn-primary" disabled={!!busy || (draftEdited && !draft.trim())} onClick={() => act('approve', draftEdited ? draft : undefined)}>
               {busy === 'approve' ? 'Approving…' : card.action_label || 'Approve'}
             </button>
+            {isTrustCandidateSafe(card) && (
+              <button
+                className="btn btn-ghost"
+                disabled={!!busy || (draftEdited && !draft.trim())}
+                onClick={() => act('approve_always', draftEdited ? draft : undefined)}
+                title="Approve this low-risk action and remember it for matching requests"
+              >
+                {busy === 'approve_always' ? 'Saving rule…' : "Approve & don't ask again"}
+              </button>
+            )}
             <button className="btn btn-ghost" disabled={!!busy} onClick={() => act('decline')}>
               Not now
             </button>
@@ -195,6 +206,8 @@ function clearMediaSession(owner: symbol) {
   } catch {}
 }
 
+const BRIEF_SPEEDS = [0.75, 1, 1.25, 1.5, 2] as const;
+
 /**
  * "Listen": the brief read aloud, so the morning can be taken in while walking. The audio is synthesized on the host
  * and cached; a lock-screen player is exposed through the Media Session API so playback survives switching apps.
@@ -207,11 +220,19 @@ function ListenButton({ item }: { item: Item }) {
   const owner = useRef(Symbol('listen'));
   const [state, setState] = useState<'idle' | 'loading' | 'playing'>('idle');
   const [err, setErr] = useState<string | null>(null);
+  const ttsSpeed = useStore((s) => s.settings?.tts_speed ?? 1);
+  const ttsVoice = useStore((s) => s.settings?.tts_voice ?? '');
   const title = item.card?.title ?? 'Morning brief';
 
   useEffect(() => {
     needsReloadRef.current = true;
-  }, [item.id]);
+  }, [item.id, ttsVoice]);
+
+  useEffect(() => {
+    if (audio.current) {
+      audio.current.playbackRate = ttsSpeed;
+    }
+  }, [ttsSpeed]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -256,6 +277,13 @@ function ListenButton({ item }: { item: Item }) {
     if (mountedRef.current) setState('idle');
   }
 
+  function cycleSpeed() {
+    const idx = BRIEF_SPEEDS.findIndex((s) => s === ttsSpeed);
+    const next = BRIEF_SPEEDS[(idx + 1) % BRIEF_SPEEDS.length];
+    if (audio.current) audio.current.playbackRate = next;
+    void api.saveSettings({ tts_speed: next }).catch(() => {});
+  }
+
   async function toggle() {
     if (loadingRef.current || state === 'loading') return;
     setErr(null);
@@ -264,6 +292,7 @@ function ListenButton({ item }: { item: Item }) {
     const el = audio.current ?? new Audio();
     audio.current = el;
     (el as any).playsInline = true;
+    el.playbackRate = ttsSpeed;
 
     if (state === 'playing' && !el.paused) {
       el.pause();
@@ -281,7 +310,7 @@ function ListenButton({ item }: { item: Item }) {
     loadingRef.current = true;
     setState('loading');
 
-    const audioPath = `/api/brief/${encodeURIComponent(item.id)}/audio`;
+    const audioPath = `/api/brief/${encodeURIComponent(item.id)}/audio${ttsVoice ? `?voice=${encodeURIComponent(ttsVoice)}` : ''}`;
     const targetUrl = new URL(audioPath, location.href).href;
     let mediaErrorMsg: string | null = null;
 
@@ -314,6 +343,7 @@ function ListenButton({ item }: { item: Item }) {
         el.src = audioPath;
         el.preload = 'auto';
         el.load();
+        el.playbackRate = ttsSpeed;
         needsReloadRef.current = false;
       }
 
@@ -328,6 +358,7 @@ function ListenButton({ item }: { item: Item }) {
       // Invoke play() synchronously in the tap gesture before awaiting.
       const playPromise = el.play();
       await playPromise;
+      el.playbackRate = ttsSpeed;
       if (mountedRef.current && activeBriefAudio?.owner === owner.current) {
         setState('playing');
       }
@@ -355,17 +386,22 @@ function ListenButton({ item }: { item: Item }) {
 
   return (
     <>
-      <button
-        type="button"
-        className={`listen ${state}`}
-        disabled={state === 'loading'}
-        onClick={() => void toggle()}
-        aria-pressed={state === 'playing'}
-        aria-label={state === 'playing' ? 'Pause the brief' : 'Listen to the brief'}
-      >
-        {state === 'playing' ? <Icon.stop size={14} /> : <Icon.play size={14} />}
-        {state === 'playing' ? 'Pause' : state === 'loading' ? 'Getting audio…' : 'Listen'}
-      </button>
+      <div className="listen-bar">
+        <button
+          type="button"
+          className={`listen ${state}`}
+          disabled={state === 'loading'}
+          onClick={() => void toggle()}
+          aria-pressed={state === 'playing'}
+          aria-label={state === 'playing' ? 'Pause the brief' : 'Listen to the brief'}
+        >
+          {state === 'playing' ? <Icon.stop size={14} /> : <Icon.play size={14} />}
+          {state === 'playing' ? 'Pause' : state === 'loading' ? 'Getting audio…' : 'Listen'}
+        </button>
+        <button type="button" className="listen-speed" onClick={cycleSpeed} aria-label={`Playback speed ${ttsSpeed}x`} title="Cycle playback speed">
+          {ttsSpeed}×
+        </button>
+      </div>
       {err && <p className="card-error" role="alert">{err}</p>}
     </>
   );
@@ -419,8 +455,10 @@ function PaymentDetails({ card }: { card: CardData }) {
 
 /** What the user decided, in one line. */
 function Decision({ card }: { card: CardData }) {
-  const label =
-    card.status === 'approved'
+  const isAuto = card.status === 'approved' && !!card.trust_rule_id && card.decision?.startsWith('Auto-approved');
+  const label = isAuto
+    ? card.decision!
+    : card.status === 'approved'
       ? (card.action_label && /^send/i.test(card.action_label) ? 'Sent' : 'Approved') + (card.edited ? ' with your edits' : '')
       : card.status === 'declined'
         ? 'Not now'

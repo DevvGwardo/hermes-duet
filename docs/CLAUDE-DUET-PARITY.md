@@ -1,8 +1,8 @@
 # Claude Duet vs. Hermes Duet — feature parity research
 
-Research date: **2026-11-09** (updated after **Parity Pass 1** and **Parity Pass 2**, see [`GAPS.md`](../GAPS.md)). Claude Duet is a US-only research preview that changes quickly; this is a snapshot, not a permanent spec. Sources are listed at the bottom.
+Research date: **2026-11-09** (updated after **Parity Pass 1**, **Parity Pass 2**, and **Parity Pass 3**, see [`GAPS.md`](../GAPS.md)). Claude Duet is a US-only research preview that changes quickly; this is a snapshot, not a permanent spec. Sources are listed at the bottom.
 
-The short version: after Parity Pass 1 (`71f25c7`–`7fe8e8b`) and Parity Pass 2 (`5975c79`–`6606434`), Hermes Duet reaches **parity or better** across structured approvals, outbound secret scanning, hard-blocked action policies, merchant-bound payment cards, dedicated task sheets with steering and user confirmation, grouped channels with standing instructions, source citations, user-defined routines, notification preferences, editable deliverables, complete FTS indexing, in-app memory editing, read-only connector suggestions, channel repo binding, and always-on Linux/Docker deployment docs. It remains **behind or deliberately different** on cloud isolation, multi-gateway/multi-machine routing, automatic "Everything" channel triage, outbound-thread follow-up tracking, `"Don't ask again"` exceptions, connector OAuth/install flows, native mobile/iPad apps (§4.11), and in-app TTS speed controls.
+The short version: after Parity Passes 1–3, Hermes Duet reaches **parity or better** across structured approvals, scoped `"Don't ask again"` trust rules with hard sensitive-action exceptions, outbound secret scanning, hard-blocked action policies, merchant-bound payment cards, dedicated task sheets with steering and user confirmation, grouped channels with standing instructions and per-channel tool scopes, agent-assisted `#general` triage into topic channels, paginated task history, outbound follow-up tracking (`Waiting on replies`), multi-gateway machine switching, spoken brief speed/voice controls, source citations, user-defined routines, notification preferences, editable deliverables, complete FTS indexing, in-app memory editing, read-only connector suggestions, channel repo binding, and always-on Linux/Docker deployment docs. It remains **behind or deliberately different** on cloud isolation, separate out-of-model LLM intent classification, connector OAuth/install flows, and native mobile/iPad apps (§4.11).
 
 ---
 
@@ -42,12 +42,12 @@ piece is missing; **Missing** = no equivalent; **N/A** = different product bound
 | Topic channels with shared memory | Yes | Channels with own Hermes session; shared `context.local.md` memory + unread `seen_at` dots | Parity (Pass 1) |
 | Groups of channels | Reported by reviewers | `channels.group` with grouped strip and channel sheet (`502f270`) | Parity (Pass 1) |
 | Per-channel standing instructions | Reported by reviewers | `channels.instructions` injected before `topic` with safety-override clause (`502f270`) | Parity (Pass 1) |
-| Automatic sorting of work into channels | Reported by reviewers | Tasks inherit their starting channel; no auto-routing from General | Missing |
+| Automatic sorting of work into channels | Reported by reviewers | `assign_channel` tool from `#general` + `POST /api/tasks/:id/channel` & Channel picker in `TaskSheet` (`moveTaskChannel`) | Parity (Pass 3) |
 | Task list with a page per task | Yes | Tasks tab opening `TaskSheet` with steps, result, sources, files, and composer (`0b148bc`) | Parity (Pass 1) |
 | Steer a running task | Yes | `POST /api/tasks/:id/message` → `steerTask()` via `hermes.steer` + `TaskSheet` composer (`0b148bc`) | Parity (Pass 1) |
 | User marks a task complete | Yes; agent may suggest, only user confirms | `Task.agent_done_at` vs `confirmed_at`; `/confirm` and `/reopen` in `TaskSheet` (`0b148bc`) | Parity (Pass 1) |
 | Handover with result, files, follow-ups | Files in Make; task page | Handover card, retries, follow-ups | Ahead |
-| Task history | Task list | 60 tasks / 7 days loaded (`tasks.recent`) | Partial |
+| Task history | Task list | Recent 60 tasks + `GET /api/tasks?before=...` pagination (`Load older tasks`) | Parity (Pass 3) |
 
 ### Proactivity
 
@@ -56,7 +56,7 @@ piece is missing; **Missing** = no equivalent; **N/A** = different product bound
 | Morning brief with prepared drafts | Yes | Yes; decisions, drafts, Watching, Skip | Parity / Ahead |
 | Checks through the day | Every few hours, configurable | Check-ins off / 3× daily / hourly + custom user routines | Parity / Partial — fixed check-in presets; arbitrary schedules via routines |
 | User controls what to hear and how often | Yes | `server/notify-prefs.ts`: per-category task pushes, `notify_agent`, per-channel mute, daily cap (`d68aefd`) | Parity (Pass 2) |
-| Follow up on threads that went quiet | Yes | No outbound-thread tracking | Missing |
+| Follow up on threads that went quiet | Yes | `follow_ups` table, `track_followup` / `resolve_followup` tools, `Waiting on replies` in Tasks, surfaced in briefs/check-ins | Parity (Pass 3) |
 | User-defined recurring routines | Routines/scheduled tasks reported and implied | `routines` table + DST-aware scheduler + `save_routine`/`remove_routine` + Routines sheet (`986ad86`) | Parity (Pass 2) |
 | Event-driven triggers | Interval checks; no webhook/folder documented | Webhooks, watched folder, meeting proximity | Ahead |
 | Quiet hours / held pushes | Not documented | Quiet hours, held "While you were away" | Ahead |
@@ -83,7 +83,7 @@ piece is missing; **Missing** = no equivalent; **N/A** = different product bound
 | Independent check that action matches intent | Yes, classifier outside the model | Deterministic field/destination/recipient validation and payment merchant-host matching; no LLM classifier | Partial (Pass 1) |
 | Sensitive-information classifier on outbound messages | Yes, with "never share" and "needs consent" tiers | `server/safety.ts`: PAN/SSN/IBAN/PEM/API keys (`never_share` vs `needs_consent`) on approvals and `notify` (`d346b2a`) | Parity (Pass 1) |
 | Blocked actions even with approval | Securities, bank transfers, other people's accounts | `HARD_BLOCKS` in `server/safety.ts` + `GET /api/policy` + Settings > Always refused (`d346b2a`) | Parity (Pass 1) |
-| "Don't ask again" with hard exceptions | Yes for some actions; never for money/send/delete/create-account | Every sensitive action gets a new card | Missing |
+| "Don't ask again" with hard exceptions | Yes for some actions; never for money/send/delete/create-account | `trust_rules` + `"Approve & don't ask again"` on safe `action: 'other'` cards; Settings > Trusted actions revoke; money/sends/posts/deletes/signing/accounts/secrets always ask | Parity (Pass 3) |
 | Credentials never reach the model or agent machine | Yes, encrypted single-use path / proxy | Vault CLI returns credentials to the Duet server; agent shares the machine and shell | Partial |
 | Browser isolated from agent and user data | Dedicated cloud VM; fixed command surface | Local/container Chrome, separate profile, CDP bound to container/host | Partial |
 | Agent identifies itself to websites | Distinct User-Agent and published IPs | Normal Chrome | Missing |
@@ -107,10 +107,10 @@ piece is missing; **Missing** = no equivalent; **N/A** = different product bound
 | Live browser viewing/takeover | Explicitly not available | Yes, CDP stream + trusted input | Ahead |
 | Access to local files and apps | No | Yes | Ahead |
 | Model choice | No; Opus 5.5 only | `DUET_HERMES_MODEL` | Ahead |
-| Multiple computers / Claude Code sessions | Yes, added 2026-11-06 | One Hermes gateway per install | Missing (different ecosystem) |
+| Multiple computers / Claude Code sessions | Yes, added 2026-11-06 | `/api/gateways` multi-gateway Hermes machine switching + Settings > Hermes machines | Parity (Pass 3) |
 | Native apps / iPad side by side | iOS, Android, web; iPad reported | Installable PWA; responsive web | Partial |
 | Voice notes | Yes | Yes, local whisper.cpp, plus TTS brief | Parity |
-| Voice/speed settings | Reported | TTS voice/model via env; no in-app speed | Partial |
+| Voice/speed settings | Reported | In-app `tts_voice` + `tts_speed` (`0.75×`–`2×`) in Settings and Brief player | Parity (Pass 3) |
 | Open source / self-hosted / no waitlist | No | Yes | Ahead |
 
 ---
@@ -140,7 +140,7 @@ Do not copy the parts that are cloud-only tradeoffs: model lock-in, no local fil
 
 ### 4.1 Security: structured approvals, outbound scan, and policy engine (Shipped in Pass 1)
 
-**Shipped (`d346b2a`, `7fe8e8b`):**
+**Shipped (Passes 1 & 3):**
 - Structured `action`, `destination`, `recipients[]`, `content`, and `url` fields on `request_approval`, rendered
   distinctly on approval cards and pinned into the resume prompt (`server/approval.ts`, `server/tools.ts`,
   `server/tools/dispatch.ts`, `CardView.tsx`).
@@ -148,10 +148,13 @@ Do not copy the parts that are cloud-only tradeoffs: model lock-in, no local fil
   keys, AWS/GitHub/API tokens) and `needs_consent` (IBANs) across approvals and `notify`.
 - Five hard-blocked categories (`HARD_BLOCKS`: bank/wire, securities/crypto, other people's accounts, password/2FA
   changes, account creation) exposed at `GET /api/policy` and shown in Settings > Always refused.
+- Scoped `"Don't ask again"` trust rules (`trust_rules` table, `shared/trust.ts`, `server/trust.ts`, `/api/trust-rules*`,
+  `"Approve & don't ask again"` button on eligible `action: 'other'` cards, and Settings > Trusted actions). High-risk
+  categories (payments, outbound emails/messages, public posts, deletions, signing, accounts, credentials, and outbound scan
+  warnings) always require explicit per-action approval.
 
 **Remaining:**
 - Separate out-of-model LLM intent classifier (beyond deterministic validation and merchant host matching).
-- `"Don't ask again"` trust tier with hard exceptions for money/send/delete/account creation.
 - Duet-side execution path for common connectors (vs prompt-governed execution on the agent host).
 
 ### 4.2 Payments: merchant host binding (Shipped in Pass 1)
@@ -166,15 +169,14 @@ Do not copy the parts that are cloud-only tradeoffs: model lock-in, no local fil
 
 ### 4.3 Channel and task model (Shipped in Pass 1)
 
-**Shipped (`0b148bc`, `502f270`):**
+**Shipped (Passes 1 & 3):**
 - `channels.group` and `channels.instructions` (2,000 chars injected before `topic` with a safety-override clause),
   grouped strip/sheet, and unread `last_at > seen_at` indicator cleared on open.
-- Dedicated `TaskSheet` with steps, result, sources, delivered files, and a live steering composer
-  (`POST /api/tasks/:id/message` → `steerTask`).
+- Dedicated `TaskSheet` with steps, result, sources, delivered files, channel reassignment (`POST /api/tasks/:id/channel`),
+  and a live steering composer (`POST /api/tasks/:id/message` → `steerTask`).
 - `Task.agent_done_at` vs user `confirmed_at` (`POST /api/tasks/:id/confirm` and `/reopen`).
-
-**Remaining:** Automatic triage routing from the General channel into topic channels (`assign_channel`), and longer
-task history pagination beyond the 60-task / 7-day window.
+- Agent-assisted channel triage from `#general` (`assign_channel` tool + `moveTaskChannel`).
+- Paginated task history (`GET /api/tasks?before=...` + `"Load older tasks"` in `TasksView`).
 
 ### 4.4 Source citations (Shipped in Pass 1)
 
@@ -190,11 +192,11 @@ task history pagination beyond the 60-task / 7-day window.
 
 ### 4.6 Notification preferences (Shipped in Pass 2)
 
-**Shipped (`d68aefd`):**
+**Shipped (Passes 2 & 3):**
 - `server/notify-prefs.ts` filtering by task push mode (all/failures/off), `agent_notify` toggle, per-channel mute,
   and soft daily push cap in Settings (while keeping approvals, questions, and payments exempt).
-
-**Remaining:** Outbound-thread follow-up tracking for conversations that go quiet.
+- Outbound follow-up tracker (`follow_ups` table, `track_followup` / `resolve_followup` tools, `/api/followups*`,
+  `Waiting on replies` in the Tasks view, and automatic inclusion in morning briefs and check-ins).
 
 ### 4.7 Editable deliverables (Shipped in Pass 2)
 
@@ -213,40 +215,40 @@ task history pagination beyond the 60-task / 7-day window.
 
 **Remaining:** Search across external Hermes conversations outside Duet (if/when exposed by Hermes).
 
-### 4.9 Always-on availability and multiple machines (Docs shipped in Pass 2)
+### 4.9 Always-on availability and multiple machines (Docs in Pass 2; multi-gateway in Pass 3)
 
-**Shipped (`0774238`):**
+**Shipped (`0774238` + Pass 3):**
 - [`docs/DEPLOY.md`](DEPLOY.md) and [`docker-compose.example.yml`](../docker-compose.example.yml) cover Linux mini-PC/VPS
   systemd deployment, Tailscale, backups, Docker isolation (Chromium/CDP inside the container), and explicit host limits.
+- Multi-gateway machine switching (`GET/POST /api/gateways`, `POST /api/gateways/:id/select`, `DELETE /api/gateways/:id`,
+  Settings > Hermes machines) with live health re-checks on switch.
 
-**Remaining:** Multi-gateway / multi-agent switching (`DUET_HERMES_URL` per profile) and computer/session selection.
+### 4.10 Connectors, channel repo binding, and tool scopes (Passes 2 & 3)
 
-### 4.10 Connectors and channel repo binding (Read-only shipped in Pass 2)
-
-**Shipped (`d01374c`):**
+**Shipped (`d01374c` + Pass 3):**
 - `Channel.repo` validation and normalization (`owner/name` or GitHub URL) injected into the channel prompt.
 - Read-only `GET /api/suggestions` and Connectors sheet showing connected tools and suggested next steps.
+- Per-channel Duet tool allowlists (`channels.allowed_tools`) configurable in the Channels sheet, surfaced in prompts, and enforced at tool dispatch time.
 
-**Remaining:** Connector OAuth/install marketplace (intentionally omitted; read-only by design) and per-channel allowed-tool scopes.
+**Remaining:** Connector OAuth/install marketplace (intentionally omitted; read-only by design).
 
-### 4.11 Native/mobile polish (Open)
+### 4.11 Native/mobile polish (Open — voice/speed shipped in Pass 3)
 
-Deliberately deferred until the web/PWA surface stabilizes:
+**Shipped (Pass 3):**
+- In-app `tts_voice` and `tts_speed` (`0.75×`–`2×`) controls in Settings and live speed cycling on brief cards.
+
+**Remaining:**
 - Native iOS/Android shell (push reliability and background constraints on iOS).
 - iPad side-by-side multi-column shell.
-- In-app TTS voice/speed controls (currently env-configured).
 
 ---
 
 ## 5. Remaining roadmap
 
-Core Passes 1 and 2 closed §§4.1–4.8 and the read-only/docs pieces of §§4.9–4.10. Remaining work:
+Core Passes 1–3 closed §§4.1–4.10 (except intentional design boundaries) and the voice/speed piece of §4.11. Remaining work:
 
-1. **Small behavioral gaps:** automatic channel routing from General, outbound-thread follow-up tracking, and
-   `"Don't ask again"` exceptions for low-risk actions (§§4.3, 4.6, 4.1).
-2. **Multi-gateway / multi-agent support** (§4.9) — selectable `DUET_HERMES_URL` profiles and per-agent health.
-3. **Per-channel tool scopes** (§4.10) — narrowing allowed tools per channel.
-4. **Native/mobile polish** (§4.11) — in-app voice/speed UI, iPad layout ergonomics, and optional native shell.
+1. **Out-of-model intent verification (§4.1):** optional standalone LLM intent classifier and Duet-side connector execution.
+2. **Native/mobile shells (§4.11):** iPad multi-column ergonomics and optional native iOS/Android wrapper.
 
 ---
 
