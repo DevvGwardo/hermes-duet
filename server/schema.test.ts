@@ -102,10 +102,12 @@ describe('schema', () => {
     expect(db.query<{ channel_id: string }, []>('SELECT channel_id FROM fts_items').get()?.channel_id).toBe('chan-taxes');
   });
 
-  test('applySchema sets SCHEMA_VERSION = 4 and backfills tasks, pages, and latest file versions once', () => {
+  test('applySchema sets SCHEMA_VERSION = 5 and backfills tasks, pages, and latest file versions once', () => {
     const db = fresh();
-    expect(SCHEMA_VERSION).toBe(4);
-    expect(db.query<{ user_version: number }, []>('PRAGMA user_version').get()?.user_version).toBe(4);
+    // Pinned on purpose so bumping the schema stays a deliberate edit; the user_version check below reads the constant
+    // so this test cannot drift out of sync with it again.
+    expect(SCHEMA_VERSION).toBe(5);
+    expect(db.query<{ user_version: number }, []>('PRAGMA user_version').get()?.user_version).toBe(SCHEMA_VERSION);
 
     db.query('INSERT INTO tasks(id, status, session_id, created_at, updated_at, json) VALUES (?, ?, ?, ?, ?, ?)').run(
       't-bf',
@@ -160,7 +162,7 @@ describe('schema', () => {
     expect(db.query<{ n: number }, []>('SELECT COUNT(*) n FROM fts_assets').get()?.n).toBe(3);
   });
 
-  test('upgrading from v3 refreshes fts_items and fts_assets to schema v4', () => {
+  test('upgrading from v3 refreshes fts_items and fts_assets to the current schema', () => {
     const db = new Database(':memory:');
     db.exec(`
       CREATE TABLE items (id TEXT PRIMARY KEY, kind TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, run_id TEXT, task_id TEXT, channel_id TEXT DEFAULT 'chan-general', json TEXT NOT NULL);
@@ -182,7 +184,7 @@ describe('schema', () => {
     db.query('INSERT INTO fts_items(item_id, channel_id, kind, text) VALUES (?, ?, ?, ?)').run('i-up', GENERAL_CHANNEL, 'user', 'stale');
 
     applySchema(db);
-    expect(db.query<{ user_version: number }, []>('PRAGMA user_version').get()?.user_version).toBe(4);
+    expect(db.query<{ user_version: number }, []>('PRAGMA user_version').get()?.user_version).toBe(SCHEMA_VERSION);
     expect(db.query<{ item_id: string }, []>(`SELECT item_id FROM fts_items WHERE fts_items MATCH '"manifest"'`).all()).toEqual([{ item_id: 'i-up' }]);
   });
 });

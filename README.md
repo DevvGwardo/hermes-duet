@@ -76,7 +76,7 @@ View the [full-size infographic](docs/brand/what-it-does.png), or expand the det
 
 You need:
 - macOS for the launchd service and the native connectors (Calendar, Reminders, Mail). The server itself runs anywhere Bun does — see [docs/DEPLOY.md](docs/DEPLOY.md) for Linux (`hermes-duet install-systemd`), Windows, and Docker.
-- [Bun](https://bun.sh) 1.2.21 or newer.
+- [Bun](https://bun.sh) 1.4.2 or newer. The committed `bun.lock` uses lockfile v2, which older Bun releases cannot read, so an older Bun fails at `bun install --frozen-lockfile`.
 - A running [Hermes agent](https://github.com/NousResearch/hermes-agent) gateway with its API server enabled (`API_SERVER_ENABLED=true` and `API_SERVER_KEY` in `~/.hermes/.env`).
 
 ```sh
