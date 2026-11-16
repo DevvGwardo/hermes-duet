@@ -13,12 +13,12 @@
 # (bin/hermes-duet is a bash CLI; `bun bin/hermes-duet` cannot parse it.)
 
 # syntax=docker/dockerfile:1
-FROM oven/bun:1.2-debian AS deps
+FROM oven/bun:1.4.2-debian AS deps
 WORKDIR /app
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
 
-FROM oven/bun:1.2-debian AS build
+FROM oven/bun:1.4.2-debian AS build
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
@@ -26,7 +26,7 @@ RUN bun run build
 # Prune the dev dependencies (vite, typescript, playwright-core) from what the runtime image copies.
 RUN bun install --frozen-lockfile --production
 
-FROM oven/bun:1.2-debian AS runtime
+FROM oven/bun:1.4.2-debian AS runtime
 # Chromium is what the interactive browser pane drives over CDP; ca-certificates for outbound HTTPS.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends chromium ca-certificates curl tini \

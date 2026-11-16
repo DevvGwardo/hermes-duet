@@ -53,7 +53,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.2.21
+          bun-version: 1.4.2
 
       - name: Cache Bun dependencies
         uses: actions/cache@v5
@@ -85,7 +85,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.2.21
+          bun-version: 1.4.2
 
       - name: Cache Bun dependencies
         uses: actions/cache@v5
@@ -112,7 +112,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.2.21
+          bun-version: 1.4.2
 
       - name: Cache Bun dependencies
         uses: actions/cache@v5
@@ -139,7 +139,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.2.21
+          bun-version: 1.4.2
 
       - name: Cache Bun dependencies
         uses: actions/cache@v5
@@ -174,7 +174,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.2.21
+          bun-version: 1.4.2
 
       - name: Cache Bun dependencies
         uses: actions/cache@v5
@@ -201,7 +201,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.2.21
+          bun-version: 1.4.2
 
       - name: Dependency audit
         run: bun audit --production --audit-level=high
@@ -217,7 +217,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.2.21
+          bun-version: 1.4.2
 
       - name: Cache Bun dependencies
         uses: actions/cache@v5
