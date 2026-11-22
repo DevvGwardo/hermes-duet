@@ -103,6 +103,22 @@ test('dashboard approval text is bounded', () => {
   expect(item.card!.action_label).toHaveLength(30);
 });
 
+test('deliverableApproval enforces hard policy blocks and secret scanning', () => {
+  // Hard policy refusal: wire transfer
+  expect(() => deliverableApproval(dash(), { title: 'Send wire transfer to contractor', summary: 'Wire transfer $500' })).toThrow(/Refused/);
+
+  // Hard policy refusal: password/credential change
+  expect(() => deliverableApproval(dash(), { title: 'Change password on account', summary: 'Update 2fa settings' })).toThrow(/Refused/);
+
+  // Secret scanning: credit card number blocked
+  expect(() => deliverableApproval(dash(), { title: 'Charge card', summary: 'Use card 4111-1111-1111-1111 for payment' })).toThrow(/Approval blocked/);
+
+  // Secret scanning: needs_consent attaches scan_warning
+  const ibanItem = deliverableApproval(dash(), { title: 'Vendor payment', summary: 'Invoice for vendor DE89370400440532013000' });
+  expect(ibanItem.card!.scan_warning).toBeDefined();
+  expect(ibanItem.card!.scan_warning).toContain('IBAN');
+});
+
 test('dashboard buttons sanitize the action and arrive as a system line', () => {
   expect(() => deliverableAction(dash(), {})).toThrow('missing action');
   const item = deliverableAction(dash({ title: 'Board' }), { action: 'export-csv!', payload: { row: 3 } });

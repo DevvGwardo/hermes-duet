@@ -8,7 +8,7 @@
     "dev": "npm run build && tsx server/index.ts",
     "dev:web": "vite --config web/vite.config.ts --host 0.0.0.0 --port 3000",
     "dev:server": "tsx watch server/index.ts",
-    "build": "vite build --config web/vite.config.ts && tsx scripts/precompress.ts",
+    "build": "vite build --config web/vite.config.ts && bun scripts/precompress.ts",
     "start": "tsx server/index.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "tsc -p tsconfig.json --noEmit",

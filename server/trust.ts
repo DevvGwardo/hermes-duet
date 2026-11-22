@@ -109,7 +109,7 @@ export function matchingTrustRule(
     if (rule.destination && normalizeTrustText(rule.destination) !== destNorm) continue;
     const pat = normalizeTrustText(rule.title_pattern);
     if (!pat) continue;
-    if (titleNorm === pat || titleNorm.startsWith(`${pat} `) || (pat.length >= 8 && titleNorm.includes(pat))) {
+    if (titleNorm === pat || titleNorm.startsWith(`${pat} `) || titleNorm.startsWith(`${pat}: `)) {
       return rule;
     }
   }

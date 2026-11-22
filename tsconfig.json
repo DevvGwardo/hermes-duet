@@ -8,7 +8,7 @@
     "noUncheckedIndexedAccess": false,
     "skipLibCheck": true,
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "types": ["node"],
+    "types": ["node", "ws"],
     "allowImportingTsExtensions": true,
     "noEmit": true,
     "resolveJsonModule": true,

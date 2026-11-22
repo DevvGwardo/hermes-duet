@@ -5,10 +5,12 @@ import { BRIEF_RETRY, skipEntry, useAction, useDraft } from '../brief';
 import * as browser from '../browser';
 import { broadcast } from '../bus';
 import { channels, files, items, newId, settings, tasks, trustRules } from '../db';
+import { UserError } from '../errors';
 import { useFollowUp } from '../handover';
 import { hermes } from '../hermes';
 import { cardExpired, issueCard, money, paymentDecision, paymentPrompt, providerFromEnv } from '../payments';
 import { decisionPrompt } from '../prompts';
+import { approvalPolicyRefusal, scanOutbound } from '../safety';
 import { trustRuleFromCard } from '../trust';
 import { enqueue, requeueTask, runBrief, submitSystem, submitUser } from '../runs/manager';
 import {
@@ -64,9 +66,58 @@ export function deliverableApproval(file: FileEntry, raw: Record<string, unknown
       .trim()
       .slice(0, 4000) || `“${file.title}” is asking for your approval.`;
   const action_label = String(raw.action_label ?? '').trim().slice(0, 30) || undefined;
+
+  const destination = typeof raw.destination === 'string' ? raw.destination.trim() : undefined;
+  const draft = typeof raw.draft === 'string' ? raw.draft.trim() : undefined;
+  const content = typeof raw.content === 'string' ? raw.content.trim() : undefined;
+  const action = typeof raw.action === 'string' ? (raw.action as any) : 'other';
+
+  const refused = approvalPolicyRefusal({
+    action,
+    title,
+    summary,
+    destination,
+    draft,
+    content,
+  });
+  if (refused) throw new UserError(refused, 400);
+
+  const seenFindings = new Set<string>();
+  const findings = [title, summary, destination, draft, content]
+    .filter((s): s is string => typeof s === 'string' && s.length > 0)
+    .flatMap((s) => scanOutbound(s))
+    .filter((f) => {
+      const key = `${f.tier}:${f.label}:${f.redacted}`;
+      if (seenFindings.has(key)) return false;
+      seenFindings.add(key);
+      return true;
+    });
+
+  const blocked = findings.filter((f) => f.tier === 'never_share');
+  if (blocked.length) {
+    const kinds = [...new Set(blocked.map((f) => f.label))].join(', ');
+    const hints = blocked.map((f) => `${f.label} (${f.redacted})`).join(', ');
+    throw new UserError(
+      `Approval blocked: the text looks like it contains ${kinds}: ${hints}. Remove the secret and post again without it — never paste the full value.`,
+      400,
+    );
+  }
+
+  const consent = findings.filter((f) => f.tier === 'needs_consent');
+  const scan_warning = consent.length
+    ? `Contains ${[...new Set(consent.map((f) => f.label))].join(', ')} — check it before sending.`
+    : undefined;
+
   const channel = liveChannel(channelForFile(file));
   const item = postCard(
-    { type: 'approval', title, body: `${summary}\n\n— from “${file.title}”`, action_label, status: 'pending' },
+    {
+      type: 'approval',
+      title,
+      body: `${summary}\n\n— from “${file.title}”`,
+      action_label,
+      status: 'pending',
+      ...(scan_warning && { scan_warning }),
+    },
     { sessionId: channel.session_id, taskId: null, channelId: channel.id },
   );
   pushSafe({ ...approvalPush(item), url: cardUrl(item.id, channel.id), channel_id: channel.id }, { ignoreQuiet: true });

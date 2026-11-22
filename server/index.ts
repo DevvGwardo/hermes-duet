@@ -5,7 +5,7 @@ import { extname, join, normalize, resolve, sep } from 'node:path';
 import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { brotliCompressSync, gzipSync } from 'node:zlib';
-import { WebSocketServer, type WebSocket as WsSocket } from 'ws';
+import { WebSocketServer, type WebSocket as WsSocket, type RawData } from 'ws';
 import type { Item, Snapshot, TrackedFollowUp } from '../shared/types';
 import { audioDiagnostics, briefSpeech, speak, transcribeFile } from './audio';
 import { capabilities } from './capabilities';
@@ -1499,7 +1499,7 @@ function attachBrowserSocket(ws: WsSocket) {
       ws.send(JSON.stringify({ type: 'error', message: safeRouteMessage(e, 'Could not open browser') }));
     } catch {}
   });
-  ws.on('message', async (raw) => {
+  ws.on('message', async (raw: RawData) => {
     let evt: any;
     try {
       const text = typeof raw === 'string' ? raw : Buffer.isBuffer(raw) ? raw.toString('utf8') : new TextDecoder().decode(raw as ArrayBuffer);
@@ -1561,7 +1561,7 @@ export function startServers() {
       socket.destroy();
       return;
     }
-    browserWss!.handleUpgrade(nodeReq, socket, head, (ws) => attachBrowserSocket(ws));
+    browserWss!.handleUpgrade(nodeReq, socket, head, (ws: WsSocket) => attachBrowserSocket(ws));
   });
 
   appServer.listen(config.port, config.host);

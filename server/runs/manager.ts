@@ -311,7 +311,7 @@ async function consume(l: Lane, run: ActiveRun) {
 
 /** Stop a run that has sent nothing for the configured limit, unless it's paused on a Hermes prompt for the user. */
 function stopIfHung(l: Lane, run: ActiveRun) {
-  if (run.finished || !run.id) return;
+  if (run.finished || !run.id || run.stopRequested) return;
   const waitingOnUser = items.pendingCards().some((c) => c.card?.hermes?.run_id === run.id);
   // The silence clock starts again once the user answers, even if no settled event arrives.
   if (waitingOnUser) run.lastEventAt = Date.now();
@@ -920,7 +920,7 @@ function steerRun(run: ActiveRun, sessionId: string, channelId: string, msg: str
     })
     .catch(() => {
       // Only one path (this fallback or finish() replaying pending_steer) may enqueue the message.
-      if (steer.queued || run.finished) return false;
+      if (steer.queued) return false;
       steer.queued = true;
       saveRunMeta(run);
       enqueue({ kind: 'chat', sessionId, channelId, input: msg });

@@ -72,7 +72,7 @@ them), waits 150 ms for the last write, then closes the database.
 |---|---|---|
 | 2.1 | Exact-match routing falls through to the SPA | **Fixed** `c1acdf3` |
 | 2.2 | Error handler echoes internals | **Fixed** `c1acdf3` |
-| 2.3 | Upload limits disagree | **Fixed** (limit); streaming still open |
+| 2.3 | Upload limits disagree | **Fixed** (commit `e26bf4c`) |
 | 2.4 | Loopback internal API skips public validation | **Fixed** `c1acdf3` |
 | 2.5 | `/api/browser/input` is an `any` cast | **Fixed** `c1acdf3` |
 | 2.6 | No idempotency or rate limits on mutations | **Fixed** (Round 4) |

@@ -187,4 +187,43 @@ describe('schema', () => {
     expect(db.query<{ user_version: number }, []>('PRAGMA user_version').get()?.user_version).toBe(SCHEMA_VERSION);
     expect(db.query<{ item_id: string }, []>(`SELECT item_id FROM fts_items WHERE fts_items MATCH '"manifest"'`).all()).toEqual([{ item_id: 'i-up' }]);
   });
+
+  test('upgrading from v4 creates trust_rules and follow_ups tables, adds allowed_tools to channels, and sets user_version to 5', () => {
+    const db = new Database(':memory:');
+    db.exec(`
+      CREATE TABLE items (id TEXT PRIMARY KEY, kind TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, run_id TEXT, task_id TEXT, channel_id TEXT DEFAULT 'chan-general', json TEXT NOT NULL);
+      CREATE TABLE channels (id TEXT PRIMARY KEY, name TEXT NOT NULL, slug TEXT NOT NULL UNIQUE, topic TEXT, session_id TEXT NOT NULL, seen_at INTEGER, archived_at INTEGER, instructions TEXT, "group" TEXT, repo TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+      CREATE TABLE tasks (id TEXT PRIMARY KEY, status TEXT NOT NULL, session_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, json TEXT NOT NULL);
+      CREATE TABLE files (id TEXT PRIMARY KEY, path TEXT NOT NULL, created_at INTEGER NOT NULL, json TEXT NOT NULL);
+      CREATE TABLE pages (id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, json TEXT NOT NULL);
+      CREATE TABLE runs (id TEXT PRIMARY KEY, kind TEXT NOT NULL, session_id TEXT NOT NULL, task_id TEXT, status TEXT NOT NULL, started_at INTEGER NOT NULL, ended_at INTEGER, error TEXT, meta TEXT);
+      CREATE TABLE devices (id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, name TEXT, created_at INTEGER NOT NULL, last_seen INTEGER NOT NULL);
+      CREATE TABLE push_subs (endpoint TEXT PRIMARY KEY, json TEXT NOT NULL, device_id TEXT, created_at INTEGER NOT NULL);
+      CREATE TABLE pair_codes (code TEXT PRIMARY KEY, expires_at INTEGER NOT NULL);
+      CREATE TABLE routines (id TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 1, next_run INTEGER, created_at INTEGER NOT NULL, json TEXT NOT NULL);
+      CREATE TABLE triggers (id TEXT PRIMARY KEY, kind TEXT NOT NULL, config_json TEXT NOT NULL, enabled INTEGER DEFAULT 1, last_triggered_at INTEGER, created_at INTEGER NOT NULL);
+      CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE attachments (id TEXT PRIMARY KEY, item_id TEXT, filename TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL, path TEXT NOT NULL, created_at INTEGER NOT NULL);
+      CREATE VIRTUAL TABLE fts_items USING fts5(item_id UNINDEXED, channel_id UNINDEXED, kind UNINDEXED, text, tokenize = 'porter unicode61');
+      CREATE VIRTUAL TABLE fts_assets USING fts5(ref_id UNINDEXED, kind UNINDEXED, title, body, tokenize = 'porter unicode61');
+      PRAGMA user_version = 4;
+    `);
+
+    applySchema(db);
+
+    expect(db.query<{ user_version: number }, []>('PRAGMA user_version').get()?.user_version).toBe(5);
+
+    // Verify channels has allowed_tools column
+    const chanCols = db.query<{ name: string }, []>('PRAGMA table_info(channels)').all().map((c) => c.name);
+    expect(chanCols).toContain('allowed_tools');
+
+    // Verify trust_rules table exists
+    const trustCols = db.query<{ name: string }, []>('PRAGMA table_info(trust_rules)').all().map((c) => c.name);
+    expect(trustCols).toEqual(['id', 'created_at', 'json']);
+
+    // Verify follow_ups table exists
+    const followCols = db.query<{ name: string }, []>('PRAGMA table_info(follow_ups)').all().map((c) => c.name);
+    expect(followCols).toEqual(['id', 'status', 'due_at', 'channel_id', 'created_at', 'updated_at', 'json']);
+  });
 });

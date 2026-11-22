@@ -438,7 +438,9 @@ export const attachments = {
   },
   /** Record which message carried each upload, so it can be listed and cleaned up with the thread. */
   link(ids: string[], itemId: string) {
-    for (const id of ids) attachmentLink.run(itemId, id);
+    tx(() => {
+      for (const id of ids) attachmentLink.run(itemId, id);
+    });
   },
 };
 
